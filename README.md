@@ -52,12 +52,14 @@
 对**贡献者**同样适用：AI 可以用来解释原理、指出问题、给排查方向，但**不用来产出你要提交的实现代码**。
 理由很直接 —— 代写会让你失去学习机会，而且外人**无法分辨**这段代码是人写的还是 AI 写的。
 
-细节会写在 `CONTRIBUTING.md` 里（**待补** —— 目前还没有贡献流程文档）。
+细节见 [`CONTRIBUTING.md`](CONTRIBUTING.md)（**含 AI 使用政策**）。
 
 ## 文档索引
 
 | 文档 | 内容 |
 |---|---|
+| [`docs/architecture.md`](docs/architecture.md) | **架构说明（贡献者版）** —— 分层、三个接缝、依赖约束、改动导航 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | **贡献指南** —— 环境、分支、PR 流程、危险区、AI 政策 |
 | [`docs/standards/csharp-编码规范.md`](docs/standards/csharp-编码规范.md) | C# 编码规范（提交前必读） |
 | [`docs/contracts/`](docs/contracts/) | **契约样例** —— 客户端 / 服务端 DTO 一致性的安全网（共享数据，不共享代码） |
 
