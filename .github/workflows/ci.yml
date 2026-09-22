@@ -1,0 +1,179 @@
+name: CI
+
+# 目标：让 PR「绿了再 review」，而不是 maintainer 手工验每一次。
+# 公开仓库使用 GitHub 托管的 runner 是【免费且不限额度】的。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 最小权限：这个工作流只需要读代码
+permissions:
+  contents: read
+
+# 同一分支的新推送会取消上一次还在跑的，省额度
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────
+  # ① 文档与契约 —— 仓库现在就有内容，所以这个作业【当前就在真正干活】
+  # ───────────────────────────────────────────────────────────────────
+  docs-and-contracts:
+    name: 文档与契约
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 边界守卫：内部资料是独立私有仓库，不该被提交到这里
+      # （协作方需要在自己机器上把该目录加进 .git/info/exclude，见 CONTRIBUTING.md 第三节）
+      - name: 守卫 —— 内部资料目录不得入库
+        run: |
+          if [ -d "ai-docs" ] && [ -n "$(git ls-files ai-docs)" ]; then
+            echo "::error::检测到内部资料目录被提交入库。它是独立的私有仓库，不应出现在这里。"
+            echo "::error::如果你本地需要它，请把它加进 .git/info/exclude（不要用 .gitignore）。"
+            exit 1
+          fi
+          echo "OK：内部资料目录未入库。"
+
+      # 这条正是 2026-09-22 抓到真实 QQ 号泄漏的那类检查，所以固化下来
+      - name: 校验契约样例（合法 JSON + 身份字段必须是占位值）
+        run: |
+          python3 - <<'PY'
+          import glob, json, re, sys
+
+          IDENT = re.compile(r'^(selfu?in|user_?id|group_?id|uin|qq|nickname|group_?name)$', re.I)
+          # 允许的占位值 —— 新增占位号请加到这里
+          ALLOW = {"1000000000", "10001", "1234567890", "123456789", "示例昵称", "示例群名"}
+
+          files = sorted(glob.glob("docs/contracts/**/*.json", recursive=True))
+          if not files:
+              print("::error::docs/contracts/ 下没有找到任何样例文件")
+              sys.exit(1)
+
+          problems = []
+
+          def walk(node, path, fname):
+              if isinstance(node, dict):
+                  for k, v in node.items():
+                      if IDENT.match(str(k)) and isinstance(v, (int, str)):
+                          if str(v) not in ALLOW:
+                              problems.append(f"{fname}: {path}.{k} = {v!r} 疑似真实值")
+                      walk(v, f"{path}.{k}", fname)
+              elif isinstance(node, list):
+                  for i, v in enumerate(node):
+                      walk(v, f"{path}[{i}]", fname)
+
+          for f in files:
+              try:
+                  with open(f, encoding="utf-8") as fh:
+                      data = json.load(fh)
+              except Exception as e:
+                  problems.append(f"{f}: JSON 解析失败 —— {e}")
+                  continue
+              walk(data, "", f)
+              print(f"OK  {f}")
+
+          if problems:
+              print("::error::契约样例检查未通过（本目录会随代码公开）")
+              for p in problems:
+                  print(f"::error::{p}")
+              print("::error::身份字段只允许使用占位值，见 docs/contracts/README.md")
+              sys.exit(1)
+
+          print(f"共 {len(files)} 个样例，全部合法且身份字段均为占位值。")
+          PY
+
+      - name: 检查 Markdown 相对链接是否失效
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+
+          root = os.getcwd()
+          # 必须先剥掉代码块与行内代码：文档里举例写的 ](path) 不是真链接。
+          # 老是误报的检查器，人就会开始忽略它。
+          fence  = re.compile(r"```.*?```", re.S)
+          inline = re.compile(r"`[^`\n]*`")
+          link   = re.compile(r"\]\(([^)]+)\)")
+
+          bad = []
+          for dirpath, dirnames, filenames in os.walk(root):
+              dirnames[:] = [d for d in dirnames if d != ".git"]
+              for fn in filenames:
+                  if not fn.endswith(".md"):
+                      continue
+                  path = os.path.join(dirpath, fn)
+                  with open(path, encoding="utf-8") as fh:
+                      text = fh.read()
+                  text = fence.sub("", text)
+                  text = inline.sub("", text)
+                  for m in link.finditer(text):
+                      target = m.group(1).strip()
+                      if target.startswith(("http://", "https://", "mailto:", "#")):
+                          continue
+                      target = target.split("#")[0]
+                      if not target:
+                          continue
+                      resolved = os.path.normpath(os.path.join(dirpath, target))
+                      if not os.path.exists(resolved):
+                          bad.append(f"{os.path.relpath(path, root)} -> {target}")
+
+          if bad:
+              print("::error::发现失效的相对链接")
+              for b in bad:
+                  print(f"::error::{b}")
+              sys.exit(1)
+          print("OK：没有断链的相对链接。")
+          PY
+
+  # ───────────────────────────────────────────────────────────────────
+  # ② 构建与测试 —— 仓库里出现 .NET 项目后【自动开始生效】，无需改本文件
+  # ───────────────────────────────────────────────────────────────────
+  build-and-test:
+    name: 构建与测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 现在还没有代码，硬跑 dotnet 只会红一片。
+      # 所以先探测，没有项目就【如实跳过并打 notice】，而不是假装成功。
+      - name: 探测是否存在 .NET 项目
+        id: probe
+        run: |
+          shopt -s nullglob
+          found=false
+          for f in *.sln *.slnx *.slnf; do
+            if [ -f "$f" ]; then found=true; fi
+          done
+          if [ "$found" = false ] && [ -d src ] && [ -n "$(find src -name '*.csproj' -print -quit)" ]; then
+            found=true
+          fi
+          if [ "$found" = false ] && [ -d tests ] && [ -n "$(find tests -name '*.csproj' -print -quit)" ]; then
+            found=true
+          fi
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+          if [ "$found" = false ]; then
+            echo "::notice::仓库里还没有 .NET 项目，跳过构建与测试。出现第一个 .csproj 后本作业会自动开始生效。"
+          fi
+
+      - name: 安装 .NET SDK
+        if: steps.probe.outputs.found == 'true'
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+
+      # 跨平台硬约束：除 Client（WPF）外都必须能在 Linux 构建
+      - name: 还原
+        if: steps.probe.outputs.found == 'true'
+        run: dotnet restore
+
+      - name: 构建（Release，警告视为错误）
+        if: steps.probe.outputs.found == 'true'
+        run: dotnet build --no-restore --configuration Release -warnaserror
+
+      - name: 测试
+        if: steps.probe.outputs.found == 'true'
+        run: dotnet test --no-build --configuration Release --verbosity normal
