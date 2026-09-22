@@ -1,0 +1,12 @@
+{
+  "_comment": "WS 事件：hello —— 客户端连上 /events 后，服务端下发的第一帧，用于声明自身版本与能力。",
+  "frame": {
+    "type": "hello",
+    "seq": 1,
+    "time": 1789999200000,
+    "data": {
+      "serverVersion": "0.1.0",
+      "capabilities": ["qq", "agent", "log", "session"]
+    }
+  }
+}

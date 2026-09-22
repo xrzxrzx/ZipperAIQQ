@@ -1,0 +1,25 @@
+{
+  "_comment": "HTTP 命令：getStatus —— 查询服务端与各子系统的整体状态。演示嵌套对象与 null 字段。",
+  "request": {
+    "action": "getStatus",
+    "payload": null
+  },
+  "response": {
+    "code": 0,
+    "message": "ok",
+    "data": {
+      "serverVersion": "0.1.0",
+      "uptimeSeconds": 12345,
+      "qq": {
+        "state": "connected",
+        "selfUin": 1000000000,
+        "nickname": "示例昵称"
+      },
+      "llm": {
+        "provider": "openai-compatible",
+        "model": "deepseek-chat"
+      },
+      "activeSessions": 3
+    }
+  }
+}

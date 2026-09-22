@@ -1,0 +1,44 @@
+# ───── .NET 构建产物 ─────
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+publish/
+
+# ───── IDE ─────
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.DotSettings.user
+
+# ───── 运行时数据（不要提交） ─────
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+# Lagrange keystore（若将来用到）
+*.ks
+
+# ───── 机密配置：绝对不要提交 ─────
+# 注意：appsettings.json 作为模板提交，机密放下面这些文件
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.local.json
+secrets.json
+*.secret.json
+.env
+.env.*
+!.env.example
+
+# ───── 二维码等临时产物 ─────
+qrcode*.png
+
+# ───── 操作系统 ─────
+.DS_Store
+Thumbs.db
+desktop.ini

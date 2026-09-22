@@ -1,0 +1,15 @@
+{
+  "_comment": "HTTP 命令：ping —— 连通性检查，无副作用。最简单的契约样例。",
+  "request": {
+    "action": "ping",
+    "payload": null
+  },
+  "response": {
+    "code": 0,
+    "message": "ok",
+    "data": {
+      "serverTime": 1789999200000,
+      "serverVersion": "0.1.0"
+    }
+  }
+}
