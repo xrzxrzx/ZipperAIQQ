@@ -22,11 +22,12 @@
 
 ---
 
-## 2. 分层与六个项目
+## 2. 分层与七个项目
 
 ```
 ZipperAIQQ.sln
 ├── src/
+│   ├── ZipperAIQQ.Core/                  # ⓪ 进程内公共基础设施（配置 / 日志）
 │   ├── ZipperAIQQ.Transport/             # ① WebSocket 传输封装（★服务端 + 客户端复用）
 │   ├── ZipperAIQQ.Agent/                 # ② AI 编排（★最核心）
 │   ├── ZipperAIQQ.Channels.NapCat/       # ③ NapCat / OneBot 11 通道
@@ -34,6 +35,7 @@ ZipperAIQQ.sln
 │   ├── ZipperAIQQ.Server/                # ⑤ 服务端宿主（Kestrel，HTTP + WS）
 │   └── ZipperAIQQ.Client/                # ⑥ WPF 客户端（⚠️ 唯一 Windows-only）
 └── tests/
+    ├── ZipperAIQQ.Core.Tests/
     ├── ZipperAIQQ.Transport.Tests/
     ├── ZipperAIQQ.Agent.Tests/
     ├── ZipperAIQQ.Channels.NapCat.Tests/
@@ -42,6 +44,7 @@ ZipperAIQQ.sln
 
 | # | 项目 | 职责 | 关键类型 |
 |---|---|---|---|
+| ⓪ | **Core** | **进程内公共基础设施**：配置的装载 / 校验 / 原子保存 / 重建骨架，日志装配。**⚠️ 准入规则见下** | `AddZipperConfiguration`、`IStartupCheck`、`IReloadable`、`LogSafe` |
 | ① | **Transport** | WebSocket 的**通用能力**：建连、收发、分帧、心跳、重连、背压。**接口用 `JsonNode`，与业务无关** | `IWebSocketTransport` + 服务端 / 客户端两个适配器 |
 | ② | **Agent** | AI 编排：**自动工具调用循环** + 会话隔离、权限门禁、事件流、上下文压缩、重试 | `IAgentRuntime`、`AgentEvent`、`GuardedAIFunction`、`IToolRegistry`、`ISessionStore` |
 | ③ | **Channels.NapCat** | OneBot 11 协议：事件解析、API 调用、echo 请求-响应配对。**QQ 通道抽象也在这里** | `IQQChannel`、`NapCatChannel`、`OneBotEventParser`、`DTO/` |
@@ -49,8 +52,22 @@ ZipperAIQQ.sln
 | ⑤ | **Server** | 宿主：DI 装配、Kestrel 端点（`/api` + `/events`）、消息编排、主动行为调度 | `Program.cs`、`ApiEndpoint`、`EventBroadcaster`、`PermissionGate`、`DTO/` |
 | ⑥ | **Client** | WPF 界面（MVVM）。**自己维护一份同名 DTO** | `Views/` `ViewModels/` `Services/` `DTO/` |
 
-> 📌 **为什么没有 `ZipperAIQQ.Llm` 项目**：请求组装与流式解析由 **MEAI**（`Microsoft.Extensions.AI`）承接，
-> 少量配置类型并入 `Agent`。少一个只为"对称性"存在的项目。
+> ### ⚠️ `Core` 的准入规则（**放东西进去之前请先读**）
+>
+> **判据一句话**：**"放进来之前，先说出第二个消费者是谁。" 说不出来就别放。**
+>
+> | ✅ 可以放 | ❌ 不许放 |
+> |---|---|
+> | 跨模块共用的**基础设施**（配置、日志装配） | 有业务语义的东西（会话、消息、人格…） |
+> | **无业务语义**的抽象与薄适配 | 只服务单一模块的代码 |
+> | 通用守卫 / 结果类型（**出现 ≥2 个消费者时**） | **跨进程 wire 契约**（HTTP / WS 的 DTO —— 那些归各模块自己的 `DTO/`） |
+>
+> **为什么定这条**：`Core` / `Common` 这类项目**天然会变成垃圾桶** —— 谁都觉得"这个挺公共的"就塞进来。
+> 没有准入规则，半年后它会依赖所有人、也被所有人依赖，改一行炸一片。
+
+> 📌 **为什么没有 `ZipperAIQQ.Contracts` 项目**：客户端与服务端**各自维护 DTO**，
+> 一致性靠 [`docs/contracts/`](contracts/) 的样例 + **两端各写一个断言测试**来保证（"共享数据，不共享代码"）。
+> 代价是编译器帮不上忙，收益是省掉一层最容易写漏的映射代码。
 
 ---
 
@@ -87,23 +104,26 @@ ZipperAIQQ.sln
 ## 4. 依赖方向（硬约束）
 
 ```
-  第 0 层（零依赖）      ① Transport          WebSocket 封装（接口用 JsonNode，与业务无关）
+  第 0 层（零依赖）      ⓪ Core              配置骨架 / 日志装配（无业务语义）
+                        ① Transport          WebSocket 封装（接口用 JsonNode，与业务无关）
 
   第 1 层                ③ Channels.NapCat   ④ Storage
                          （③ 依赖 ①）
 
-  第 2 层                ② Agent（不依赖任何内部项目）
+  第 2 层                ② Agent（不依赖任何内部业务项目；可用 ⓪ Core 的基础设施）
 
   第 3 层（组合根）      ⑤ Server（→ 全部）       ⑥ Client（→ ① Transport）
 ```
 
-**四条不可破坏的约束**：
+**五条不可破坏的约束**：
 
-1. **除 `Client` 外，任何项目都不得引用 WPF / Windows 专有程序集**
+1. **`Core` 不得引用任何其他内部项目** —— 它是基础设施层，引用任何业务项目都会立刻循环
+2. **除 `Client` 外，任何项目都不得引用 WPF / Windows 专有程序集**
    ⟶ 这是「**服务端跨平台**」的物理保障。**Linux 上 `dotnet build` 必须过。**
-2. **`Agent` 不得依赖 `Channels.NapCat`** —— agent 不知道 QQ 的存在
-3. **上层不得依赖 `Transport` 的具体实现**（服务端 / 客户端两个适配器），只依赖 `IWebSocketTransport`
-4. **客户端与服务端各自维护 DTO** —— 契约一致性**靠纪律保证，不能靠编译器**
+3. **`Agent` 不得依赖 `Channels.NapCat`** —— agent 不知道 QQ 的存在
+   （但它**可以**依赖 `Core`：配置与日志属基础设施，不算内部业务依赖）
+4. **上层不得依赖 `Transport` 的具体实现**（服务端 / 客户端两个适配器），只依赖 `IWebSocketTransport`
+5. **客户端与服务端各自维护 DTO** —— 契约一致性**靠纪律保证，不能靠编译器**
 
 > ⚠️ **第 4 条是这个项目最容易踩的坑**：客户端和服务端各写一份同名 DTO，改了一边，
 > **编译期不会提醒另一边**（契约是 JSON，跑到那一步才发现）。
@@ -181,6 +201,8 @@ QQ 用户发消息
 | 服务端宿主 | `Microsoft.Extensions.Hosting` + ASP.NET Core (Kestrel) | 同进程内提供 HTTP + WS |
 | 客户端 | **WPF** + `CommunityToolkit.Mvvm` | 仅表现层 |
 | IoC | `Microsoft.Extensions.DependencyInjection` | **禁止静态单例、禁止服务定位器** |
+| 配置 | `Microsoft.Extensions.Configuration` + `IOptions<T>` | 单一入口；机密只走环境变量 / 本地覆盖文件 |
+| 日志 | **Serilog**（容器里注册 `Serilog.ILogger`，直接注入） | 结构化；**写盘前脱敏** |
 | AI | **MEAI（`Microsoft.Extensions.AI`）打底 + 部分自研** | 自动工具循环用 `FunctionInvokingChatClient` |
 | JSON | **`System.Text.Json`**（全项目统一） | 与 MEAI 同栈；**不要引入第二个 JSON 库** |
 | 存储 | SQLite | |
@@ -195,6 +217,7 @@ QQ 用户发消息
 | 你想做的事 | 动哪里 | 注意 |
 |---|---|---|
 | 加一个**给 AI 用的工具** | `Agent/Tools/` 新增一个类 + 一行注册 | 🟢 **最适合新手**；`description` 要写"**何时使用**"，不是复述工具名 |
+| **加一个配置项** | 对应模块的 `XxxOptions` + 在 `Server` 的配置骨架里加默认值 | ⚠️ **含密的项绝不许写进 `appsettings.json`**（那文件进仓库）；并在日志里**脱敏** |
 | 加一个 **HTTP 命令** | `Server/ApiEndpoint` + `Server/DTO/` + **`Client/DTO/`** | ⚠️ 别忘了 `docs/contracts/` 加样例 |
 | 加一个 **WS 事件** | `Server/EventBroadcaster` + 两端 DTO | 同上 |
 | 改 **QQ 协议相关** | `Channels.NapCat/` | 别把 OneBot 类型泄到上层 |
@@ -202,6 +225,8 @@ QQ 用户发消息
 | 改 **桌面界面** | `Client/` | 🟡 中等门槛；VM 要能单测（不依赖 UI 类型） |
 | 改 **WebSocket 收发 / 心跳 / 重连** | `Transport/` | 🔴 **高危**：六个坑（分帧、心跳、背压、并发发送、关闭握手、重连），**先讨论** |
 | 改 **权限门禁** | `GuardedAIFunction` / `PermissionGate` | 🔴 **安全相关，必须 maintainer review** |
+| 改 **日志 / 配置装载** | `Core/` | 🔴 **安全相关**（脱敏、机密回显都在这里）；且先读 §2 的**准入规则** |
+| **想往 `Core` 加东西** | —— | ⚠️ **先说出第二个消费者是谁**，说不出来就别放（见 §2） |
 
 **危险区清单**见 [`CONTRIBUTING.md`](../CONTRIBUTING.md)。
 
@@ -219,3 +244,6 @@ QQ 用户发消息
 | **接缝（seam）** | 见 §3 —— 三条不许绕过的边界 |
 | **会话（Session）** | 一段独立的对话上下文，`SessionId` 形如 `g<群号>`（群）或 `p<QQ号>`（私聊） |
 | **门禁（Gate）** | 工具执行前的权限判定，见接缝 C |
+| **`Core`** | 进程内公共基础设施项目（配置 / 日志）。**有准入规则**，见 §2 |
+| **Options** | `XxxOptions` 类，一个配置节的强类型映射；**跟着它的消费者模块走**，不集中在 `Core` |
+| **原子写** | 先写临时文件再替换，避免"写一半崩了把配置写坏" |

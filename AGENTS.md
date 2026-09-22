@@ -53,6 +53,9 @@ AI 助手（任何模型、任何工具、任何会话）在本项目中的职�
 | 客户端 | **WPF**（Windows-only，仅表现层；服务端必须保持跨平台） |
 | **MVVM 框架** | **`CommunityToolkit.Mvvm`**（微软官方，Source Generator 驱动） |
 | **IoC 容器** | **`Microsoft.Extensions.DependencyInjection`**（服务端由 `Microsoft.Extensions.Hosting` 提供，客户端手工建 `ServiceCollection`） |
+| **公共基础设施** | **`ZipperAIQQ.Core`**（第 7 个项目）—— 配置骨架 / 日志装配。**准入规则：放进去之前先说出第二个消费者是谁**（否则它会变成垃圾桶），详见 `ai-docs/design/configuration-design.md` |
+| **配置** | `Microsoft.Extensions.Configuration` + `IOptions<T>`；**Options 类型跟着消费者模块走**（不集中在 Core）；机密只走环境变量 / `appsettings.Local.json` |
+| **日志** | **Serilog** —— 容器里注册 `Serilog.ILogger` 直接注入（`ForContext<T>()` 取上下文）；**写盘前脱敏** |
 | 客户端通信 | **HTTP 单端点（非 REST）+ WebSocket**；**不引 gRPC** |
 | QQ 通道 | **NapCat**（OneBot 11），抽象为 `IQQChannel`（正向 WS + 反向 WS 双实现） |
 | AI | **MEAI（`Microsoft.Extensions.AI`）打底 + 部分自研** —— 自动工具循环用 MEAI 的 `FunctionInvokingChatClient`，OpenAI 兼容端点（DeepSeek）用 `Microsoft.Extensions.AI.OpenAI`；**自研**会话隔离 / 上下文压缩策略 / 工具注册与权限门禁 / `AgentEvent` 事件流。**不引 MAF**（理由见 `ai-docs/memory/decisions.md`） |
@@ -107,7 +110,7 @@ AI 助手（任何模型、任何工具、任何会话）在本项目中的职�
 | 位置 | 用途 |
 |---|---|
 | `ai-docs/architecture-proposal.md` | 架构方案（单一事实来源） |
-| `ai-docs/design/` | 详细设计（`technical-design-v1` / `transport-design` / `agent-design` / `open-source-readiness`） |
+| `ai-docs/design/` | 详细设计（`technical-design-v1` / `transport-design` / `agent-design` / **`configuration-design`** / `open-source-readiness`） |
 | `ai-docs/research/` | 调研报告（如 MAF 可行性） |
 | `ai-docs/memory/` | **项目本地记忆**：决策、进度、踩坑、教训 |
 
