@@ -58,6 +58,7 @@
 
 | 文档 | 内容 |
 |---|---|
+| 🚀 [`docs/onboarding.md`](docs/onboarding.md) | **新人上手** —— 从这里开始：克隆、环境、第一个任务 |
 | [`docs/architecture.md`](docs/architecture.md) | **架构说明（贡献者版）** —— 分层、三个接缝、依赖约束、改动导航 |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | **贡献指南** —— 环境、分支、PR 流程、危险区、AI 政策 |
 | [`docs/standards/csharp-编码规范.md`](docs/standards/csharp-编码规范.md) | C# 编码规范（提交前必读） |
