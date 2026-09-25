@@ -163,7 +163,12 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
-          cache: true
+          # ⚠️ 这里【不要】写 cache: true —— setup-dotnet 的缓存要求仓库里有 packages.lock.json，
+          #    没有的话【会直接抛错】（见该 action 的 README：If lock file does not exist, this action throws error）。
+          #    本项目目前没启用 NuGet 锁文件，所以关掉缓存。
+          #    将来若在 Directory.Build.props 里开 <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+          #    并把 packages.lock.json 提交进仓库，才可以打开 cache 并配 cache-dependency-path。
+          cache: false
 
       # 跨平台硬约束：除 Client（WPF）外都必须能在 Linux 构建
       - name: 还原
