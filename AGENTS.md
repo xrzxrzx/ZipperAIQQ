@@ -110,7 +110,7 @@ AI 助手（任何模型、任何工具、任何会话）在本项目中的职�
 | 位置 | 用途 |
 |---|---|
 | `ai-docs/architecture-proposal.md` | 架构方案（单一事实来源） |
-| `ai-docs/design/` | 详细设计（`technical-design-v1` / `transport-design` / `agent-design` / **`configuration-design`** / `open-source-readiness`） |
+| `ai-docs/design/` | 详细设计 —— **索引见 `ai-docs/design/README.md`**（`overview` 总览 / `composition-design` 组合与注册 / `transport-design` / `agent-design` / `configuration-design` / `deployment-design` / `open-source-readiness` / `archive/` 历史归档） |
 | `ai-docs/research/` | 调研报告（如 MAF 可行性） |
 | `ai-docs/memory/` | **项目本地记忆**：决策、进度、踩坑、教训 |
 
