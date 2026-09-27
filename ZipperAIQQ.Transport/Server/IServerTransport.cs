@@ -4,7 +4,9 @@ namespace ZipperAIQQ.Transport.Server;
 
 public interface IServerTransport : IWebSocketTransport
 {
-    public void Initialize(string url);
-    public void RegisterApiHandler(string apiName, Action<JsonNode> handler);
-    public void UnregisterApiHandler(string apiName);
+    void SetAPIActionGetter(Func<JsonNode, string?> getter);
+
+    void Initialize(string url);
+    void RegisterApiHandler(string apiName, Func<JsonNode, JsonNode> handler);
+    void UnregisterApiHandler(string apiName);
 }

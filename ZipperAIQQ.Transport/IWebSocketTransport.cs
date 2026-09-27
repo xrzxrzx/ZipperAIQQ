@@ -17,9 +17,8 @@ public interface IWebSocketTransport : IAsyncDisposable
 
     event Action<WebSocketTransportState>? StateChanged;
 
+    void Attach(WebSocket socket);
+
     Task SendAsync(JsonNode message);
-    Task StartReceive();
     Task CloseAsync(WebSocketCloseStatus status);
-    void CancelAction();
-    void ResetAction();
 }
