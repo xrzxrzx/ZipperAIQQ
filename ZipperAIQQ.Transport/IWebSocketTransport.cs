@@ -5,8 +5,8 @@ namespace ZipperAIQQ.Transport;
 
 public enum WebSocketTransportState
 {
-    Connecting,
-    Connected,
+    Connecting,//仅客户端
+    Connected,//仅客户端
     Disconnecting,
     Disconnected,
 }
@@ -14,6 +14,7 @@ public enum WebSocketTransportState
 public interface IWebSocketTransport : IAsyncDisposable
 {
     bool IsConnected { get; }
+    Task Completion { get; }
 
     event Action<WebSocketTransportState>? StateChanged;
 

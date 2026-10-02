@@ -14,8 +14,4 @@
     <Folder Include="Client\" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\ZipperAIQQ.Core\ZipperAIQQ.Core.csproj" />
-  </ItemGroup>
-
 </Project>
