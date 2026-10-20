@@ -57,7 +57,7 @@
 | **MVVM 框架** | **`CommunityToolkit.Mvvm`**（微软官方，Source Generator 驱动；WinUI3 下同样适用） |
 | **IoC 容器** | **`Microsoft.Extensions.DependencyInjection`**（服务端由 `Microsoft.Extensions.Hosting` 提供，客户端手工建 `ServiceCollection`） |
 | **公共基础设施** | **`ZipperAIQQ.Core`**（第 7 个项目）—— **横切关注点**：配置 / 日志 / 进程内事件总线。**准入规则两条都要满足**：① 能说出第二个消费者 ② 它是横切关注点而非运行时能力（判据：「把所有业务模块删光，这东西还需要吗？」⇒ `Transport` / `Storage` **因此不进 Core**）。详见 `docs/03-设计/配置与日志设计.md` §1.3 |
-| **配置** | `Microsoft.Extensions.Configuration` + `IOptions<T>`；**Options 类型跟着消费者模块走**（不集中在 Core）；机密只走环境变量 / `appsettings.Local.json` |
+| **配置** | `Microsoft.Extensions.Configuration` + `IOptions<T>`；**Options 类型跟着消费者模块走**（不集中在 Core）；**主密钥**只走环境变量 / `appsettings.Local.json`；**LLM API key 由客户端配置并加密落库** |
 | **日志** | **Serilog** —— 容器里注册 `Serilog.ILogger` 直接注入（`ForContext<T>()` 取上下文）；**写盘前脱敏** |
 | 客户端通信 | **HTTP 单端点（非 REST）+ WebSocket**；**不引 gRPC** |
 | QQ 通道 | **NapCat**（OneBot 11），抽象为 `IQQChannel`（正向 WS + 反向 WS 双实现）<br>⚠️ **待 S2 修订**：多平台泛化，命名见 §三 接缝 B |
@@ -120,7 +120,7 @@
 ### 5.2 仓库可见性
 
 - 本仓库为**私有**（2026-10-20 起）。文档与代码同仓，**文档之间可自由互链**。
-- ⚠️ **转私密不解除机密禁令**：token / 密码 / API key 一律走环境变量或 `appsettings.Local.json`（已在 `.gitignore`），**永不入库**。
+- ⚠️ **转私密不解除机密禁令**：仓库里永不出现机密**明文**。**主密钥**走环境变量或 `appsettings.Local.json`（已在 `.gitignore`）；**LLM API key** 由客户端配置并**加密落库**。
 - 历史：2026-09-22 ~ 2026-10-20 文档曾放在独立的私有仓库 `ai-docs/`（用 `.git/info/exclude` 隔离）；
   2026-10-20 统一进 `docs/` 并删除该目录（其远端仓库仍保留）。
 
@@ -176,6 +176,8 @@ git status --porcelain -uall      # ← -uall 不能省
 
 ## 七、安全约定
 
-- **机密绝不进仓库**：token、密码、API key 一律走环境变量或 `appsettings.Local.json`（已在 `.gitignore` 中）
+- **机密明文绝不进仓库**：仓库里永不出现 token / 密码 / API key 的明文
+- **主密钥**（加密根）走环境变量或 `appsettings.Local.json`（已在 `.gitignore` 中），**必须可备份**
+- **LLM API key** 由客户端 UI 配置、服务端**加密落库**；**非 loopback 传输强制 HTTPS**；**明文永不回显**
 - **QQ 密码不落盘**：优先扫码登录
 - 服务端监听非 loopback 时**必须**配 token（见 §二）
