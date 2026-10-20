@@ -1,12 +1,25 @@
 namespace ZipperAIQQ.Channel.Models;
 
+using System.Text.Json.Serialization;
+
 /// <summary>
 /// 消息内容片段。一条消息由若干片段组成，顺序即呈现顺序。
 /// </summary>
 /// <remarks>
+/// <para>
 /// 用「片段列表」而不是「一段纯文本 + 若干附加字段」，是为了让
 /// <c>[图片][@某人] 你看这个</c> 这类混排消息保序，且新增类型时不必改外层结构。
+/// </para>
+/// <para>
+/// 多态序列化：写入数据库时片段要整体落 JSON，因此这里声明了派生类型映射。
+/// <c>$type</c> 是**存储格式的一部分**，改名会导致历史数据读不出来。
+/// </para>
 /// </remarks>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(TextSegment), "text")]
+[JsonDerivedType(typeof(ImageSegment), "image")]
+[JsonDerivedType(typeof(MentionSegment), "mention")]
+[JsonDerivedType(typeof(ReplySegment), "reply")]
 public abstract record MessageSegment;
 
 /// <summary>纯文本。</summary>

@@ -1,0 +1,144 @@
+using Microsoft.Data.Sqlite;
+using Serilog;
+
+namespace ZipperAIQQ.Storage;
+
+/// <summary>
+/// 建表与 schema 版本管理。
+/// </summary>
+/// <remarks>
+/// <para>
+/// 用 <c>CREATE TABLE IF NOT EXISTS</c> + 版本号，而不是每次都 <c>DROP</c> 重建 ——
+/// 消息是**用户的历史记录**，绝不能因为一次启动失败就没了。
+/// </para>
+/// <para>
+/// M1 只有 v1。以后加表/加列时递增 <see cref="CurrentSchemaVersion"/> 并补迁移，
+/// 迁移必须是**只增不改**的。
+/// </para>
+/// </remarks>
+public sealed class DatabaseInitializer
+{
+    /// <summary>当前期望的 schema 版本。</summary>
+    public const int CurrentSchemaVersion = 1;
+
+    private readonly string _connectionString;
+    private readonly ILogger _logger;
+
+    public DatabaseInitializer(string connectionString, ILogger logger)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        _connectionString = connectionString;
+        _logger = logger;
+    }
+
+    public async Task InitializeAsync(CancellationToken ct = default)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct).ConfigureAwait(false);
+
+        // WAL：读写不互相阻塞（群聊高频写入时必须）
+        // busy_timeout：瞬时锁冲突时等待而不是直接抛
+        // foreign_keys：现在没有外键，但以后加表需要它生效
+        foreach (var pragma in Pragmas)
+        {
+            await ExecuteAsync(conn, pragma, ct).ConfigureAwait(false);
+        }
+
+        await ExecuteAsync(conn, MessagesTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, SessionsTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
+
+        // 版本行只写一次；已有则不动
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = """
+                INSERT INTO SchemaVersion (Version)
+                SELECT @version
+                WHERE NOT EXISTS (SELECT 1 FROM SchemaVersion);
+                """;
+            cmd.Parameters.AddWithValue("@version", CurrentSchemaVersion);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        _logger.Information("数据库就绪（schema v{SchemaVersion}）", CurrentSchemaVersion);
+    }
+
+    private static async Task ExecuteAsync(SqliteConnection conn, string sql, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    private static readonly string[] Pragmas =
+    [
+        "PRAGMA journal_mode=WAL;",
+        "PRAGMA busy_timeout=5000;",
+        "PRAGMA foreign_keys=ON;",
+    ];
+
+    /// <summary>
+    /// 消息表。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>SentAtMs</c> 存 **UTC Unix 毫秒**，不存本地时间字符串 ——
+    /// 时区混用是那类「看起来正常、偶尔错 8 小时」的故障（FR-15.6）。
+    /// </para>
+    /// <para>
+    /// 唯一索引只约束**非空**的 MessageId：平台补发或历史导入时可能没有 ID，
+    /// 那种消息不能因为「ID 相同（都是 null）」被拒。
+    /// </para>
+    /// </remarks>
+    private const string MessagesTable = """
+        CREATE TABLE IF NOT EXISTS Messages (
+            Id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            Platform         TEXT    NOT NULL,
+            SessionId        TEXT    NOT NULL,
+            ChatType         INTEGER NOT NULL,
+            ChatId           TEXT    NOT NULL,
+            MessageId        TEXT,
+            SenderUserId     TEXT    NOT NULL,
+            SenderGroupCard  TEXT,
+            SenderNickname   TEXT,
+            SenderIsFriend   INTEGER NOT NULL,
+            PlainText        TEXT    NOT NULL,
+            SegmentsJson     TEXT    NOT NULL,
+            SentAtMs         INTEGER NOT NULL,
+            ReceivedAtMs     INTEGER NOT NULL,
+            ReplyToMessageId TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_Messages_Session_SentAt
+            ON Messages (SessionId, SentAtMs);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS UX_Messages_Platform_MessageId
+            ON Messages (Platform, MessageId)
+            WHERE MessageId IS NOT NULL;
+        """;
+
+    /// <summary>
+    /// 会话表：只存**可覆盖的会话级配置**与活跃时间。
+    /// 对话内容不在这里（在 Messages），避免同一份数据两处存。
+    /// </summary>
+    private const string SessionsTable = """
+        CREATE TABLE IF NOT EXISTS Sessions (
+            SessionId      TEXT    NOT NULL PRIMARY KEY,
+            Platform       TEXT    NOT NULL,
+            ChatType       INTEGER NOT NULL,
+            ChatId         TEXT    NOT NULL,
+            PersonaId      TEXT,
+            ReplyMode      TEXT,
+            CreatedAtMs    INTEGER NOT NULL,
+            LastActiveAtMs INTEGER NOT NULL
+        );
+        """;
+
+    private const string SchemaVersionTable = """
+        CREATE TABLE IF NOT EXISTS SchemaVersion (
+            Version INTEGER NOT NULL
+        );
+        """;
+}
