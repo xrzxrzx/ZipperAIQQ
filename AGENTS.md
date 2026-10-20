@@ -179,5 +179,7 @@ git status --porcelain -uall      # ← -uall 不能省
 - **机密明文绝不进仓库**：仓库里永不出现 token / 密码 / API key 的明文
 - **主密钥**（加密根）走环境变量或 `appsettings.Local.json`（已在 `.gitignore` 中），**必须可备份**
 - **LLM API key** 由客户端 UI 配置、服务端**加密落库**；**非 loopback 传输强制 HTTPS**；**明文永不回显**
+- **⚠️ 敏感信息不入库**：**服务器 IP / 内网地址 / 域名 / 主机别名 / 账号** —— 文档里需要引用时**一律用占位符**（如 `<server-ip-redacted>`），不得写真实值
+- **⚠️ 模型文件不入库**：`*.onnx` 等大文件（体积可达百 MB）通过部署流程单独获取，已在 `.gitignore` 排除
 - **QQ 密码不落盘**：优先扫码登录
 - 服务端监听非 loopback 时**必须**配 token（见 §二）
