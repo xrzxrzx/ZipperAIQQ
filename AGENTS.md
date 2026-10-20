@@ -56,16 +56,16 @@
 | 客户端 | **WPF**（Windows-only，仅表现层；服务端必须保持跨平台） |
 | **MVVM 框架** | **`CommunityToolkit.Mvvm`**（微软官方，Source Generator 驱动） |
 | **IoC 容器** | **`Microsoft.Extensions.DependencyInjection`**（服务端由 `Microsoft.Extensions.Hosting` 提供，客户端手工建 `ServiceCollection`） |
-| **公共基础设施** | **`ZipperAIQQ.Core`**（第 7 个项目）—— **横切关注点**：配置 / 日志 / 进程内事件总线。**准入规则两条都要满足**：① 能说出第二个消费者 ② 它是横切关注点而非运行时能力（判据：「把所有业务模块删光，这东西还需要吗？」⇒ `Transport` / `Storage` **因此不进 Core**）。详见 `ai-docs/design/configuration-design.md` §1.3 |
+| **公共基础设施** | **`ZipperAIQQ.Core`**（第 7 个项目）—— **横切关注点**：配置 / 日志 / 进程内事件总线。**准入规则两条都要满足**：① 能说出第二个消费者 ② 它是横切关注点而非运行时能力（判据：「把所有业务模块删光，这东西还需要吗？」⇒ `Transport` / `Storage` **因此不进 Core**）。详见 `docs/design/configuration-design.md` §1.3 |
 | **配置** | `Microsoft.Extensions.Configuration` + `IOptions<T>`；**Options 类型跟着消费者模块走**（不集中在 Core）；机密只走环境变量 / `appsettings.Local.json` |
 | **日志** | **Serilog** —— 容器里注册 `Serilog.ILogger` 直接注入（`ForContext<T>()` 取上下文）；**写盘前脱敏** |
 | 客户端通信 | **HTTP 单端点（非 REST）+ WebSocket**；**不引 gRPC** |
 | QQ 通道 | **NapCat**（OneBot 11），抽象为 `IQQChannel`（正向 WS + 反向 WS 双实现）<br>⚠️ **待 S2 修订**：多平台泛化，命名见 §三 接缝 B |
-| AI | **MEAI（`Microsoft.Extensions.AI`）打底 + 部分自研** —— 自动工具循环用 MEAI 的 `FunctionInvokingChatClient`，OpenAI 兼容端点（DeepSeek）用 `Microsoft.Extensions.AI.OpenAI`；**自研**会话隔离 / 上下文压缩策略 / 工具注册与权限门禁 / `AgentEvent` 事件流。**不引 MAF**（理由见 `ai-docs/memory/decisions.md`）<br>⚠️ **待 S2 修订**：接入改走 **Responses API**（`GetResponsesClient`），不用 `previous_response_id` |
+| AI | **MEAI（`Microsoft.Extensions.AI`）打底 + 部分自研** —— 自动工具循环用 MEAI 的 `FunctionInvokingChatClient`，OpenAI 兼容端点（DeepSeek）用 `Microsoft.Extensions.AI.OpenAI`；**自研**会话隔离 / 上下文压缩策略 / 工具注册与权限门禁 / `AgentEvent` 事件流。**不引 MAF**（理由见 `docs/memory/decisions.md`）<br>⚠️ **待 S2 修订**：接入改走 **Responses API**（`GetResponsesClient`），不用 `previous_response_id` |
 | **JSON 库** | **`System.Text.Json`（全项目统一）** —— 契约 DTO、OneBot 事件、LLM 报文、配置一律用它（**与 MEAI 同栈，避免双轨**） |
 | 存储 | SQLite |
 
-### 通信契约（详见 `ai-docs/architecture-proposal.md` §3.5）
+### 通信契约（详见 `docs/architecture-proposal.md` §3.5）
 
 - **HTTP 只发命令**：`POST /api`，body `{action, payload}`，响应 `{code, message, data}`
 - **WebSocket 只收事件**：`WS /events`，帧 `{type, seq, time, data}`
@@ -75,7 +75,7 @@
 
 ## 三、架构约束（改代码前先读）
 
-完整方案见 `ai-docs/architecture-proposal.md`（架构方案，**内部资料，不随本仓库公开**）。三个**不可破坏**的接缝：
+完整方案见 `docs/architecture-proposal.md`（架构方案，单一事实来源）。三个**不可破坏**的接缝：
 
 | 接缝 | 约束 |
 |---|---|
@@ -101,35 +101,28 @@
 
 ## 五、文档与记忆
 
-### 两个面（2026-09-22 定）
-
-| 面 | 位置 | 会不会公开 |
-|---|---|---|
-| 🟢 **公开面** | `docs/contracts/`、`docs/standards/`、`README.md`、`LICENSE`、`AGENTS.md`、`.github/`（待建） | **随代码开源** |
-| 🔒 **私有面** | **`ai-docs/`** —— 独立 git 仓库（永久私有），被外层仓库通过 `.git/info/exclude` 忽略 | **永不公开**，与协作者共享 |
-
-**私有面内部**（`ai-docs/`）：
+### 5.1 文档统一放在 `docs/`（2026-10-20 起）
 
 | 位置 | 用途 |
 |---|---|
-| `ai-docs/architecture-proposal.md` | 架构方案（单一事实来源） |
-| `ai-docs/design/` | 详细设计 —— **索引见 `ai-docs/design/README.md`**（`overview` 总览 / `composition-design` 组合与注册 / `transport-design` / `agent-design` / `configuration-design` / `deployment-design` / `open-source-readiness` / `archive/` 历史归档） |
-| `ai-docs/research/` | 调研报告（如 MAF 可行性） |
-| `ai-docs/memory/` | **项目本地记忆**：决策、进度、踩坑、教训 |
+| [`docs/architecture-proposal.md`](docs/architecture-proposal.md) | **架构方案（单一事实来源）** |
+| [`docs/architecture.md`](docs/architecture.md) | 架构说明（面向新人，较浅，先读它） |
+| [`docs/design/`](docs/design/) | 详细设计 —— **索引见 [`docs/design/README.md`](docs/design/README.md)** |
+| [`docs/contracts/`](docs/contracts/) | 通信契约样例（测试要跑它） |
+| [`docs/standards/`](docs/standards/) | 编码规范 |
+| [`docs/research/`](docs/research/) | 调研报告 |
+| [`docs/memory/`](docs/memory/) | **项目本地记忆**：决策、进度、踩坑、教训 |
+| [`docs/onboarding.md`](docs/onboarding.md) | 新人上手 |
 
 - **决策一旦改变**，必须同步更新架构文档 + 记忆，**不得只在对话里说**
-- 记忆写入规则：项目内的事写 `ai-docs/memory/`；跨项目通用的结论另写全局记忆库
+- 记忆写入规则：项目内的事写 `docs/memory/`；跨项目通用的结论另写全局记忆库
 
-> 完整边界规则与落地步骤见 `ai-docs/design/open-source-readiness.md` §2（**内部资料，不随本仓库公开**）。
+### 5.2 仓库可见性
 
-### ⚠️ 跨边界的两条禁令
-
-1. **公开面里不许出现指向 `ai-docs/` 的 Markdown 链接** —— 公开仓库里没有这个目录，链接**必然变死链**。
-   （**纯文字路径可以写**，但要标明"内部资料，不随仓库公开" —— 比如本文件为了说清规矩就必须点名它）
-2. **公开面里不许写内部决策过程、服务器信息、踩坑记录** —— 只讲"是什么、怎么用、别破坏哪三个接缝"
-
-> 📌 **本文件（`AGENTS.md`）本身在公开面**（2026-09-22 定）—— 它声明本项目的开发分工与协作边界。
-> 因此它**不能**包含上面第 2 条禁止的内容。
+- 本仓库为**私有**（2026-10-20 起）。文档与代码同仓，**文档之间可自由互链**。
+- ⚠️ **转私密不解除机密禁令**：token / 密码 / API key 一律走环境变量或 `appsettings.Local.json`（已在 `.gitignore`），**永不入库**。
+- 历史：2026-09-22 ~ 2026-10-20 文档曾放在独立的私有仓库 `ai-docs/`（用 `.git/info/exclude` 隔离）；
+  2026-10-20 统一进 `docs/` 并删除该目录（其远端仓库仍保留）。
 
 ---
 
@@ -144,7 +137,7 @@
 | 改动类型 | AI 能否**直接提交并推送** |
 |---|---|
 | **AI 编写的代码**（`src/`、`tests/`、`.cs` / `.csproj` / `.slnx`） | ✅ **可以** |
-| **文档 / CI / 基础设施**（`docs/`、`ai-docs/`、`.github/`、`AGENTS.md`、`README.md`、`.gitignore` …） | ✅ **可以** |
+| **文档 / CI / 基础设施**（`docs/`、`.github/`、`AGENTS.md`、`README.md`、`.gitignore` …） | ✅ **可以** |
 | **用户手写、或用户正在编辑的文件** | ❌ **永不代推** —— 必须由用户明确要求 |
 | **判断不了属于哪类** | 🛑 **问** |
 
@@ -164,7 +157,7 @@ git status --porcelain -uall      # ← -uall 不能省
 
 > 背景：2026-09-22 助手用 `git add -A` 把用户正在写、**尚未提交**的 `ZipperAIQQ.Core/`
 > 一并提交并推送到了公开仓库（提交信息还写着 `docs:`）。因为已推送，**无法 amend**，只能用新提交说明。
-> 完整复盘见 `ai-docs/memory/lessons.md`。
+> 完整复盘见 `docs/memory/lessons.md`。
 
 ### 6.3 分支约定（2026-10-20 定）
 
@@ -176,8 +169,7 @@ git status --porcelain -uall      # ← -uall 不能省
   ```
 
 - 若当前不在 `dev`：**停下问**，不要自行切换分支或新建分支。
-- 本节约束**外层代码仓库**；`docs/`、`.github/`、`README.md` 等公开面文档同样走 `dev`。
-  （独立的内部文档库不在本仓库内，按其自身分支约定处理。）
+- `docs/`、`.github/`、`README.md` 等文档改动同样走 `dev`。
 
 
 ---

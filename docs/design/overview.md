@@ -1,0 +1,651 @@
+# ZipperAIQQ 技术设计总览（overview）
+
+> **文档定位**：本文是**总览与索引**。按 [`AGENTS.md`](../../AGENTS.md) §一，**实现代码由用户本人编写**。
+> 本文只讲**项目结构、各模块职责摘要、数据流、测试策略、分期计划**；
+> 各专题的**详细设计在各自文档里**（见下方索引）。
+>
+> 起草：2026-09-21 ｜ 更名与瘦身：2026-09-22（原 `technical-design-v1.md`，1242 行 → 本文件）
+> 依据：[`architecture-proposal.md`](../architecture-proposal.md)（架构方案）、[`AGENTS.md`](../../AGENTS.md)（项目规则）
+
+## 📄 专题文档索引
+
+| 想了解 | 看哪份 |
+|---|---|
+| **IoC 怎么装配**（组合根、各模块注册什么、生命周期） | [`composition-design.md`](composition-design.md) ← **已从本文拆出** |
+| **Transport**（WebSocket 封装、六个坑） | [`transport-design.md`](transport-design.md) |
+| **Agent**（MEAI 边界、工具、压缩、重试、漂移修正） | [`agent-design.md`](agent-design.md) |
+| **配置与日志**（含 `ZipperAIQQ.Core` 的定位） | [`configuration-design.md`](configuration-design.md) |
+| **部署**（T30、Windows/Linux、内存账、安全清单） | [`deployment-design.md`](deployment-design.md) |
+| **开源准备**（边界、必备文件、新人友好） | [`open-source-readiness.md`](open-source-readiness.md) |
+| **全部文档的索引** | [`README.md`](README.md) |
+
+> ⚠️ **本文 2026-09-22 瘦身时移走的内容**（避免你以为丢了）：
+> §3.3（Llm，已取消）+ §3.4（Agent 旧设计）→ [`archive/technical-design-legacy.md`](archive/technical-design-legacy.md)；
+> §4（IoC）→ [`composition-design.md`](composition-design.md)；
+> §6（配置模型，**已过时且与 `configuration-design.md` 冲突**）→ **删除**，见该文 §3。
+
+---
+
+## 1. 目标与范围
+
+### 1.1 服务端要连的三样东西
+
+| 连接对象 | 协议 | 说明 |
+|---|---|---|
+| **NapCat** | OneBot 11 over WebSocket | 正向 WS（我们做客户端）与反向 WS（我们做服务端）双支持 |
+| **LLM** | **OpenAI 兼容 HTTP API** | **不绑死 DeepSeek**——只要兼容 OpenAI 格式（`/v1/chat/completions` + SSE 流式），换任何端点都不改代码 |
+| **管理客户端** | HTTP（命令）+ WebSocket（事件） | 契约见架构文档 §3.5 |
+
+### 1.2 三块自研核心
+
+1. **小型 agent 框架**（本项目最需要设计的部分）
+2. **WebSocket 封装**——**一份实现，服务端与客户端复用**
+3. **IoC 统一装配**——所有服务由容器管理，禁止静态单例与服务定位器
+
+### 1.3 不在本版范围
+
+多账号、分布式、向量检索高级特性、移动端、Lagrange.Core（已否决）。
+
+---
+
+## 2. 项目结构
+
+### 2.1 解决方案布局
+
+```
+ZipperAIQQ.sln
+├── src/
+│   ├── ZipperAIQQ.Core/                  # ⓪ 横切关注点（配置 / 日志 / 事件总线）★详见 configuration-design.md
+│   ├── ZipperAIQQ.Transport/             # ① WebSocket 传输封装（★服务端+客户端复用）
+│   ├── ZipperAIQQ.Agent/                 # ② MEAI 打底 + 自研编排（★核心，详见 agent-design.md）
+│   ├── ZipperAIQQ.Channels.NapCat/       # ③ NapCat / OneBot 11 通道
+│   ├── ZipperAIQQ.Storage/               # ④ SQLite 持久化
+│   ├── ZipperAIQQ.Server/                # ⑤ 服务端宿主（Kestrel，HTTP + WS）
+│   └── ZipperAIQQ.Client/                # ⑥ WPF 客户端（⚠️ 唯一 Windows-only）
+└── tests/
+    ├── ZipperAIQQ.Core.Tests/
+    ├── ZipperAIQQ.Agent.Tests/
+    ├── ZipperAIQQ.Channels.NapCat.Tests/
+    ├── ZipperAIQQ.Transport.Tests/
+    └── ZipperAIQQ.Server.Tests/
+```
+
+> **`ZipperAIQQ.Core` 是 2026-09-22 新增的第 7 个项目** —— 只装「**跨模块共用、且无业务语义**」的**横切关注点**。
+> **准入规则（两条都要满足）**：
+> 1. **能说出第二个消费者是谁** —— 说不出来就别放
+> 2. **它是「横切关注点」而不是「运行时能力」** —— 判据：**「把所有业务模块删光，这东西还需要吗？」**
+>    配置要、日志要、事件总线要；**但 WebSocket 连接（Transport）与数据库（Storage）就不需要了** ⇒ **那两个不进 Core**
+>
+> 详见 [`configuration-design.md`](configuration-design.md) §1.3。
+
+> **`ZipperAIQQ.Llm` 已取消**（2026-09-22）。原职责（HTTP 请求组装、SSE 流式解析、重试、token 估算）已由 **MEAI**（`Microsoft.Extensions.AI.OpenAI` + `FunctionInvokingChatClient`）承接；`LlmOptions` 等少量配置类型并入 **`ZipperAIQQ.Agent`**。理由见 [`agent-design.md`](agent-design.md) §1 与 `decisions.md`。
+
+### 2.2 各项目职责
+
+| # | 项目 | 职责 | 关键内容 |
+|---|---|---|---|
+| ⓪ | **Core** | **进程内公共基础设施（横切关注点）**：配置的**装载/校验/原子保存/重建**骨架、日志装配（Serilog）、**进程内事件总线**。**准入规则见 §2.1** | `AddZipperCore`、`IStartupCheck`、`IReloadable`、`ConfigurationWriter`、`LoggingSetup`、`ClientPushSink`、`LogSafe`、**`IEventBus` + 订阅容器** |
+| ① | **Transport** | WebSocket 的**通用能力**：建连、收发、分帧、心跳、重连、背压。**接口用 `JsonNode`，与业务无关** | `IWebSocketTransport` + 服务端/客户端两个适配器 |
+| ② | **Agent** | **MEAI 打底 + 自研编排**：MEAI 负责 LLM 调用与自动工具循环；自研**会话隔离、权限门禁、事件翻译、上下文压缩、重试、漂移修正**。详见 [`agent-design.md`](agent-design.md) | `IAgentRuntime`、`AgentEvent`、`GuardedAIFunction`、`IToolRegistry`、`ISessionStore`、`TieredChatReducer`、`RetryingChatClient`、`LlmOptions` |
+| ③ | **Channels.NapCat** | OneBot 11 协议：事件解析、API 调用、echo 请求-响应配对。**QQ 通道抽象也归这里**（YAGNI：真出现第二个协议端实现时再抽到独立项目） | `IQQChannel`、`QqEvent`、`QqApiResult`、`NapCatChannel`、`OneBotEventParser`、**`DTO/`** |
+| ④ | **Storage** | 会话、消息、记忆、配置的持久化 | `SqliteStore`、`SessionRepository` |
+| ⑤ | **Server** | 宿主：DI 装配、Kestrel 端点（`/api` + `/events`）、消息编排、权限门禁、主动行为调度。**HTTP 命令 / WS 事件的 DTO 也在这里** | `Program.cs`、`ApiEndpoint`、`EventBroadcaster`、`PermissionGate`、**`DTO/`** |
+| ⑥ | **Client** | WPF 界面（**MVVM：`CommunityToolkit.Mvvm`**）。**自己维护一份同名 DTO** | `Views/` `ViewModels/` `Services/` **`DTO/`**；**自带 DI 容器** |
+
+### 2.3 依赖方向（**硬约束**）
+
+```
+  第 0 层（零依赖）      ⓪ Core              配置骨架 / 日志装配（无业务语义）
+                        ① Transport          WebSocket 封装（接口用 JsonNode，与业务无关）
+
+  第 1 层                ③ Channels.NapCat   ④ Storage
+                         （③ 依赖 ①）
+
+  第 2 层                ② Agent（不依赖任何内部业务项目；可用 ⓪ Core 的基础设施）
+
+  第 3 层（组合根）      ⑤ Server（→ 全部）       ⑥ Client（→ ① Transport）
+```
+
+**五条不可破坏的约束**：
+
+1. **`Core` 不得引用任何其他内部项目** ⟶ 它是基础设施层，**引用任何业务项目都会立刻造成循环**
+2. **`Server` / `Agent` / `Channels` / `Storage` / `Transport` / `Core` 不得引用任何 WPF / Windows 专有程序集** ⟶ 这是「服务端跨平台」的物理保障（`net10.0` + CI 校验）
+3. **`Agent` 不得依赖 `Channels`**：agent 不知道 QQ 的存在，它只处理"消息进 / 事件出"
+   > ⚠️ **2026-09-22 发现一处待决**：`ISessionStore` 的**接口在 `Agent`**、**落库在 `Storage`**，
+   > 而本规则写着"`Agent` 不依赖任何内部业务项目" → **"谁注册 `ISessionStore` 的实现"填不下去**。
+   > 三个出路与推荐见 [`composition-design.md`](composition-design.md) **§4.4.7**。**这条未定之前，`Storage` 与 `Agent` 的项目引用关系别急着写。**
+   > 注意：`Agent` **可以**依赖 `Core`（配置与日志属基础设施，不是"内部业务依赖"）
+4. **上层不得依赖 `Transport` 的具体实现**（服务端/客户端适配器），只依赖 `IWebSocketTransport`
+5. **客户端与服务端各自维护 DTO** —— 契约一致性**靠纪律保证**（共享 JSON 样例 + 两端断言测试，见 §3.1.1），**不能靠编译器**。这是取消契约项目换来的代价，必须用测试补上。
+   > ⚠️ **2026-09-22 补充**：曾讨论过把 wire 契约收进 `ZipperAIQQ.Core`，**结论：不收** —— `Core` 只管进程内基础设施。此约束**维持不变**
+
+---
+
+## 3. 核心模块设计
+
+### 3.1 DTO 组织约定（**不设共享契约项目**）
+
+> #### 3.1.0 决定：**不建契约项目**，各模块自建 `DTO/` 命名空间（2026-09-21 定案）
+>
+> 曾规划过独立的契约层（`ZipperAIQQ.Contracts`），**最终取消**。改为：**哪个模块需要 DTO，就在自己项目里建 `DTO/` 命名空间**。
+>
+> ```
+> ZipperAIQQ.Server/DTO/             # HTTP 命令 + WS 事件的 wire 模型
+> ZipperAIQQ.Client/DTO/             # 客户端侧的同一套 wire 模型（自己维护）
+> ZipperAIQQ.Agent/DTO/              # LLM 交互的少量配置/中间模型（原 ZipperAIQQ.Llm/DTO/）
+> ZipperAIQQ.Channels.NapCat/DTO/    # OneBot 事件与 API 的 wire 模型
+> ```
+>
+> **项目总数**：**6 个**（2026-09-22 取消 `ZipperAIQQ.Llm` 后，比最初的 8 个少两个）。
+
+#### 3.1.1 ⚠️ 由此产生的风险：**契约漂移**（必须用纪律补上）
+
+客户端与服务端**各自定义 DTO**，意味着：
+- 改了服务端的 `action` 名或字段名，**编译期不会提醒客户端**
+- 契约是 JSON，**要跑到那一步才发现**
+
+**缓解措施（✅ 已采用，2026-09-21）：共享数据，不共享代码** —— 把契约样例存成 JSON，两端各自跑断言测试：
+
+```
+docs/contracts/
+├── command-ping.json            # { request, response } 样例
+├── command-listSessions.json
+├── event-qq-message.json
+├── event-agent-text-delta.json
+└── ...
+```
+
+- **服务端**写一个测试：用自家 DTO 序列化/反序列化这些样例，断言字段名与结构一致
+- **客户端**写**同一个**测试
+- 两边都绿 → **契约事实上一致**
+- 改契约时：**先改样例文件** → 两个测试同时红 → **强制两端同步**
+
+**另外两条纪律**：
+1. **`action` 名与事件 `type` 名写成常量**（别手写字符串），至少保证各自项目内不拼错
+2. 契约变更**必须同步更新** [`architecture-proposal.md`](../architecture-proposal.md) §3.5 —— 那是契约的**人类可读事实来源**
+
+#### 3.1.2 DTO 写作规则
+
+1. **只描述 wire 形态**，不做业务逻辑、不带行为
+2. **不引用服务端内部模型**（`ChatMessage`、`AgentEvent` 这类领域对象**不进 DTO 命名空间**）
+3. 命名空间按域细分：`Xxx.DTO.Commands` / `Xxx.DTO.Events`
+4. **`ZipperAIQQ.Transport` 不需要 DTO** —— 它的接口用 `JsonNode`，与业务无关（这也是它能被双端复用的前提）
+
+#### 3.1.3 领域模型 vs wire 模型（即便是 JSON，也要分清）
+
+| | 领域模型 | wire 模型（DTO） |
+|---|---|---|
+| 例 | `ChatMessage`、`AgentEvent`（在 `Llm` / `Agent` 里） | `{action, payload}`、`{type, seq, time, data}`（在 `Server/DTO`、`Client/DTO`） |
+| 用途 | 服务端内部流转 | 跨进程传输 |
+| 稳定性 | 可自由重构 | **改了就要同步另一端** |
+
+**转换点**：`Server` 负责把领域事件转成 wire 帧再经 WS 广播 —— **`Agent` 绝不允许直接持有 WS 连接**。
+
+> ⚠️ 另注：`ChatRole` 必须有 `System`，且角色映射要**显式 switch** —— 旧项目正是因为 `Role == User ? "user" : "assistant"` 把 System 静默降级成 assistant，导致人格设定全废（`lessons.md` 第 8 条）。
+
+#### 3.1.4 什么时候该"回头"建共享项目
+
+出现以下任一情况，说明**该把契约重新抽成共享项目**了：
+
+- `Server/DTO` 与 `Client/DTO` 开始频繁不同步（样例测试反复红）
+- 契约规模变大到"两份定义"的维护成本超过"一个项目"
+- 出现第二个消费方（Web 后台、第三方集成）
+
+**这不是推翻现在的决定**，而是一条明确的**演化路径**——现在的选择是"先用成本最低的方式起步"。
+
+### 3.2 ① Transport —— WebSocket 封装（**服务端与客户端复用**）★
+
+> **📄 详细设计已独立成文 → [`transport-design.md`](transport-design.md)** —— 本节只留要点。
+
+**一句话**：一份 WebSocket 逻辑，**服务端与客户端共用**。要覆盖三种连接场景：
+
+| 场景 | 谁发起 | 本项目的角色 |
+|---|---|---|
+| WPF 客户端 → 服务端 | 客户端 | 服务端（接受）/ 客户端（发起） |
+| 服务端 → NapCat 正向 WS | 服务端 | **客户端**（发起） |
+| NapCat 反向 WS → 服务端 | NapCat | **服务端**（接受） |
+
+**复用的切口**：服务端 `AcceptWebSocketAsync()` 与客户端 `ClientWebSocket` 是两套 API，
+**但都继承 `WebSocket`** → 抽一个共同基类承载全部共通逻辑，两个适配器**只提供 `Socket`**
+（客户端多一个重连策略）。
+
+**要点**：接口 `IWebSocketTransport`（用 `JsonNode`，与业务无关）；
+**分类委托注入**（传输层不认识 `post_type` / `echo` —— 那是 OneBot 语义）；
+**分流落在 `Channels.NapCat`**（因为 `ReceiveAsync` 只能有一个消费者）；
+**六个必处理的坑**（分帧 / 心跳 / 并发发送 / 背压 / 关闭握手 / 重连）。
+
+→ 全部细节（含接口定义、分流图、六个坑的对策表）见 [`transport-design.md`](transport-design.md)。
+
+### 3.3 / 3.4 📦 已迁出（2026-09-22 瘦身）
+
+| 原节 | 去哪了 |
+|---|---|
+| **§3.3 Llm** | 🗄️ [`archive/technical-design-legacy.md`](archive/technical-design-legacy.md) —— ⚠️ **项目已取消**（职责由 MEAI 承接） |
+| **§3.4 Agent**（旧设计，基于手写循环） | 🗄️ 同上 —— ⚠️ **已被 [`agent-design.md`](agent-design.md) 取代** |
+
+> 保留在归档里是为了**存痕**（决策过程可追溯），但**实现时请勿参照**。
+
+### 3.5 ③ Channels.NapCat —— OneBot 11 通道
+
+```csharp
+public sealed class NapCatChannel : IQQChannel
+{
+    // 两种模式，同一实现，靠配置切换：
+    //  - Forward：我们作为 WS 客户端连 NapCat 的 websocketServers（正向 WS）
+    //  - Reverse：我们开 /onebot/v11/ws 端点，NapCat 作为 WS 客户端连过来（反向 WS）
+}
+```
+
+**要处理的 OneBot 特有细节**：
+
+| 项 | 说明 |
+|---|---|
+| **echo 配对** | 发出去的 API 请求带 `echo`，响应靠 `echo` 匹配 → 用 `ConcurrentDictionary<string, TaskCompletionSource<...>>`（`lessons.md` 第 3 条：旧项目用了普通 Dictionary） |
+| **请求超时** | 每个 API 调用要有超时；超时清理 pending，**不要泄漏** |
+| **事件分流** | `post_type` 决定是事件还是 API 响应（`meta_event`/`message`/`notice`/`request` vs 带 `echo` 的响应） |
+| **CQ 码与消息段** | NapCat 默认 `messagePostFormat` 可配 `array`（推荐，免去解析 CQ 码字符串） |
+| **心跳** | `meta_event` 的 `heartbeat` 用来判活；**别只打日志就完事**（旧项目正是如此，`lessons.md` 第 10 条） |
+| **token 鉴权** | 配置项叫 `token`；⚠️ **官方文档没写清它在 header 还是 query**，需要实测确认（`progress.md` U3） |
+| **断线重连** | 正向模式下必须自动重连 + 退避 |
+
+### 3.6 ④ Storage
+
+- SQLite，schema 按**会话/消息/记忆**三块分表
+- **消息表要带**：`SessionId`、`Role`、`Content`、`CreatedAt`、`RawJson`（便于排查）
+- 旧项目的 `Messages` 表只有 `Role`/`Message` 两列，**没有时间戳和会话字段**，导致无法按会话隔离、无法排序（`lessons.md` 第 8 条相关）
+- 写库**异步、不阻塞 agent 循环**（失败要记日志，但不能让回复发不出去）
+
+### 3.7 ⑤ Server
+
+| 关注点 | 设计 |
+|---|---|
+| **DI 装配** | 见 §4 |
+| **HTTP 命令端点** | `POST /api`，body `{action, payload}` → 分派到 `IApiAction` 处理器；响应 `{code, message, data}` |
+| **WS 事件端点** | `/events`，连上后进广播列表；用 `Channel<T>` 做扇出，**每个连接一个独立写循环**（慢客户端不能拖垮别人） |
+| **权限门禁** | `PermissionGate`：QQ 号 → 角色映射（配置驱动），危险工具在此拦截 |
+| **主动行为调度** | `BackgroundService` + 定时器；触发时**走同一条 agent 路径**（不要另开一条旁路） |
+| **优雅关闭** | `IHostApplicationLifetime`：停 NapCat 通道 → flush 存储 → 关 WS 连接 |
+| **启动校验** | 监听非 loopback 但没配 token → **拒绝启动**（架构文档 §3.5） |
+
+### 3.8 ⑥ Client（WPF）
+
+**技术选型**：**MVVM 用 `CommunityToolkit.Mvvm`**（微软官方，Source Generator 驱动）；**IoC 用 `Microsoft.Extensions.DependencyInjection`**（与服务端同一个容器，装配方式一致）。
+
+#### 3.8.1 依赖与结构
+
+只依赖 ① Transport（**不依赖 ②③④⑤⑥**）；**自维护一份 `DTO/`**。
+
+```
+ZipperAIQQ.Client/
+├── App.xaml / App.xaml.cs        # 启动 + DI 容器装配 + 全局异常兜底
+├── Views/                        # XAML 视图（只负责布局与绑定，不写逻辑）
+│   ├── MainWindow.xaml
+│   └── Pages/                    # 状态 / 会话 / 日志 / 配置 等页面
+├── ViewModels/                   # 每个 View 一个 VM，继承 ObservableObject
+├── Services/                     # 客户端侧服务
+│   ├── ServerApiClient.cs        # 走 IApiClient（HTTP 命令）
+│   └── EventSubscriber.cs        # 走 ClientSideTransport（WS 事件）
+├── Models/                       # 仅供 UI 展示的模型（不跨进程传）
+└── Converters/                   # 值转换器
+```
+
+#### 3.8.2 MVVM 约定（CommunityToolkit.Mvvm）
+
+| 需求 | 用法 |
+|---|---|
+| 可绑定属性 | `[ObservableProperty] private string _status;` → 生成 `Status` |
+| 命令 | `[RelayCommand] private async Task RefreshAsync()` → 生成 `RefreshCommand` |
+| 派生属性联动 | `[NotifyPropertyChangedFor(nameof(Xxx))]` |
+| 命令可用性联动 | `[NotifyCanExecuteChangedFor(nameof(SaveCommand))]` |
+| VM 间通信 | `IMessenger`（`WeakReferenceMessenger.Default`）——**避免 VM 互相持有引用** |
+
+**三条硬约定**：
+
+1. **VM 里不出现任何 WPF UI 类型**（`MessageBox`、`Dispatcher`、控件类型都不行）——否则 VM 无法单测。需要弹窗 / 导航 → 定义接口（如 `IDialogService`）从容器注入
+2. **View 的 code-behind 只允许写纯 UI 逻辑**（聚焦、动画、自定义控件行为），**不写业务**
+3. **数据绑定失败要可见** —— WPF 默认把绑定错误静默吞掉，建议挂 `PresentationTraceSources` 把绑定错误输出到日志
+
+#### 3.8.3 线程模型（WPF 最容易出事的地方）
+
+WS 事件在**后台线程**到达，而 UI 只能由 **UI 线程**更新。两种处理方式：
+
+| 方式 | 说明 | 建议 |
+|---|---|---|
+| VM 内直接 `Dispatcher.Invoke` | 简单，但把 UI 依赖带进 VM（违反 3.8.2 第 1 条） | ❌ 不推荐 |
+| **服务层统一 marshal** | `EventSubscriber` 收到事件后，经注入的 `IUiDispatcher` 切回 UI 线程再交给 VM | ✅ **推荐** |
+
+```csharp
+public interface IUiDispatcher      // 实现在 Client 层，把 Dispatcher 包起来
+{
+    void Post(Action action);
+    Task InvokeAsync(Func<Task> action);
+}
+```
+
+这样 VM 只依赖 `IUiDispatcher` 抽象，**可单测**。
+
+#### 3.8.4 客户端 DI 装配
+
+> 📌 **本节是最小示意**。关于"什么该写在哪、框架已经替你做掉了哪些、`IConfiguration` 要自己拼"
+> 等完整规则，见 [`composition-design.md`](composition-design.md) **§4.1.9 – §4.1.13**（组合根与模块装配）。
+
+客户端用**同一个容器**（`Microsoft.Extensions.DependencyInjection`），在 `App.xaml.cs` 的 `OnStartup` 里建：
+
+```csharp
+// 结构示意（非实现）
+var services = new ServiceCollection();
+services.AddSingleton<IUiDispatcher, WpfUiDispatcher>();
+services.AddSingleton<IApiClient>(_ => new HttpApiClient(baseUrl, token));
+services.AddSingleton<IWebSocketTransport>(_ => new ClientSideTransport(...));  // ← 复用 Transport
+services.AddSingleton<EventSubscriber>();
+services.AddSingleton<MainWindowViewModel>();
+services.AddSingleton<MainWindow>();
+```
+
+**生命周期**：
+
+| 类型 | 生命周期 | 理由 |
+|---|---|---|
+| `IUiDispatcher` | Singleton | 全局唯一 |
+| `IApiClient` / `IWebSocketTransport` / `EventSubscriber` | Singleton | 长连接、长持有 |
+| **主窗口 VM** | **Singleton** | 主界面只有一份 |
+| **对话框 / 临时页面 VM** | **Transient** | 每次新建，避免状态残留 |
+| `MainWindow` | Singleton | 主窗口唯一 |
+
+> ⚠️ **不要在 VM 构造函数里做 IO**（会阻塞 UI 启动）——用 `IAsyncInitializable` 接口或 `Loaded` 命令触发。
+
+#### 3.8.5 其他约束
+
+- **所有 IO 都是异步**；`async void` 仅限事件处理器且必须整体 try/catch（规范 §3.3）
+- 断线自动重连 + 状态显示（复用 `ClientSideTransport` 的重连策略）
+- **全局异常兜底三处都要挂**：`DispatcherUnhandledException` + `AppDomain.UnhandledException` + `TaskScheduler.UnobservedTaskException`
+
+---
+
+### 3.9 事件总线（进程内解耦）★
+
+> **位置说明**：排在最后是为了不打乱既有编号。它在架构上与 `Transport` **平行** —— 一个管网络传输，一个管进程内解耦。
+
+#### 3.9.1 它解决什么
+
+**模块间解耦**：`Channels.NapCat` 发布 QQ 事件时**不需要知道谁在听**；`Server` 的编排层、日志、统计各自订阅，**互不认识**。
+
+```
+Channels.NapCat ──Publish──▶ [事件总线] ──┬──▶ 会话编排（订阅）
+                                        ├──▶ 日志 / 审计（订阅）
+                                        └──▶ 统计（订阅）
+```
+
+#### 3.9.2 来源与必须改造的点
+
+复用旧项目 `Component Developer/Assets/Zipper/Core/Events/`（**已确认零 Unity 依赖**，只通过 `IZLogger` 间接耦合），但要改四处：
+
+| # | 原设计 | 必须改成 | 为什么 |
+|---|---|---|---|
+| 1 | 🔴 **主线程检查**：`_mainThreadId != Thread.CurrentThread.ManagedThreadId` → 记日志 + `return` | **去掉**（或改可配策略） | 服务端是多线程的；原逻辑会让 `Publish` **静默失效** → 事件静默丢失（最难查的一类 bug） |
+| 2 | `Dictionary<Type, EventChannelBase>` | **线程安全容器**（见 3.9.3） | 去掉主线程检查后，"侥幸安全"就没了 |
+| 3 | `IZLogger` 含 `UnityEngine.Object context` 参数 | 换成项目统一日志抽象 | 脱离 Unity |
+| 4 | `_disposed` 后静默 `return` | 至少变成**可观测的告警** | 静默失败最难查 |
+
+> ⚠️ **第 1 项与第 2 项是耦合的，必须一起做**：
+> **现在的 `_mainThreadId` 检查"顺便"把并发问题掩盖了** —— 非主线程调用直接 `return`，
+> 于是那个 `Dictionary` 事实上只有主线程在动。**一旦去掉检查，并发立刻变成真的。**
+> 只做第 1 项不做第 2 项 = **引入一个偶发、极难复现的 bug**。
+
+#### 3.9.2.1 落地进度（2026-09-22 用户已引入代码）
+
+| # | 改造项 | 状态 |
+|---|---|---|
+| 1 | 去掉主线程检查 | ⬜ **未做** —— 5 个方法里都还在（`Subscribe`×2 / `Unsubscribe` / `UnsubscribeAll` / `Publish`） |
+| 2 | 容器线程安全 | ⬜ **未做** —— 仍是 `Dictionary<Type, EventChannelBase>` |
+| 3 | 日志抽象 | ✅ **已做** —— 直接注入 `Serilog.ILogger`（与 `configuration-design.md` §10 决策一致） |
+| 4 | `_disposed` 后告警 | ⬜ **未做** —— 仍是静默 `return` / 返回 `EmptyIDisposable` |
+| — | 订阅者容器 CoW（§3.9.3） | ⚠️ **部分** —— 用了数组且 `Remove` 是整数组替换 ✅，但 `Add` **不是真 CoW**（见下方注） |
+
+> 🔴 **`Add` 的 CoW 缺陷（现状）**：实现是 `Array.Resize` **然后再**写最后一个元素 —— **两步之间有一个窗口**，
+> 并发的 `Publish` 可能读到"长度已 +1 但末位还是 `null`"的数组 → **`NullReferenceException`**。
+> **正确形态**：先把新数组**完整填好（含新元素）**，再**一次性发布引用**；并用 `Volatile.Write` / `Volatile.Read`
+> 保证写入顺序与可见性（.NET 内存模型允许 store-store 重排，x64 多半没事，但**服务端要跨平台**）。
+> （`Remove` 那条路用 `Array.FindAll` 后整体赋值 —— 那是**原子替换**，没问题。）
+
+**要保留的设计**（这些是好的，别改）：
+
+- ✅ **类型化订阅** `Subscribe<T>(Action<T>)` —— 泛型而非字符串 topic，编译期可查错
+- ✅ **`IDisposable` 退订**（RAII）—— `using` 一包自动清理，比手动退订可靠
+- ✅ **按 subscriber 批量退订**（`UnsubscribeAll`）—— 模块销毁时一键清干净
+- ✅ **异常隔离**：每个 handler 单独 try/catch —— **一个 handler 炸不影响其他订阅者**
+- ✅ **自动跳过已 Dispose 的订阅**
+- ✅ **`GetState()` 可观测** —— 能查每类事件有几个订阅者，排查悬挂订阅很有用
+
+#### 3.9.3 订阅者容器的数据结构选型
+
+**操作频率差异极大**：
+
+| 操作 | 频率 | 说明 |
+|---|---|---|
+| **遍历**（Publish 时走一遍） | 🔴 **极高频** | 每条 QQ 消息、每个 agent 事件都要走 |
+| **Add**（订阅） | 🟢 **低频** | 模块启动时订阅一次，运行中基本不变 |
+| **Remove**（退订） | 🟢 **低频** | 模块销毁时 |
+
+> **结论先行**：**优化遍历远比优化增删重要**。遍历的要点 =「无分配 + 缓存友好 + **遍历期间增删安全**」。
+
+**候选方案对比**：
+
+| 方案 | 遍历 | Add | Remove | **遍历期间增删** | 评价 |
+|---|---|---|---|---|---|
+| `Array.Resize`（旧实现） | ✅ 最快 | ⚠️ O(n) 拷贝 | ⚠️ O(n) 分配 | ✅ 安全（遍历旧数组） | 遍历好；增删浪费；安全性靠**巧合** |
+| **`List<T>`** | ✅ 快 | ✅ 均摊 O(1) | ⚠️ O(n) 原地 | 🔴 **抛 `InvalidOperationException`** | **致命**：遍历中订阅/退订（如 handler 退订自己）直接崩 |
+| **`LinkedList<T>`** | 🔴 **慢** | ✅ O(1) | ✅ O(1)* | 🔴 **同样抛异常** | 最不合适（见下） |
+| **不可变数组（Copy-on-Write）** ⭐ | ✅ **最快、零分配** | ⚠️ O(n) 分配 | ⚠️ O(n) 分配 | ✅ **安全（设计保证）** | **推荐** |
+| `ConcurrentDictionary<long, T>` | 🟡 中 | ✅ O(1) | ✅ O(1) | ✅ 安全（快照枚举） | 仅在**订阅高频**时才划算 |
+
+\* `LinkedList<T>` 的 O(1) 删除需要**持有节点引用**；而退订是按 handler / subscriber 查找的，**查找本身 O(n)** → 优势不成立。
+
+**推荐：不可变数组（Copy-on-Write）**
+
+```csharp
+Subscription<T>[] _subs = Array.Empty<Subscription<T>>();
+
+// 订阅：构造新数组，原子替换引用
+Interlocked.Exchange(ref _subs, _subs.Append(sub).ToArray());
+
+// 退订：同上
+Interlocked.Exchange(ref _subs, _subs.Where(x => x != sub).ToArray());
+
+// 发布：读一次字段引用，遍历稳定快照（无锁、无分配）
+var snapshot = Volatile.Read(ref _subs);
+foreach (var s in snapshot) { ... }
+```
+
+**为什么它最合适**：
+
+1. **遍历零开销**：只读一次引用，之后是普通数组遍历 —— **和 `Array.Resize` 一样快**，且不依赖巧合
+2. **遍历期间增删完全安全**：增删换的是**新数组**，正在遍历的旧数组不受影响 —— **设计保证**，不是"歪打正着"
+3. **无锁线程安全**：引用赋值原子（`Interlocked.Exchange` / `Volatile.Read`）
+4. **增删的 O(n) 分配可接受**：订阅是**低频**的（模块启动 / 销毁时才发生）
+
+**代价**：Add/Remove 每次分配一个新数组。**若将来出现"高频订阅"场景**，换成 `ConcurrentDictionary` 即可 —— **接口不变，只换容器**。
+
+**`List<T>` 为什么不行**：
+
+```csharp
+foreach (var s in _list)      // List<T> 枚举器带"版本号"检查
+{
+    s.Handler(@event);        // ← handler 里若 Subscribe / 退订自己
+}                             //   → 版本号变了 → 抛 InvalidOperationException
+```
+
+而「handler 里退订自己」（一次性订阅）是**常见模式** → **必崩**。
+要规避只能每次 Publish 先 `ToArray()` 快照 —— 那就变成"**每次遍历都分配**"，比 Copy-on-Write 的"**只在增删时分配**"差得多。
+
+**`LinkedList<T>` 为什么更不行**：
+
+1. **遍历慢**：Publish 是最高频操作，链表节点分散在堆上，缓存局部性差（每节点还有 `Next`/`Prev`/`List` 三份引用开销）
+2. **遍历期间修改同样抛异常**（枚举器也有版本号检查）
+3. **唯一优势（O(1) 删除）用不上**：按 handler / subscriber 退订得先查找（O(n)）
+
+#### 3.9.4 项目归属（✅ **已定：并入 `ZipperAIQQ.Core`**，2026-09-22）
+
+事件总线会被 `Channels.NapCat`、`Agent`、`Server` **多层使用**，放任何一个功能项目里都会造成依赖别扭。
+
+| 选项 | 说明 |
+|---|---|
+| ~~独立小项目 `ZipperAIQQ.Events`~~ | 原本倾向这个（最干净），但要多一个项目 |
+| **✅ 并入 `ZipperAIQQ.Core`** | **实际选择** —— 事件总线是**零依赖、无业务语义、多消费者**的**横切关注点**，完全符合 Core 的准入规则；而且**项目数不用 +1** |
+| 并入 `Transport` | ❌ 语义无关（一个网络、一个进程内） |
+| 放进 `Server` | ❌ `Channels` / `Agent` 也要用 → 依赖倒挂 |
+
+**落位**：`ZipperAIQQ.Core/Events/`
+
+> ⭐ **顺带解决了一个跨项目问题**：日志决策是"事件总线吃 `Serilog.ILogger`"（见 `configuration-design.md` §10.4）。
+> 它现在**就在 Core 里**，而 Core 自己负责日志装配 → **这个耦合不再跨项目**。
+>
+> ⚠️ **搬进来时要做的四处改造**不变（见 §3.9.3 列表）：去掉主线程检查、线程安全容器、`IZLogger` → `Serilog.ILogger`、`_disposed` 后可观测告警。
+
+---
+
+## 4. IoC 与生命周期 📦 已迁出（2026-09-22 瘦身）
+
+> 原 §4 整节（**组合根与模块装配**、各模块注册清单、生命周期约定、容器自检）已独立成
+> → **[`composition-design.md`](composition-design.md)**
+>
+> **为什么拆出去**：它讲的是「**IoC 怎么装配**」，与本章"各模块内部怎么设计"不是一类东西。
+> ⚠️ **章节编号在原文件里保持不变**（那边仍是 `§4.1` / `§4.4.7`），所以项目里已有的引用**继续有效**。
+
+---
+
+## 5. 端到端数据流
+
+### 5.1 一条 QQ 消息的完整旅程
+
+```
+QQ 用户发消息
+   │
+   ▼
+[NapCat] ──OneBot 11 WS──▶ ⑤ NapCatChannel.EventsAsync()
+   │
+   ▼
+⑦ Server 的消息编排
+   ├─ 解析：谁发的、群还是私聊、@了没
+   ├─ 定位会话：SessionId = "g<群号>" 或 "p<QQ号>"
+   ├─ 权限判定：QQ 号 → Role
+   └─ 触发主动/被动逻辑
+   │
+   ▼
+④ IAgentRuntime.RunAsync(request)
+   ├─ ClassifySession → 取该 SessionId 的上下文
+   ├─ 组装 system(人格) + 历史 + 新输入（超预算则先过 TieredChatReducer）
+   └─ 进入循环：LLM ⇄ 工具
+        ├─ ③ IChatClient 流式请求（MEAI 包装链，OpenAI 兼容端点）
+        ├─ ④ FunctionInvokingChatClient 自动发起工具调用
+        │    └─ GuardedAIFunction 过权限门禁
+        └─ 产出 AgentEvent 流
+   │
+   ├──────────────▶ （旁路）⑦ EventBroadcaster ──WS /events──▶ ⑧ WPF 客户端
+   │                   实时展示：思考 / 工具调用 / 回答
+   ▼
+⑦ Server 拿最终文本
+   │
+   ▼
+⑤ NapCatChannel.CallAsync("send_group_msg", ...)
+   │
+   ▼
+[NapCat] ──▶ QQ 用户收到回复
+   │
+   ▼
+⑥ Storage 异步落库（消息 + 上下文）
+```
+
+### 5.2 管理客户端的命令流
+
+```
+WPF ──POST /api {action:"listSessions"}──▶ ⑦ ApiEndpoint ──▶ ⑥ Storage
+     ◀──── {code:0, data:[...]} ────────────────────────────┘
+```
+
+---
+
+## 6. 配置模型 🗑️ 已删除（2026-09-22 瘦身）
+
+> 原 §6 那份 `appsettings.json` 骨架**已过时，且与 [`configuration-design.md`](configuration-design.md) §3 冲突**
+> —— 节名、字段名、端口号**全都对不上**（例：`Llm` 顶级节 vs `Agent:Llm`；`Permissions:Owners` vs `Tools:Admins`；端口 `8765` vs `5180`；缺 `Storage` / `Logging` 节）。
+>
+> **已经删掉，避免两份来源打架。**
+>
+> → **权威的配置骨架看 [`configuration-design.md`](configuration-design.md) §3。**
+
+## 7. 错误处理与可观测
+
+| 层 | 策略 |
+|---|---|
+| **工具执行** | 异常 → 转失败结果回填，不炸循环（见 [`agent-design.md`](agent-design.md) §3.2 `GuardedAIFunction`） |
+| **LLM 调用** | 429/5xx/网络 → 指数退避重试（有上限）；4xx 参数错 → 直接失败并报明原因 |
+| **NapCat 连接** | 断线 → 自动重连 + 退避；重连期间消息丢弃要记日志 |
+| **WS 客户端** | 断线 → 自动重连；客户端显示"已断线，重连中" |
+| **存档失败** | 记 Error 日志，**但不阻塞回复** |
+| **可观测** | 结构化日志（Serilog）；每条 agent 事件带 `Seq`；关键路径埋耗时（LLM 首字节、工具耗时、总轮次） |
+
+---
+
+## 8. 测试策略
+
+| 测试对象 | 怎么测 | 必测项 |
+|---|---|---|
+| **事件翻译** | 用假的 `IChatClient`（脚本化产出 `ChatResponseUpdate`）—— 见 `D:\temp\MeaiSpike` 的做法 | 文本增量 / 工具调用事件 / 工具结果事件 / **顺序正确** / 空 update 不崩 |
+| **`GuardedAIFunction`** | 直接构造，喂各种 `AIFunctionArguments` | **非管理员触发危险工具必须被拒**（安全底线）、超时被拦、工具异常被转成失败结果、超长输出被截断 |
+| **`RetryingChatClient`** | 假 client 按脚本抛 429 / 500 / 400 | 429 重试、5xx 重试、**400 不重试**、取消不重试、退避时长合理 |
+| **`TieredChatReducer`** | 构造超长上下文 | 压缩后仍在预算内、**system 未被丢**、最近 N 轮保留、压缩不会死循环 |
+| **会话隔离** | 两个 `SessionId` 交叉跑 | **上下文绝不串** |
+| **DI 装配** | 从容器解析 `IChatClient` | **包装顺序正确**（`FunctionInvoking` 在最外、`Retrying` 在内） |
+| **Transport** | 内存中的 WebSocket 对（或 Mock） | 分帧拼装、大消息、心跳超时、并发发送串行化、关闭握手 |
+| **NapCat 协议** | 用录制的事件 JSON 回放 | echo 配对、超时清理、各类事件分流、畸形 JSON 不崩 |
+
+> **详细测试清单见 [`agent-design.md`](agent-design.md) §9。**
+> ⚠️ 原「SSE 解析」「Llm 请求组装」两项**已删除** —— 那两块由 MEAI 承接，不再需要自研测试。
+
+**原则**：所有测试**不打真实 DeepSeek / 真实 NapCat**，全部用假实现或录制回放。
+
+---
+
+## 9. 分期计划与验收标准
+
+| 期 | 内容 | 验收标准（可判定） |
+|---|---|---|
+| **P1** | Transport | 客户端/服务端两个适配器能互发互收；单测覆盖分帧、心跳、并发发送、`JsonNode` 载荷序列化 |
+| **P1.5** | 契约样例 + 双端测试 | [`docs/contracts/`](../../docs/contracts/)（**公开面**）**已落地 README + 4 份样例**（ping / getStatus / hello / qq-state）；服务端与客户端各有断言测试跑通 —— **这是「不建契约项目」的安全网** |
+| **P2** | LLM 接入（MEAI） | `Microsoft.Extensions.AI.OpenAI` 对真实 DeepSeek 端点跑通流式请求；DI 里 `IChatClient` 的**包装顺序**装配正确；用假的 `IChatClient` 做的单测全绿 |
+| **P3** | Agent 最小循环（`IAgentRuntime`） | 无工具一问一答跑通；带工具的单轮调用跑通（靠 `FunctionInvokingChatClient`）；`AgentEvent` 事件流顺序正确；**用一个假 `IChatClient` 就能全测，不需要真 API key** |
+| **P4** | NapCat 通道 | 正向 WS 连上本机 NapCat，能收私聊/群消息、能发文本；断线能重连 |
+| **P5** | Server 编排 + WS 广播 | QQ 消息 → agent → 回复 QQ 全链路通；客户端 WS 能实时看到事件 |
+| **P6** | 权限门禁 | 非管理员触发危险工具被拒；有对应用例 |
+| **P7** | 存储 + 会话隔离 | 重启后会话恢复；不同群上下文不串 |
+| **P8** | 客户端（MVVM + DI） | `CommunityToolkit.Mvvm` + `Microsoft.Extensions.DependencyInjection`；能看到状态/日志/会话，能改配置并生效；**VM 可单测**（不依赖任何 UI 类型） |
+| **P9** | 主动行为 | 定时触发主动发言；走的是同一条 agent 路径 |
+
+> **P3 是分水岭**：agent 最小循环跑通，这个项目就成立了一半。
+
+---
+
+## 10. 待决问题
+
+| # | 问题 | 影响 | 建议 |
+|---|---|---|---|
+| Q1 | 工具并发执行要不要第一版就上？ | 复杂度 | 先串行，留接口 |
+| Q2 | 上下文压缩策略第一版做到哪一档？ | 长对话质量 | 先做"丢最老的工具结果 + 硬截断"，摘要后置 |
+| Q3 | 会话状态存内存还是每轮读库？ | 重启恢复 | 内存缓存 + 异步落库 |
+| Q4 | NapCat 正向还是反向优先？ | 部署形态 | 正向（同机最省事），反向留到上服务器时启用 |
+| Q5 | 多角色人格：配置切换还是按会话绑定？ | 实现复杂度 | 先配置切换 |
+| Q6 | 客户端要不要做"手动发消息"（绕过 AI 直接发 QQ）？ | 调试便利 | 建议做，排障很有用 |
+| Q7 | D1 产品定位（是否需要 7×24） | 部署形态 | **不阻塞开发**（接缝 A 让部署形态变配置项） |
+
+---
+
+## 附：本设计与既有文档的关系
+
+| 文档 | 关系 |
+|---|---|
+| [`architecture-proposal.md`](../architecture-proposal.md) | 上层架构（分层、三接缝、部署形态、通信契约）——**冲突时以它为准** |
+| [`AGENTS.md`](../../AGENTS.md) | 项目规则（**代码由用户编写**、技术基线、四阶段门控） |
+| [`docs/standards/csharp-编码规范.md`](../../docs/standards/csharp-编码规范.md) | 编码约束（本文多处引用其条款）—— ⚠️ **公开面** |
+| [`memory/lessons.md`](../memory/lessons.md) | 旧项目教训（本文多条设计直接针对它们） |
+| [`transport-design.md`](transport-design.md) / [`agent-design.md`](agent-design.md) | 同一层的另外两份详细设计 |

@@ -1,0 +1,658 @@
+# 配置与日志设计（`ZipperAIQQ.Core`）
+
+> **状态**：草案 · 2026-09-22
+> **范围**：**配置模块** + **日志模块**。两者放一起设计 —— 因为它们的**机密度**和**"谁能改"**是耦合的。
+> **新增项目**：**`ZipperAIQQ.Core`**（第 **7** 个），承载**进程内公共基础设施**。
+
+---
+
+## 1. 定位与边界
+
+### 1.1 一句话
+
+> **`ZipperAIQQ.Core` = 所有模块都要用、但又不属于任何业务模块的东西 —— 也就是「横切关注点」。**
+
+目前装三件：**配置**（装载/校验/原子保存/重建的骨架）、**日志**（Serilog 装配）、**进程内事件总线**（从旧项目复用改造）。
+将来可能还有守卫 / 结果类型 / 通用扩展方法。
+
+### 1.2 ⚠️ 明确**不含**什么
+
+| 不含 | 为什么 |
+|---|---|
+| **跨进程 wire 契约**（HTTP 命令 / WS 事件的 DTO） | 2026-09-21 已定案「**不建契约层**」：两端各自维护 DTO + `docs/contracts/` 样例做安全网。**本节不改这个决定** |
+| **业务逻辑 / 领域模型** | 那是各功能模块的事 |
+| **`Transport`（WebSocket 能力）** | 它是「**运行时能力**」不是「横切关注点」：只是 ③⑤⑥ 三个项目为了"连网络"才需要。见 §1.3 判据 |
+| **`Storage`（持久化）** | 两条都不合格：**有业务语义**（会话、消息、记忆是领域概念）＋**只有一个消费者**（Server）。且它带 SQLite 依赖，进 Core 会让**每个项目都拖上数据库** |
+| **只被一个模块使用的东西** | **等出现第二个消费者再搬** |
+
+### 1.3 ⭐ 准入规则（**两条都要满足，否则 Core 迟早变成垃圾桶**）
+
+#### 判据一：**能说出第二个消费者是谁**
+
+| ✅ 可以放 | ❌ 不许放 |
+|---|---|
+| 跨模块共用的东西 | 只服务单一模块的代码 |
+
+> **"放进来之前，先说出第二个消费者是谁。" 说不出来就别放。**
+
+#### 判据二：⭐ **它是「横切关注点」，不是「运行时能力」**
+
+**这一条是关键** —— 只有判据一是不够的（`Transport` 也能通过判据一，见 §1.5）。
+
+| | 是什么 | 例子 | 进 Core？ |
+|---|---|---|---|
+| **横切关注点** | **每个模块都要用**，本身**不是功能**，是"所有功能都需要的背景设施" | 配置、日志、事件总线 | ✅ |
+| **运行时能力** | **某些模块为了干某件事**才需要，它本身**是一个功能** | `Transport`（连接管理）、`Storage`（持久化） | ❌ |
+
+> ⭐ **最准的一句判据**：**「把所有业务模块删光，这东西还需要吗？」**
+> - 配置要 ✅、日志要 ✅、事件总线要 ✅（它是解耦机制，不是功能）
+> - **WebSocket 连接 ❌、数据库 ❌** —— 模块都没了，还连什么、存什么？
+
+#### 判据三（弱，但是好的卫生习惯）
+
+| ✅ 推荐 | ❌ 避免 |
+|---|---|
+| **无业务语义**的抽象与薄适配 | 有业务语义的东西（会话、消息、人格…） |
+| 对第三方库的**薄封装**（如 Serilog 装配） | 对第三方库的**厚封装**（会变成框架套框架） |
+
+### 1.5 用这套规则判一遍（**留档，免得以后反复讨论**）
+
+2026-09-22 讨论过「要不要把 `Transport` / `Storage` / 事件总线都收进 Core」：
+
+| 候选 | 判据一（第二消费者） | 判据二（横切 vs 运行时） | 结论 |
+|---|---|---|---|
+| **事件总线** | ✅ 多模块订阅 | ✅ 横切（解耦机制） | ✅ **收进 Core** |
+| **`Transport`** | ✅ ③⑤⑥ 都用 | ❌ **运行时能力**（它是"连网络"这个功能本身） | ❌ **不收**，保持独立 |
+| **`Storage`** | ❌ 基本只有 Server | ❌ 运行时能力 + **有业务语义** | ❌ **不收**，保持独立 |
+
+**不把 `Transport` 收进来的实际理由（内聚性）**：
+
+| 问题 | 后果 |
+|---|---|
+| Core 会为**两种无关的原因**而改动 | 加配置项要改 Core、调心跳也要改 Core → `git blame` 变糊、冲突变多 |
+| Core 的"含义"变糊 | 配置/日志是**很少变的横切设施**；传输层是**六个坑、高频改动**的运行时能力。"Core 改了"这句话不再有信息量 |
+| 它本来有自己的边界 | 已有独立设计文档与测试项目，"**一份实现、两端复用**"是它明确的价值主张；单独放**保护得住边界** |
+
+> 📌 **分寸感**：这件事**不像三个接缝那样不可逆** —— 项目怎么切是打包/命名空间层面的决定，
+> 将来想合想拆，机械重构就能做。**真正不可逆的是接缝**，所以这里按规则选一次、往前走就好。
+
+### 1.4 依赖方向的变化
+
+```
+  第 0 层（零依赖）      ⓪ Core             配置/日志骨架
+                        ① Transport         WebSocket 封装
+
+  第 1 层                ③ Channels.NapCat   ④ Storage      （③ 依赖 ①）
+  第 2 层                ② Agent（不依赖任何内部项目）
+  第 3 层（组合根）      ⑤ Server（→ 全部）   ⑥ Client（→ ①）
+```
+
+- **`Core` 是新的第 0 层**：所有项目都可引用它
+- **`Core` 不得引用任何其他内部项目**（否则立刻循环）
+- `Agent` 仍然**不依赖任何内部项目**这一点**要重新确认** —— 如果 `Agent` 要用 `Core` 的配置骨架/日志，那它就依赖 `Core` 了
+  - **本设计的选择**：**允许 `Agent` 依赖 `Core`**（`Core` 是零业务的基础设施，不算"内部业务依赖"）
+  - 原约束"Agent 不依赖 Channels/Storage/Server"**依然成立**，不受影响
+
+---
+
+## 2. 配置的来源与优先级
+
+**只有一个配置读取入口**：`IConfiguration`（.NET 标准），按**从低到高**的优先级叠加：
+
+| 序 | 来源 | 用途 | 能不能含密 |
+|---|---|---|---|
+| 1 | `appsettings.json` | **默认值 + 结构模板**（进仓库） | ❌ **绝不含密** |
+| 2 | `appsettings.Local.json` | **本机覆盖**（gitignore；也被 `saveConfig` 写） | ✅ 可以 |
+| 3 | **环境变量** | 容器/服务器部署 | ✅ 可以（**推荐**） |
+| 4 | 命令行参数 | 临时调试 | ✅ 可以 |
+
+**后写的覆盖先写的**（.NET 默认行为）。
+
+> ⚠️ **纪律**：含密的项**只允许**出现在第 2/3/4 层。第 1 层进仓库，**任何机密都不许进去**。
+
+---
+
+## 3. 配置骨架（`appsettings.json` 草案）
+
+> ✅ **格式定稿：JSON**（2026-09-22）—— 用 .NET 原生 `Microsoft.Extensions.Configuration.Json`，**零额外依赖**。
+> **YAML 曾评估并否决**（.NET 原生不支持 YAML；事实标准包已停更三年）—— 理由见
+> [`../architecture-proposal.md`](../architecture-proposal.md) §3.4 与 `memory/decisions.md`。
+>
+> 💡 **好消息：配置文件里可以写 `//` 注释！**
+> 官方 JSON **配置**解析器开了 `CommentHandling = Skip` + `AllowTrailingCommas = true`（已查证 dotnet/runtime 源码）——
+> 所以下面那些注释**不是"示意"，是合法可用的**。
+> ⚠️ 但**走 `JsonSerializer` 那条管线**（DTO / 契约测试）**默认拒绝注释** ——
+> 这就是为什么 [`docs/contracts/`](../../docs/contracts/) 里用 **`"_comment"` 数据字段**而不是 `//`（**那个设计是对的**）。
+
+> ⚠️ **下面所有含密字段一律为空串** —— 这是进仓库的模板，真实值走 §2 的 2/3/4 层。
+> 这份骨架将来要落成 **`appsettings.Example.json`**（开源就绪清单里欠的那份）。
+
+```jsonc
+{
+  "Server": {
+    "Listen": "127.0.0.1",          // 非 loopback 时必须配 Token，否则拒绝启动
+    "Port": 5180,
+    "Token": ""                     // 🔒
+  },
+
+  "NapCat": {
+    "Mode": "forward",              // forward | reverse | both
+    "Forward": { "Url": "ws://127.0.0.1:3001", "Token": "" },   // 🔒 Token
+    "Reverse": { "Path": "/onebot", "Token": "" }               // 🔒 Token
+  },
+
+  "Agent": {
+    "Llm": {
+      "BaseUrl": "https://api.deepseek.com/v1",
+      "ApiKey": "",                 // 🔒
+      "Model": "deepseek-chat"
+    },
+    "Persona": { "SystemPromptFile": "persona/default.md" },
+    "Session": {
+      "MaxToolRounds": 8,
+      "ContextTokenBudget": 32000,
+      "RecentTurnsToKeep": 6
+    },
+    "Retry":  { "MaxAttempts": 4, "BaseDelayMs": 1000, "MaxDelayMs": 15000 },
+    "Drift":  { "Level": "L0L1", "ReloadSystemEveryNTurns": 10 }
+  },
+
+  "Tools": {
+    "TimeoutSeconds": 30,
+    "MaxOutputChars": 8000,         // 输出限长（见 agent-design §3.2）
+    "Admins": [],                   // 🔒 管理员 QQ 号（也算隐私）
+    "Enabled": []                   // 空 = 全部启用
+  },
+
+  "Storage": { "DatabasePath": "data/zipper.db" },
+
+  "Logging": {
+    "MinimumLevel": "Information",
+    "File": {
+      "Path": "logs/zipper-.log",
+      "RetainedDays": 14,
+      "RollOnSizeMb": 32,
+      "Shared": false
+    },
+    "Console": { "Enabled": true },
+    "PushToClient": {
+      "Enabled": true,
+      "MinimumLevel": "Information",
+      "MaxPerSecond": 20,           // ⚠️ 限流，见 §12
+      "MaxMessageChars": 2000
+    }
+  }
+}
+```
+
+---
+
+## 4. 环境变量命名规范
+
+.NET 用 **`__`（双下划线）** 表示层级：
+
+```
+Zipper__Server__Token=xxxxx
+Zipper__NapCat__Forward__Token=xxxxx
+Zipper__Agent__Llm__ApiKey=sk-xxxxx
+```
+
+**约定**：
+
+1. **前缀固定 `Zipper`** —— 避免与容器/宿主里其他应用的变量撞名
+2. **机密优先用环境变量**（容器部署最省事，且不会误提交）
+3. 维护一份**机密清单**，启动时检查"清单里的项是否已配"（见 §6）
+
+> 📌 **前缀为什么不是 `ZipperAIQQ`**：太长，命令行和 compose 文件里很啰嗦；`Zipper` 已足够独特。
+
+---
+
+## 5. Options 清单与归属
+
+### 5.1 ⭐ 核心设计决定：**Options 类型跟着消费者走**
+
+| Options 类型 | 归属项目 | 生命周期 | 可热重载 | 含密 |
+|---|---|---|---|---|
+| `ServerOptions` | `Server` | `IOptions<T>` | ⚠️ 部分（端口不行） | 🔒 Token |
+| `NapCatOptions` | `Channels.NapCat` | `IOptions<T>` | ❌ **不行**（连接已建立） | 🔒 Token |
+| `LlmOptions` | `Agent` | `IOptions<T>` | ⚠️ 部分（Model 可，BaseUrl 谨慎） | 🔒 ApiKey |
+| `AgentOptions`（Session/Retry/Drift） | `Agent` | `IOptions<T>` | ✅ 可以 | ❌ |
+| `PersonaOptions` | `Agent` | `IOptions<T>` | ✅ **可以**（改人格不用重启） | ❌ |
+| `ToolsOptions` | `Agent` | `IOptions<T>` | ✅ 可以 | 🔒 Admins |
+| `StorageOptions` | `Storage` | `IOptions<T>` | ❌ **不行**（已打开连接） | ❌ |
+| `LoggingOptions` | `Core` | `IOptions<T>` | ✅ **可以**（受益最大） | ❌ |
+
+> **为什么不让所有 Options 都住进 `Core`**：
+> 那会让 `Core` 反过来知道所有模块的业务概念（NapCat 的地址、LLM 的模型名…），
+> 于是 `Core` 变成"**所有模块的配置垃圾桶**"，而且**每个模块都要依赖它才能拿到自己的配置** —— 耦合方向是反的。
+>
+> **正确的分工**：
+> - **`Core` 提供"怎么读、怎么校验、怎么重建"的骨架**
+> - **各模块提供"我有哪些配置项"的类型**
+> - **组合根（`Server`）负责把它们串起来**
+
+### 5.2 `Core` 提供的**四**样东西
+
+```csharp
+// ⚠️ 签名必须基于 IServiceCollection（不是 IHostApplicationBuilder）
+//    理由：客户端是纯 WPF，【没有】IHostApplicationBuilder。
+//    服务端：builder.Services.AddZipperCore(builder.Configuration)
+//    客户端：services.AddZipperCore(config)
+public static IServiceCollection AddZipperCore(
+    this IServiceCollection services,
+    IConfiguration configuration,
+    Action<ZipperCoreOptions>? configure = null);
+
+// ② 启动自检契约 —— 每个模块可以实现若干个
+//    ⭐ 调用点：组合根在 Build() 之后、Run() 之前【统一调一次并汇总】，失败即拒绝启动
+//    （谁调、什么时候调，见 composition-design.md §4.1.5）
+public interface IStartupCheck
+{
+    string Name { get; }
+    /// 返回 null 表示通过；否则返回"给人看的"失败原因（缺什么就直说缺什么）
+    string? Run(IServiceProvider services);
+}
+
+// ③ 可重建契约 —— 决定 saveConfig 之后谁能当场生效（见 §7）
+public interface IReloadable
+{
+    string Name { get; }
+    ValueTask ReloadAsync(CancellationToken ct);
+}
+
+// ④ ⭐ 建 IConfiguration 的辅助 —— 【客户端必需】
+//    服务端的 WebApplication.CreateBuilder() 会自动接上 appsettings.json / 环境变量 / 命令行；
+//    但客户端是纯 WPF，【没有 Host】→ 这些没人替你接 → 必须自己拼。
+//    把它固化在 Core 里，两端才会用【同一套来源与优先级】。
+public static IConfigurationRoot BuildZipperConfiguration(string basePath, string[] args);
+```
+
+> ### ⚠️ 第 ④ 样为什么必须有（否则会出现一类很难查的 bug）
+>
+> 如果两端各自拼配置：
+> **Server 读到了环境变量 `Zipper__Agent__Llm__ApiKey`，而 Client 忘了加 `AddEnvironmentVariables()`**
+> → **两端配置行为不一致** → 表现是「**服务端好好的，客户端那个设置怎么都不生效**」。
+>
+> 所以"**来源与优先级**"（§2 那张表）必须**固化在一处**，两端共用。
+> 详见 `overview.md` §4.1.12。
+```
+
+---
+
+## 6. 校验与 fail-fast
+
+### 6.1 原则
+
+1. **每个模块自己校验自己的 Options**（`IValidateOptions<T>`）
+2. **Core 在启动时一次性跑完所有校验，并汇总报错** —— 不要"遇到第一个就退出"（否则你要改一次错、跑一次、再改一次）
+3. **报错文案是给人看的** —— 说清**缺哪一项、在哪一层配、怎么配**
+4. **`.ValidateOnStart()`**（.NET 原生）兜底，别等第一次用到才发现
+
+### 6.2 启动自检清单
+
+| 检查 | 失败行为 |
+|---|---|
+| 监听地址非 loopback 且未配 `Server.Token` | ⛔ **拒绝启动**（已定的硬约束） |
+| `Agent.Llm.ApiKey` 为空 | ⛔ 拒绝启动（除非显式开了 mock 模式） |
+| `NapCat.Forward.Url` 为空（且在 forward/both 模式） | ⛔ 拒绝启动 |
+| `Storage.DatabasePath` 目录不可写 | ⛔ 拒绝启动（顺便**试着创建一次**，别等第一次写库才炸） |
+| `Persona.SystemPromptFile` 不存在 | ⛔ 拒绝启动（人格缺失比崩溃更隐蔽） |
+| `Tools.Admins` 为空 | ⚠️ **警告**（启动但提示"所有危险工具对所有人关闭"） |
+| 日志目录不可写 | ⚠️ 降级为仅 Console（**日志不该拦住启动**） |
+
+> **设计取向**：**配置错误在启动时就死，不要拖到运行期。**
+> 一个半夜因为配置写错而静默失效的机器人，比一个起不来的机器人难查得多。
+
+### 6.3 报错长什么样（**开源项目的硬需求**）
+
+```
+❌ 配置校验未通过（2 项）：
+
+  1. Agent:Llm:ApiKey 未配置
+     → 环境变量：Zipper__Agent__Llm__ApiKey
+     → 或写进 appsettings.Local.json
+
+  2. Server:Listen = "0.0.0.0"，但 Server:Token 为空
+     → 监听非 loopback 时必须配 token，否则拒绝启动
+     → 若只想本机访问，把 Server:Listen 改回 "127.0.0.1"
+```
+
+---
+
+## 7. 保存与生效（**回答"save/load 算不算热重载"**）
+
+### 7.1 先把两件事分开
+
+| | 含义 |
+|---|---|
+| **save / load** | 把配置**写进 / 读出文件**（持久化） |
+| **热重载** | **正在跑的进程**真的用上了新值（生效） |
+
+> ⚠️ **`save` 成功 ≠ 已生效。**
+> 只 save 不 reload，会出现最让人抓狂的现象：**"我改了配置、界面也显示改了、但行为没变。"**
+
+### 7.2 本设计的流程
+
+```
+客户端 saveConfig
+   │
+   ▼
+① 校验新值        ── 不合法 → 直接拒绝，【绝不写入】       （别把坏配置落盘）
+   │
+   ▼
+② 原子写文件      ── 只写 appsettings.Local.json           （见 7.3）
+   │
+   ▼
+③ 触发重建        ── 逐个调用 IReloadable.ReloadAsync()     （能重建的当场生效）
+   │
+   ▼
+④ 如实回报        ── { applied, requiresRestart[], errors[] }
+```
+
+**返回值形状**（这会进 `docs/contracts/` 样例）：
+
+```jsonc
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "applied": true,
+    "requiresRestart": ["NapCat", "Storage"],   // ⚠️ 这些项【没生效】
+    "errors": []
+  }
+}
+```
+
+> ⭐ **核心是让"没生效"可见。** 界面必须显示「以下改动需重启才生效：NapCat、Storage」——
+> **宁可明确说"没生效"，也不要假装成功。**
+
+### 7.3 三个实现要点
+
+1. **只写 `appsettings.Local.json`，绝不动 `appsettings.json`**
+   - 前者是**程序所有**（gitignore、纯 JSON、可以整份重写）
+   - 后者是**手写模板**（有注释、有排版）；程序去改它 = 迟早把人的注释和格式搞乱
+2. **原子写**：
+   ```csharp
+   File.WriteAllText(tmp, json, Encoding.UTF8);          // 写临时文件
+   File.Move(tmp, target, overwrite: true);               // 同卷内原子替换
+   // Windows 上更稳的等价物：File.Replace(tmp, target, backupFileName: null)
+   ```
+   > 理由：写到一半崩了 = **配置全毁、服务起不来**。这是少数值得较真的地方。
+3. **写之前备份上一份**（`.bak`），给"改坏了想回滚"留条路
+
+### 7.4 哪些能重建、哪些必须重启
+
+| 能当场生效（`IReloadable`） | 必须重启 |
+|---|---|
+| 日志级别、文件滚动参数 | **监听地址 / 端口 / Token**（Kestrel 已绑定） |
+| 人格 / SystemPrompt | **NapCat 连接地址与 Token**（连接已建立） |
+| 会话轮次上限、上下文预算 | **存储路径**（SQLite 连接已开） |
+| 重试与漂移策略参数 | **DI 里已构造的单例**（`HttpClient`、MEAI 管道链） |
+| 工具开关 / 超时 / 输出限长 | |
+| 管理员名单 | |
+| 推客户端的日志限流参数 | |
+
+> ⚠️ **框架自动重载（`IOptionsMonitor` + `reloadOnChange`）只解决"文件变了、Options 对象变了"这一步** ——
+> 它**不会**帮你重建已绑定的 Kestrel、已建立的 WS 连接、已构造的单例。
+> 所以**不能只依赖它**，必须有上面这套显式重建 + 如实回报。
+
+---
+
+## 8. 机密处理（四条硬纪律）
+
+| # | 纪律 | 落点 |
+|---|---|---|
+| 1 | **机密不进仓库** | 只走 `appsettings.Local.json`（已 gitignore）/ 环境变量 |
+| 2 | **永不回显** | `getConfig` **永远不返回密钥明文**，只返回 `"configured": true/false` |
+| 3 | **日志脱敏** | **写盘前**就 redact（不是靠客户端过滤）—— 见 §13 |
+| 4 | **客户端只看"配没配"** | 界面显示「ApiKey：已配置 ✅」而不是值；`saveConfig` 接受新值但**永不回读** |
+
+> **为什么第 2 条这么严**：客户端一旦能拿到密钥，**"服务端监听到非 loopback + 同学瞄一眼屏幕"**就是一次泄漏。
+> 而且密钥**没有必须外传的理由** —— 客户端只需要知道"能不能用"。
+
+---
+
+## 9. 配置的对外契约
+
+`getConfig` / `saveConfig` 属于**跨进程 wire 契约** → 按 §1.2 的边界，**不进 `Core`**：
+
+- 服务端：`ZipperAIQQ.Server/DTO/`
+- 客户端：`ZipperAIQQ.Client/DTO/`（自己维护一份同名）
+- **样例**：`docs/contracts/command-get-config.json` + `command-save-config.json`（**待补**）
+
+```jsonc
+// getConfig 响应（脱敏后）
+{
+  "code": 0, "message": "ok",
+  "data": {
+    "server":  { "listen": "127.0.0.1", "port": 5180, "tokenConfigured": true },
+    "napcat":  { "mode": "forward", "forwardUrl": "ws://127.0.0.1:3001",
+                 "forwardTokenConfigured": false },
+    "agent":   { "model": "deepseek-chat", "apiKeyConfigured": true,
+                 "maxToolRounds": 8, "contextTokenBudget": 32000 },
+    "tools":   { "timeoutSeconds": 30, "maxOutputChars": 8000, "adminCount": 1 },
+    "storage": { "databasePath": "data/zipper.db" },
+    "logging": { "minimumLevel": "Information", "pushToClient": true },
+    "reloadable": ["Logging", "Persona", "Tools", "Agent"],
+    "requiresRestartToChange": ["Server", "NapCat", "Storage"]
+  }
+}
+```
+
+> 📌 **`reloadable` / `requiresRestartToChange` 两个字段是"把 §7.4 那张表告诉客户端"** ——
+> 界面就能提前把"改了要重启"的项标出来，而不是等用户点了保存才说。
+
+---
+
+## 10. 日志：抽象与装配
+
+### 10.1 决策（**用户拍板，2026-09-22**）
+
+> **容器里注册 `Serilog.ILogger`，业务代码直接注入，用 Serilog 自己的实现。**
+> **不**引入 `Microsoft.Extensions.Logging.ILogger<T>` 那层，也**不**自定义 `IAppLogger`。
+
+```csharp
+// 组合根（Server 的 Program.cs / Client 的 DI）
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)   // 配置从 §3 的 Logging 节来
+    .Enrich.FromLogContext()
+    .CreateLogger();
+
+builder.Services.AddSingleton(Log.Logger);           // 注册 Serilog.ILogger
+```
+
+```csharp
+// 业务代码
+public sealed class NapCatChannel(Serilog.ILogger logger)
+{
+    private readonly Serilog.ILogger _log = logger.ForContext<NapCatChannel>();
+}
+```
+
+### 10.2 ⚠️ 必须补的一件事：**框架日志仍走 `Microsoft.Extensions.Logging`**
+
+`Serilog.ILogger` 只覆盖**我们自己的代码**。**Kestrel / EF Core / MEAI / 宿主**的日志走的是 `Microsoft.Extensions.Logging`。
+
+→ 所以**两个都要接**：
+
+| 谁的日志 | 走哪条 |
+|---|---|
+| 我们的代码 | 直接注入 `Serilog.ILogger` |
+| 框架 / 第三方库 | `builder.Services.AddSerilog(...)` 或 `UseSerilog()` 把 M.E.Logging **桥到 Serilog** |
+
+**两者汇入同一个 `Log.Logger`**，最终落到同一批 sink。
+
+### 10.3 Bootstrap logger（**启动早期日志不能丢**）
+
+Kestrel 起来之前、DI 容器建好之前的日志（尤其是**配置校验失败**）**必须能看见** —— 而这正是最需要看日志的时刻。
+
+→ 用一个**临时 Console logger**：容器建好后切换到正式 logger，并 `CloseAndFlush()` 掉临时的。
+
+### 10.4 代价记录（诚实标注）
+
+| 代价 | 说明 |
+|---|---|
+| 业务代码绑在 Serilog 上 | 将来换日志库要动业务代码。**接受**（用户明确选择简单） |
+| **事件总线不再"零依赖可搬"** | 它来自 `Component Developer` 项目，本来想跨项目复用。若它吃 `Serilog.ILogger`，搬走时要一起带 Serilog |
+| **本设计的取舍** | **让事件总线也吃 `Serilog.ILogger`，等真要搬时再抽** —— 不提前抽象（YAGNI） |
+
+---
+
+## 11. Sink 清单
+
+| Sink | 用途 | 包 | 注意 |
+|---|---|---|---|
+| **Console** | 开发 / 容器 stdout | `Serilog.Sinks.Console` | 生产可关（§3 的 `Console.Enabled`） |
+| **滚动文件** | 生产留痕 | `Serilog.Sinks.File` | **大小 + 天数双限制**，否则日志能把磁盘吃满 |
+| **WS 推送**（自研） | 客户端实时日志窗 | — | ⚠️ **必须限流**（§12） |
+| **事件总线**（自研） | 进程内订阅（审计 / 统计） | — | 想清楚**订阅者异常不许影响主流程** |
+| ~~Async 包装~~ | 高频写盘不阻塞主流程 | `Serilog.Sinks.Async` | 文件 sink 建议包一层；**WS sink 不要**（它自己有限流，且要能丢） |
+
+> ⚠️ **文件 sink 必须用 `shared: false`**（默认）。多进程写同一日志文件在 Windows 上会锁文件。
+> ⚠️ **`File` sink 写盘前脱敏** —— 靠 §13 的 destructuring 策略，不是靠事后处理。
+
+---
+
+## 12. ⚠️ 日志推客户端的限流（**不做这个迟早出事**）
+
+### 12.1 为什么必须限流
+
+一条**报错死循环**可以每秒产生上万条日志。全推给 WS 的后果：
+
+1. WS 带宽打满 → **正常的事件（消息、状态）被挤掉**
+2. 客户端 UI 线程被日志刷爆 → **界面卡死**
+3. 服务端为每条日志做序列化 + 发送 → **CPU 打满，雪上加霜**（本来就出事了）
+
+**最坏的情况是：出故障时，日志推送把故障放大成"完全不可用"。**
+
+### 12.2 策略
+
+| 手段 | 做法 |
+|---|---|
+| **级别门槛** | 只推 `>= PushToClient.MinimumLevel`（默认 `Information`） |
+| **令牌桶限流** | 默认 **20 条/秒**；超出**直接丢弃**（不排队） |
+| **⭐ 丢弃要汇总上报** | 每 N 秒补一条：`另有 1234 条日志因限流被省略` —— **不然你会以为"没日志=没问题"** |
+| **单条截断** | 超 `MaxMessageChars`（默认 2000）截断 + 标注 |
+| **断线直接丢** | 客户端没连着就**不缓存**（日志不值得为它占内存；文件里还有） |
+| **异常不外溢** | sink 内部任何异常**只能吞掉并计数** —— **日志系统绝不许把主流程搞挂** |
+
+### 12.3 实现落点
+
+自研 `ILogEventSink`（`Serilog.Core.ILogEventSink`）→ 内部令牌桶 → 经既有的 `EventBroadcaster` 走 WS `/events`（事件类型 `log`）。
+
+> **注意**：sink 的 `Emit` 是**同步**调用（Serilog 的约定）→ **不许在里面阻塞等 WS**。
+> 做法：只放进一个**有界队列**（满了就丢 + 计数），由后台任务发出去。
+
+---
+
+## 13. 脱敏规则（**写盘前就脱敏**）
+
+### 13.1 永不记录清单（**红线**）
+
+| 类别 | 例子 |
+|---|---|
+| 所有凭证 | `ApiKey`、`Server.Token`、`NapCat.*.Token`、任何 `*Secret*` / `*Password*` |
+| 二维码内容 | **二维码 = 账号接管凭证**，**绝不进日志** |
+| 完整消息体（可选） | 涉及隐私；默认**只记长度与类型**，需要调试时临时开 |
+
+### 13.2 Serilog 侧的做法
+
+| 做法 | 说明 |
+|---|---|
+| **不要 `{@Options}` 整个对象** | `@` 会**递归解构**，等于把含密字段全打出来 —— **这是最容易犯的错** |
+| 需要打配置时**手挑字段** | 或写一个 `ToSafeString()` 只输出脱敏后的形状 |
+| 用 `{ApiKeyConfigured}` 而不是 `{ApiKey}` | 只记"配没配" |
+| 统一入口 | Core 提供一个 `LogSafe.Options(x)` 之类的辅助方法，**让"安全地打配置"变成最省事的写法** |
+| **HTTP 报文日志** | 只记 method/url/status/耗时；**请求头与 body 必须过滤**（`Authorization` 就在头里） |
+
+### 13.3 一条要写进编码规范的纪律
+
+> **新增任何含密字段时，必须同步更新 §13.1 清单，并给它加一个脱敏测试。**
+
+理由：脱敏规则**不会自己跟上代码变化**。今天加个字段忘了，明天它就出现在日志里。
+
+---
+
+## 14. 测试策略
+
+| 测什么 | 怎么测 | 必测项 |
+|---|---|---|
+| **来源优先级** | 用内存配置源叠 4 层 | 高层覆盖低层；**机密只从 2/3/4 层读到** |
+| **校验汇总** | 故意造多个错 | **一次报出全部错误**（不是只报第一个）；报错文案含"在哪配" |
+| **fail-fast** | 造"非 loopback + 无 token" | **必须拒绝启动** |
+| **原子写** | 写到一半模拟异常 | 原文件**完好无损**；有 `.bak` |
+| **不写坏配置** | 提交非法值调 `saveConfig` | **文件未被修改**（先校验后写） |
+| **重建判定** | 改 `NapCat` 的项后调 save | 返回 `requiresRestart` 含 `NapCat`；改 `Logging` 则 `applied=true` 且不含 |
+| **脱敏** ⭐ | 喂一个含 `ApiKey` 的配置对象给日志 | **输出里绝不出现密钥原文**；出现 `configured=True` |
+| **限流** ⭐ | 灌 1000 条日志 | 只推出 ≈N 条；**且有"省略了 X 条"的汇总** |
+| **sink 异常隔离** | sink 内部抛异常 | **主流程不受影响**；异常被计数 |
+
+> **原则**：**用内存 sink / 假 sink 断言，不写真实文件**。
+> 脱敏与限流这两项**必须自动化** —— 它们是"忘了就出事、出事很难发现"的类型。
+
+---
+
+## 15. 验收标准
+
+| # | 标准 | 判定方式 |
+|---|---|---|
+| A1 | 配置能从 4 层来源正确叠加，且机密不出现在进仓库的文件里 | 单测 + `git grep`（机密形态扫描） |
+| A2 | 配置错误**启动即失败**，且**一次报全**、文案说清"在哪配" | 单测 |
+| A3 | `saveConfig` **先校验后写**、**原子写**、**有备份** | 单测（含异常注入） |
+| A4 | `saveConfig` 返回 `applied` / `requiresRestart` **与实际一致** | 单测（逐项验） |
+| A5 | `getConfig` **永不返回密钥明文** | 单测断言响应 JSON 里不含密钥原文 |
+| A6 | 日志里**永不出现**任何凭证（含"整个 Options 被解构"这种误用） | 单测 + 人工审查所有 `{@...}` 用法 |
+| A7 | 日志推送**有上限**，且**丢了多少能被看见** | 单测（灌日志） |
+| A8 | 客户端**不读服务端文件**，日志经 WS 到达 | 架构检查（接缝 A）+ 联调 |
+| A9 | 日志 sink 异常**不影响主流程** | 单测 |
+| A10 | 项目依赖方向正确：**`Core` 不引用任何内部项目** | CI 构建 + 人工审查 |
+
+---
+
+## 16. 改动点清单（= 已声明文件）
+
+### 16.1 本设计涉及的新增文件
+
+| 项目 | 文件 | 说明 |
+|---|---|---|
+| **`ZipperAIQQ.Core`**（新项目） | `ZipperAIQQ.Core.csproj` | 第 7 个项目 |
+| | `Configuration/ZipperConfigurationBuilder.cs` | 配置装配入口 |
+| | `Configuration/IStartupCheck.cs` | 启动自检契约 |
+| | `Configuration/IReloadable.cs` | 可重建契约 |
+| | `Configuration/ConfigurationWriter.cs` | 原子写 + 备份 |
+| | `Configuration/LogSafe.cs` | 安全记录辅助（脱敏入口） |
+| | `Logging/LoggingSetup.cs` | Serilog 装配 |
+| | `Logging/ClientPushSink.cs` | WS 推送 sink（含令牌桶） |
+| | `Events/` | **进程内事件总线**（从旧项目复用改造：去掉主线程检查 / 线程安全容器 / `IZLogger`→`Serilog.ILogger` / `_disposed` 后可观测告警；订阅容器用**不可变数组 CoW**） |
+| | `ZipperAIQQ.Core.Tests`（测试项目） | |
+
+### 16.2 ⚠️ 必须同步修改的**既有文档**（否则文档互相矛盾）
+
+| 文件 | 改什么 |
+|---|---|
+| `overview.md` §2.1 | 项目结构 **6 → 7**（加 `Core`） |
+| `overview.md` §2.2 | 职责表加 `Core` 一行 |
+| `overview.md` §2.3 | **依赖图加第 0 层 `Core`** + 约束"`Core` 不引用任何内部项目" |
+| `overview.md` §4.2 | 生命周期表补 `Serilog.ILogger`（Singleton） |
+| **`docs/architecture.md`**（**公开面**） | 项目清单、依赖图、技术栈、术语表都要加 `Core` |
+| `AGENTS.md` §二 | 技术基线补一行「公共基础设施 = `ZipperAIQQ.Core`」+ 日志 = Serilog |
+| `agent-design.md` §6.2 | `AddZipperAgent` 与 `AddZipperCore` 的调用关系 |
+| **`overview.md` §4.1** | **组合根与模块装配**（新增 4.1.1–4.1.8）：组合根只有两个、`Program.cs` ≤20 行、`AddXxx` 必须独立可调用、装配顺序约束表、**注册与启动分离**、容器自检、客户端为何不共用装配、WPF 两个特殊点 |
+| `overview.md` §3.9.4 | **事件总线归属从「待定」改为「并入 `Core/Events/`」**（保留原选项与理由） |
+| `overview.md` §4.2 | 生命周期表补 `IEventBus`（Singleton） |
+| `docs/contracts/` | **新增两份样例**：`command-get-config.json`、`command-save-config.json` |
+| `open-source-readiness.md` §4.1 | 配置样例（`appsettings.Example.json`）现在有了骨架 → 状态更新 |
+
+---
+
+## 17. 待决问题
+
+| # | 问题 | 影响 | 倾向 |
+|---|---|---|---|
+| C1 | 环境变量前缀用 `Zipper` 还是 `ZipperAIQQ` | 部署时的啰嗦程度 | **`Zipper`** |
+| C2 | 日志文件默认路径 `logs/` 还是 `data/logs/` | 简洁 vs 集中 | `logs/` |
+| C3 | `saveConfig` 要不要**同时**支持"局部更新"（只改一项） | 客户端实现复杂度 | 先**整份提交**，局部更新后置 |
+| C4 | 日志里要不要记**完整消息内容** | 隐私 vs 排查便利 | 默认**不记**，可开开关 |
+| C5 | 客户端日志窗要**多少行缓冲** | 内存 vs 可用性 | 先 2000 行环形缓冲 |
+| C6 | 事件总线是否保持"零依赖可搬"（§10.4） | 复用性 | 倾向**吃 Serilog**，将来要搬再抽 |
+| C7 | 是否现在就做"配置项 → 界面"的**自动生成**（按 Options 反射） | 省手写 vs 复杂度 | **不做**，界面手写（反射生成会失控） |

@@ -1,0 +1,360 @@
+﻿# 组合与注册设计
+
+> **本文由 [`overview.md`](overview.md) 拆分而来**（2026-09-22，原 `technical-design-v1.md` §4）。
+> 拆出的理由：它讲的是「**IoC 怎么装配**」，与"各模块内部怎么设计"不是一类东西。
+
+> ⚠️ **章节编号沿用拆分前的 `§4.x`** —— 这是**刻意的**：项目里已有若干引用写作
+> 「§4.1.5」「§4.1.12」「§4.4.7」，保号可以让它们继续有效，不必逐个改。
+
+---
+
+## 4. IoC 与生命周期
+
+**容器**：**`Microsoft.Extensions.DependencyInjection`**（微软官方）。服务端由 `Microsoft.Extensions.Hosting` 提供；客户端手工建 `ServiceCollection` —— **两端同一个容器，装配方式一致**。
+
+**原则**：所有服务由容器管理，**禁止静态单例、禁止服务定位器**。
+
+### 4.1 组合根与模块装配
+
+#### 4.1.1 组合根在哪：**只有两个**
+
+| 组合根 | 位置 | 说明 |
+|---|---|---|
+| **服务端** | `ZipperAIQQ.Server/Program.cs` | 由 `Microsoft.Extensions.Hosting` 提供容器 |
+| **客户端** | `ZipperAIQQ.Client/App.xaml.cs` 的 `OnStartup` | 手工 `new ServiceCollection()`（WPF 没有 Host） |
+
+**⭐ 目标：`Program.cs` ≤ 20 行。** 它只做四件事：
+
+1. 建 host（或 `ServiceCollection`）
+2. 调 **`AddZipperCore(builder.Configuration)`** —— **必须最先**
+3. 调各模块的 `AddXxx`
+4. `Build()` → **跑启动自检** → `Run()`
+
+> **超过 20 行 = 有东西该下沉到模块的 `AddXxx` 里。**
+> 组合根变胖，说明某个模块把自己的装配责任推给了调用方。
+
+#### 4.1.2 每个模块提供自己的注册扩展
+
+```csharp
+// ZipperAIQQ.Core —— 横切三件（配置 / 日志 / 事件总线）
+public static IServiceCollection AddZipperCore(this IServiceCollection services, IConfiguration config);
+
+// ZipperAIQQ.Agent —— 内含 LLM 接入（原 ZipperAIQQ.Llm 职责）
+public static IServiceCollection AddZipperAgent(this IServiceCollection services, IConfiguration config);
+
+// ZipperAIQQ.Transport / Storage / Channels.NapCat / Server 同理
+public static IServiceCollection AddZipperTransport(this IServiceCollection services, IConfiguration config);
+```
+
+**Server 的 `Program.cs` 只需串起来**：
+
+```csharp
+builder.Services
+    .AddZipperCore(builder.Configuration)       // ① 必须最先（配置 + 日志 + 事件总线）
+    .AddZipperTransport(builder.Configuration)
+    .AddZipperStorage(builder.Configuration)
+    .AddNapCatChannel(builder.Configuration)
+    .AddZipperAgent(builder.Configuration)      // 内部装配 IChatClient（MEAI）管道
+    .AddZipperServer(builder.Configuration);
+```
+
+> `AddZipperAgent` **内部**按固定顺序装配 `IChatClient` 管道
+> （`DriftGuard` 最外 → `Reducing` → `FunctionInvoking` → `Retrying` → `OpenAI` 内层），
+> **顺序写在 [`agent-design.md`](agent-design.md) §6.1**，调用方不需要（也不应该）自己拼。
+
+#### 4.1.3 ⭐ 硬规则：**每个 `AddXxx` 必须能独立调用**
+
+| 规则 | 理由 |
+|---|---|
+| `AddXxx` **不得依赖"别的模块的 `AddXxx` 已被调用"**（`Core` 除外） | 否则装配顺序变成**隐式契约** —— 改个顺序就炸，而且炸得莫名其妙 |
+| **注册期不许 `GetService`** | 注册阶段还没有可用的 `IServiceProvider`；硬拿只能 `new`，等于绕过容器 |
+| 依赖的服务**在解析期由容器给** | 构造函数注入，不是注册期手工拼 |
+
+> ### ⭐ 唯一有效的验收方法
+> **把 `Program.cs` 里 `AddXxx` 的顺序随便打乱，程序仍应正常工作。**
+> 做不到，就说明存在隐式依赖 —— 这条检查比读代码可靠得多。
+
+#### 4.1.4 装配顺序约束（**把隐式的写成明文**）
+
+| # | 约束 | 违反的后果 |
+|---|---|---|
+| 1 | **`AddZipperCore` 必须第一个** | 后面所有模块都要读配置、写日志、发事件 |
+| 2 | 日志装配（含 **bootstrap logger**）在配置之后、其他模块之前 | 否则**模块注册期**的日志全丢 |
+| 3 | `AddZipperAgent` **内部**自己管 `IChatClient` 管道顺序 | 调用方自己拼 = 把两个顺序约束散到两处 |
+| 4 | 服务模块（Transport / Storage / Channels / Server）**顺序无关** | 这正是 4.1.3 那条规则的验收标准 |
+| 5 | **事件总线的订阅者在「启动后」统一订阅**，不在注册期订阅 | 见 4.1.5 |
+
+#### 4.1.5 ⚠️ 纪律：**注册**与**启动**必须分离
+
+**DI 注册阶段（`AddXxx` 内部）不许做任何 I/O** —— 不许连 NapCat、不许开数据库、不许拉 MCP 工具列表、不许取登录二维码。
+
+**三条理由**：
+
+1. **注册阶段还没有 `IServiceProvider`** —— 硬做只能手工 `new`，绕过容器（也绕过了生命周期管理）
+2. **注册函数会被反复调用**（测试里 `WebApplicationFactory` 之类）—— 带 I/O 就没法测
+3. **失败时机错**：注册期的异常栈很难看，而且发生在**配置校验之前** → 你看到的是"连不上数据库"，而不是"配置错了"
+
+**需要 I/O 的，放这三处**：
+
+| 放哪 | 干什么 | 时机 |
+|---|---|---|
+| **`IStartupCheck`**（`Core`） | **同步**的启动前自检（目录是否可写、文件是否存在）→ 失败即拒绝启动 | `Build()` 之后、`Run()` 之前，**组合根统一调一次并汇总** |
+| **`IHostedService`** | **异步**的运行期任务（连 NapCat、开 WS、重连循环、主动行为定时器） | `Run()` 时由 Host 启动 |
+| **`IReloadable`**（`Core`） | `saveConfig` 之后的**重建**（哪些能重建见 [`configuration-design.md`](configuration-design.md) §7.4） | 保存配置时 |
+
+> 📌 **本条补的是一个设计缺口**：`configuration-design.md` 定义了 `IStartupCheck` 机制，
+> 但**没写谁在什么时候调它**。答案就是上表第二行 —— **组合根负责调用与汇总**。
+
+#### 4.1.6 容器自检（**免费收益，建议开发环境必开**）
+
+```csharp
+// 服务端：Program.cs
+builder.UseDefaultServiceProvider(o =>
+{
+    o.ValidateOnBuild = true;   // 建容器时就验证"每个注册都能被构造出来"
+    o.ValidateScopes  = true;   // 抓"Singleton 依赖了 Scoped"
+});
+```
+
+| 开关 | 作用 |
+|---|---|
+| `ValidateOnBuild` | **把"运行时才炸的解析错误"提前到启动时** —— 省掉一类半夜事故 |
+| `ValidateScopes` | §4.2 那条"Singleton 里不要注入 Scoped"警告的**机器检查版**（人记不住，让容器记） |
+
+> 客户端没有 `Host`，等价做法是 `services.BuildServiceProvider(new ServiceProviderOptions { ... })`。
+
+#### 4.1.7 为什么客户端**不能**共用一套装配
+
+- 服务端要 Agent / Channels / Storage；**客户端一个都不要**（它只通过 HTTP/WS 说话，见接缝 A）
+- → **不抽 `AddZipperApplication`**：硬抽会变成"带一堆开关的装配函数"，比重复几行更糟
+- **只共享 `Core` 段**（配置 + 日志 + 事件总线）—— 所以 `AddZipperCore` 的签名**必须基于 `IServiceCollection`**
+
+> 🔴 **修正一个设计 bug**：`configuration-design.md` §5.2 原本把签名写成
+> `AddZipperConfiguration(this IHostApplicationBuilder builder, ...)` ——
+> **客户端是纯 WPF，根本没有 `IHostApplicationBuilder`**，那个签名在客户端用不了。
+> **已改为** `AddZipperCore(this IServiceCollection services, IConfiguration config)` ——
+> 服务端写 `builder.Services.AddZipperCore(builder.Configuration)`，客户端写
+> `services.AddZipperCore(config)`，**两端同一份代码**。
+
+#### 4.1.8 WPF 侧的两个特殊点
+
+| 问题 | 做法 |
+|---|---|
+| **XAML 无法构造注入** | `App.OnStartup` 里 `BuildServiceProvider()` 后**手工 resolve** `MainWindow`；窗口内部的 VM 之间照常构造注入 |
+| **`App.OnStartup` 里不能做重 IO** | 建容器 + 跑启动自检即可；连接、拉数据交给 `IHostedService` 或 `Loaded` 命令，否则**启动画面卡住** |
+
+#### 4.1.9 ⭐ 先拆掉一个误解：**底层框架的注册，大部分框架已经替你做了**
+
+"手动写底层框架注册"这个担心**大部分不成立**。`WebApplication.CreateBuilder()`（Server）与 `Host.CreateApplicationBuilder()` **已经免费注册了**：
+
+| 框架已替你做的 | 你**不需要**手写 |
+|---|---|
+| **DI 容器本身** | ✅ |
+| **`IConfiguration` 的构建** | appsettings.json、`appsettings.{Env}.json`、**环境变量**、命令行 —— 全都**自动接上了**。这正是 `configuration-design.md` §2 那四层来源的落地方式 |
+| `ILoggerFactory` / `ILoggingBuilder` | ✅（框架自带；我们只是把它**桥到 Serilog**，见 `configuration-design.md` §10.2） |
+| `IHostEnvironment` / `IHostApplicationLifetime` | ✅ |
+| **Kestrel 与 ASP.NET Core 管道** | ✅ |
+| 配置变更监听（`reloadOnChange`）的接线 | ✅ |
+| `HttpClient` 工厂 | 加一行 `AddHttpClient()` 就有，**不用手写** |
+
+> **所以你要写的不是"底层注册"，而是"调用顺序 + 少量胶水"。**
+> 🔑 **判据**：**`Program.cs` 里出现的应该几乎全是 `AddXxx(...)` 调用，而不是 `AddSingleton<...>` 这种底层注册。**
+> 出现后者 → 说明那个东西**该下沉到某个模块的 `AddXxx` 里**。
+
+#### 4.1.10 什么该写在哪（**决策表**）
+
+| 东西 | 写在哪 | 为什么 |
+|---|---|---|
+| 建 host（`WebApplication.CreateBuilder` / `Host.CreateApplicationBuilder`） | **组合根** | 它就是组合根的入口 |
+| `AddZipperCore(...)` | **组合根调一行** | 实现在 `Core` |
+| 各模块 `AddXxx(...)` | **组合根各调一行** | 实现在各模块 |
+| ⭐ **模块内部的实现细节**<br>（Serilog 的 sink 组合、WS 适配器选型、`HttpClient` 命名与超时、Options 绑定与校验器） | **模块自己的 `AddXxx` 里** | **组合根不该知道这些** —— 这正是"`Program.cs` ≤ 20 行"的含义 |
+| `IHostedService`（连 NapCat、重连循环、主动行为定时器） | **各自模块的 `AddXxx` 里注册** | 属于那个模块的运行期任务 |
+| **中间件 / 端点映射 / `UseWebSockets()`** | **组合根（仅 Server）** | ⚠️ 这**不是 DI 注册**，是 **ASP.NET Core 管道配置** —— 天然属于宿主 |
+| `MainWindow` 的解析（WPF） | **组合根（仅 Client）** | 见 §4.1.8 |
+| Options 的**强类型类** | 各消费者模块 | 见 [`configuration-design.md`](configuration-design.md) §5.1 |
+| 运行期才做的事（连连接、开文件） | `IHostedService` / `IStartupCheck` | 见 §4.1.5 **注册与启动分离** |
+
+> 🔑 **一句话判据**：**"这东西组合根需不需要知道？"** 不需要 → 下沉到模块的 `AddXxx`。
+
+#### 4.1.11 两端各有一套实现时怎么办（**以 Transport 为例**）
+
+`ZipperAIQQ.Transport` 是"**一份实现、两端复用**"，但**适配器不同**：
+
+| 谁用 | 适配器 |
+|---|---|
+| Server | `AcceptWebSocketAsync` 那一侧 |
+| Client | `ClientWebSocket` 那一侧 |
+
+**所以 `AddZipperTransport(config)` 这个名字不够精确**。三个方案：
+
+| 方案 | 形态 | 评价 |
+|---|---|---|
+| A | 一个 `AddZipperTransport`，内部**读配置**（`Side: Server/Client`）决定注册哪个 | ❌ **隐藏的模式开关** —— 装配结果取决于一个字符串，看代码看不出来；且 Client 会依赖到 server-only 的东西 |
+| **B** ⭐ | **两个具名入口**：`AddServerWebSocketTransport(...)` / `AddClientWebSocketTransport(...)`（**都在 Transport 项目里**） | ✅ **显式**：组合根一眼看出自己装的是哪一侧；两个适配器仍归同一模块所有 |
+| C | 由 Server / Client 各自 `AddSingleton` 那个适配器 | ❌ 把实现细节泄进组合根 —— 正是要避免的 |
+
+**推荐 B，并把它推广成规则**：
+> **凡是"同一个抽象、两端各有实现"的东西，都由模块提供<u>具名入口</u>，组合根挑一个。**
+
+#### 4.1.12 ⚠️ Client 要多做一步：**自己拼 `IConfiguration`**
+
+Server 那边 `WebApplication.CreateBuilder()` **自动**接上 appsettings.json / 环境变量 / 命令行。
+**Client 是纯 WPF，没有 Host → 这些没人替你接。**
+
+所以 Client 侧要**手写一小段** `ConfigurationBuilder`，然后再调 `AddZipperCore(config)`。
+
+**→ 由此产生一个共享需求**：`Core` 应当提供一个**建 `IConfiguration` 的辅助**（把"来源与优先级"固化在一处），让两端**用同一套来源**。
+
+**否则会出现一种很难查的问题**：
+> Server 读到了环境变量里的 `Zipper__Agent__Llm__ApiKey`，而 Client **忘了加 `AddEnvironmentVariables()`** →
+> **两端配置行为不一致** —— 表现为"服务端好好的，客户端那个设置怎么都不生效"。
+
+> 📌 这也再次解释了 `AddZipperCore` 的签名为什么必须是 `(IServiceCollection, IConfiguration)`
+> 而不是 `IHostApplicationBuilder` —— **Client 根本没有 Host**（§4.1.7）。
+
+#### 4.1.13 反例清单（**不要这么做**）
+
+| ❌ 不要 | 为什么 |
+|---|---|
+| 在 `Program.cs` 里写业务服务的 `AddSingleton<...>` | 组合根变胖 = 模块把自己该干的活推给了调用方 |
+| 让组合根**按条件/顺序**去注册东西 | 那就成了"装配脚本"，改一处炸一片 |
+| 写"必须先调 A 再调 B"的 `AddXxx` | 违反 §4.1.3 —— 顺序会变成**隐式契约** |
+| 在 Client 里**抄一份 Server 的装配、注释掉不需要的** | 这就是"带开关的装配函数"的雏形，会越长越烂 |
+| 在组合根里 `new` 一个本该由容器管的服务 | = 绕过容器，生命周期与测试都失控 |
+
+### 4.2 生命周期约定
+
+| 类型 | 生命周期 | 理由 |
+|---|---|---|
+| `LlmOptions` / `AgentOptions` / `NapCatOptions` | `IOptions<T>`（Singleton） | 配置只读（**Options 类型跟着消费者走**，见 [`configuration-design.md`](configuration-design.md) §5.1） |
+| **`Serilog.ILogger`** | **Singleton** | 容器注册根 logger；业务代码注入后用 `ForContext<T>()` 取上下文（见 `configuration-design.md` §10） |
+| `IChatClient`（MEAI） | **Singleton** | 底层 `HttpClient` 由 `IHttpClientFactory` 管；**整条包装链只建一次** |
+| `IChatReducer` | **Singleton**（或按需 Transient） | 无状态策略对象 |
+| `IToolRegistry` / `IEnumerable<AIFunction>` | **Singleton** | 工具无状态（有状态的一律放 `ToolContext`） |
+| **`IEventBus`**（`Core/Events`） | **Singleton** | 进程内发布订阅；订阅容器用**不可变数组（CoW）**，见 §3.9 |
+| `IAgentRuntime` | **Singleton** | 无状态运行时；**会话状态放 `ISessionStore`**，不放在 agent 里 |
+| `ISessionStore`（内存缓存） | **Singleton** | 需要跨请求共享；内部用 `ConcurrentDictionary` |
+| `IQQChannel` | **Singleton** | 长连接，全进程一个 |
+| `IVoiceBroadcaster`（WS 扇出） | **Singleton** | 连接列表全局共享 |
+| 各 `IApiAction` 处理器 | **Singleton**（无状态）或 Transient | 不持有请求态 |
+| `DbContext` / 连接 | **Scoped 或工厂** | 避免长持有的 SQLite 连接 |
+
+> ⚠️ **Singleton 里不要注入 Scoped**（会捕获作用域导致对象永生）——这条在 `csharp-编码规范.md` §11 已列。
+
+### 4.3 用 DI 换来的东西
+
+1. **可测试**：`IChatClient` / `IQQChannel` 都能被假实现替换，agent 循环可以**离线测、不需要真 API key**（`D:\temp\MeaiSpike` 已验证这条路可行）
+2. **可换供应商**：换 LLM 端点只改配置；换 QQ 协议端只加一个 `IQQChannel` 实现
+3. **不用静态单例**：旧项目 `NapCat.Instance` 那种单例让测试与并发都很难搞
+
+### 4.4 各模块注册清单（**建项目时照这个填**）
+
+> ⚠️ **前提**：这 6 个项目除 `Core` 外**都还没建**。本节就是"每个 `AddXxx` 里要装什么"的清单。
+> **建项目的顺序按依赖来**：`Core` ✅ → `Transport` → `Agent` → `Storage` / `Channels.NapCat` → `Server` → `Client`
+> （若采纳 §4.4.7 的方案 A，则 `Storage` 必须排在 `Agent` **之后**）
+
+#### 4.4.1 每个 `AddXxx` 内部的**五步通用形状**
+
+| 步 | 做什么 | 对应机制 |
+|---|---|---|
+| ① | **绑 Options**：`services.Configure<T>(config.GetSection("X"))` 或 `.Bind()` | `IOptions<T>` |
+| ② | **加校验**：`services.AddSingleton<IValidateOptions<T>, XValidator>()` | `IValidateOptions<T>`（见 `configuration-design.md` §6） |
+| ③ | **注册服务**：抽象 → 实现 + **生命周期**（照 §4.2 那张表） | DI |
+| ④ | **注册该模块的运行期任务**：`IHostedService` / `IStartupCheck` / `IReloadable` | 见 §4.1.5（**注册与启动分离**） |
+| ⑤ | **需要网络的加命名 `AddHttpClient`** | `IHttpClientFactory` |
+
+#### 4.4.2 ① Transport
+
+| 项 | 内容 |
+|---|---|
+| Options | 若要配心跳间隔 / 重连退避 / 消息上限 → `TransportOptions`；否则可不绑 |
+| 服务 | `IWebSocketTransport` → **两个具名入口各注册一个适配器**（见 §4.1.11）<br>⚠️ **不提供默认实现** —— 逼调用方显式选哪一侧 |
+| 运行期 | **无** —— 连接生命周期由使用者（`NapCatChannel` / Client）自己管 |
+| 依赖 | 无（第 0 层） |
+| 具名入口 | `AddServerWebSocketTransport(...)` / `AddClientWebSocketTransport(...)` |
+
+#### 4.4.3 ④ Storage
+
+| 项 | 内容 |
+|---|---|
+| Options | `StorageOptions`（`DatabasePath`）—— ⚠️ **不可热重载**（连接已开） |
+| 校验 | 路径非空；**目录可写**（放到启动自检里试建一次） |
+| 服务 | `SqliteStore`；`SessionRepository`；`MessageRepository`<br>⚠️ **连接 / `DbContext` → `Scoped` 或工厂**，**绝不 Singleton**（§4.2） |
+| 运行期 | ⭐ **`IStartupCheck`：启动时试打开 / 建库一次 + 建表或迁移** —— **别等第一次写库才炸** |
+| 依赖 | `Core`（**+ 见 §4.4.7**） |
+
+#### 4.4.4 ③ Channels.NapCat
+
+| 项 | 内容 |
+|---|---|
+| Options | `NapCatOptions`（`Mode` / `Forward.Url` / `Forward.Token` / `Reverse.Path` / `Reverse.Token`） |
+| 校验 | `Mode` 与对应 URL **配套**（forward 模式却没配 forward URL → 拒绝启动）；🔒 Token 属机密 → 日志脱敏 |
+| 服务 | **`IQQChannel` → `NapCatChannel`（Singleton，长连接）**；`OneBotEventParser`；`IResponseRouter`（echo 配对的 `ConcurrentDictionary`，Singleton） |
+| 运行期 | ⭐ **`IHostedService`：建连 + 接收循环 + 重连退避 + 心跳判活** —— 这就是"启动时连什么"的典型 |
+| 依赖 | `Core` + **`Transport`** |
+| ⚠️ 注意 | 事件**发到 `IEventBus`**，**不直接调上层**（接缝：解耦） |
+
+#### 4.4.5 ② Agent
+
+| 项 | 内容 |
+|---|---|
+| Options | `LlmOptions` / `AgentOptions`（Session / Retry / Drift）/ `PersonaOptions` / `ToolsOptions`（含 🔒 `Admins`） |
+| 校验 | `Llm.ApiKey` 非空（否则拒绝启动，除非显式开 mock）；`ContextTokenBudget > 0`；`MaxToolRounds > 0`；`Persona.SystemPromptFile` 存在 |
+| 服务 | **`IChatClient`（整条 MEAI 管道，Singleton）**；`IChatReducer`；`IToolRegistry`（收集 `IEnumerable<AIFunction>`）；`IDriftDetector` 集合；`IAgentRuntime`（Singleton）；`ISessionStore`（Singleton，内存缓存） |
+| 运行期 | `IReloadable`：人格 / 工具开关 / 重试参数可热改；命名 `AddHttpClient` 给 LLM 端点 |
+| 依赖 | **只依赖 `Core`** |
+| ⭐ | **管道包装顺序必须封在 `AddZipperAgent` 内部**（§4.1.4 第 3 条），调用方不许自己拼 |
+
+#### 4.4.6 ⑤ Server / ⑥ Client
+
+| | Server | Client |
+|---|---|---|
+| Options | `ServerOptions`（Listen / Port / Token） | 连接地址 + token（客户端侧那份） |
+| 校验 | ⭐ **非 loopback 且 Token 为空 → 拒绝启动**（硬约束） | 地址格式合法 |
+| 服务 | `ApiEndpoint`；`IEventBroadcaster`；`PermissionGate`；各 `IApiAction` 处理器 | `IUiDispatcher` → `WpfUiDispatcher`；`IApiClient` → `HttpApiClient`；`IWebSocketTransport` → **Client 侧适配器**；`EventSubscriber`；VM（主窗口 VM Singleton / 对话框 VM Transient）；`MainWindow` |
+| 运行期 | `IHostedService`（主动行为调度）；`IStartupCheck`（**汇总跑全部校验**） | ⚠️ **WPF 不跑 Host** → 用 `Loaded` 命令或自起后台任务 |
+| 依赖 | 全部 | `Core` + `Transport` |
+
+#### 4.4.7 🔴 **一处写不下去的地方：会话持久化**（本节暴露的真问题）
+
+写 §4.4.3 时撞到自相矛盾：
+
+| 事实 | 出处 |
+|---|---|
+| `ISessionStore` **接口定义在 `Agent`** | `agent-design.md` §2.1 |
+| `AddZipperAgent` **注册 `ISessionStore`** | `agent-design.md` §6.2 |
+| 但**落库**在 `Storage`（`SessionRepository`） | 本节 §4.4.3 |
+| 而依赖规则写着「**Agent 不依赖任何内部业务项目**」 | §2.3 |
+
+→ **"谁注册 `ISessionStore` 的实现"这一格，现在填不下去。**
+
+**三条出路**：
+
+| 方案 | 形态 | 代价 |
+|---|---|---|
+| **A** ⭐ | 允许 **`Storage → Agent`**（**端口在 Agent、适配器在 Storage**）→ `AddZipperStorage` 注册实现 | 层次图要改：`Storage` 从"第 1 层"移到"依赖 `Agent`" |
+| B | 允许 **`Agent → Storage`** | 层次图不变；但**核心域依赖了基础设施**，且 `Agent` 从此看得见 SQLite |
+| C | `Agent` 只写内存 + **靠事件总线**让 `Storage` 订阅落库；恢复时由 `Server` 侧喂回 | `Agent` 完全不依赖任何人 ✅；但**恢复路径绕**，且"读"没有自然反向通道 |
+
+> **助手倾向 A**，理由与**本项目已定的另一条规则完全一致**：
+> **"抽象跟着消费者走"** —— `ISessionStore` 这个**端口是 `Agent` 需要的**，所以接口在 `Agent` ✅；
+> **实现是基础设施的事**，放 `Storage` ✅。
+> **这不是"层次倒了"，这就是 ports & adapters。**
+>
+> ⚠️ **但这条要用户拍板** —— 它动的是 §2.3 的层次图，而那是硬约束之一。
+
+#### 4.4.8 ⚠️ 常见遗漏：忘了注册会**怎么表现**（都很难查）
+
+| 忘了什么 | 症状 |
+|---|---|
+| 绑 Options | 注入拿到**默认值**、**不报任何错** → 表现是「**配置改了没用**」 |
+| 加校验 | 启动不失败 → **运行期才炸** |
+| 注册 `IHostedService` | 服务**起得来但什么都不做**（不连 NapCat、不收消息） |
+| `DbContext` / 连接注册成 Singleton | 连接泄漏、并发下脏状态 |
+| 忘了 `AddHttpClient` 命名客户端 | 手工 `new HttpClient` → **socket 耗尽** |
+| Client 忘了 `AddEnvironmentVariables`（§4.1.12） | 两端配置行为不一致 |
+| 忘了 `IStartupCheck` 的**调用**（§4.1.5） | 自检注册了但**从来没人跑** —— 等于没有 |
+
+---
+

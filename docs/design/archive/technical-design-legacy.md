@@ -1,0 +1,227 @@
+# 技术设计 v1 · 历史片段归档
+
+> **为什么在这里**：`overview.md`（原 `technical-design-v1.md`）2026-09-22 瘦身时，
+> 把两段**已失效**的内容移到了本文件 —— 保留是为了**存痕**（决策过程可追溯），
+> 但**实现时请勿参照**。
+
+| 片段 | 状态 |
+|---|---|
+| §3.3 Llm | ⚠️ **项目已取消** —— 职责由 MEAI 承接，见 [`../../design/configuration-design.md`](../configuration-design.md) 与 `memory/decisions.md` |
+| §3.4 Agent（旧设计，基于手写循环） | ⚠️ **已被 [`agent-design.md`](../agent-design.md) 取代** |
+
+---
+
+## 3. 核心模块设计（历史片段）
+
+### 3.3 ② Llm —— ⚠️ **本项目已取消**（2026-09-22）
+
+> **`ZipperAIQQ.Llm` 项目已取消。** 原职责全部由 **MEAI** 承接：
+>
+> | 原职责 | 现归属 |
+> |---|---|
+> | HTTP 请求组装（messages / tools / stream） | MEAI（`Microsoft.Extensions.AI.OpenAI`） |
+> | **SSE 流式解析**（原设计里"最容易写错的地方"） | MEAI 内置 |
+> | `tool_calls` 参数分片拼接、assistant 消息回写 | MEAI 的 `FunctionInvokingChatClient`（**spike 实测确认**） |
+> | 重试 | ❌ MEAI **没有** → 自研 `RetryingChatClient`（见 [`agent-design.md`](../agent-design.md) §7） |
+> | token 估算 | 自研（配合上下文预算，见 `agent-design.md` §5） |
+> | `LlmOptions` 配置类型 | 并入 **`ZipperAIQQ.Agent`** |
+>
+> **完整设计见 → [`agent-design.md`](../agent-design.md)**
+
+### 3.4 ② Agent —— ⚠️ **设计已迁移至独立文档**
+
+> ## ⚠️ 以下内容已被取代（2026-09-22）
+>
+> Agent 的设计已从「**手写 agent 循环**」改为「**MEAI 打底 + 部分自研**」。
+>
+> **完整设计见 → [`agent-design.md`](../agent-design.md)**
+>
+> 以下为**旧设计（基于手写循环）**，保留仅作历史参考。**实现时请勿参照本节** —— 尤其是其中的循环伪码、`ITool` 定义、工具执行四道关等，均已被新设计调整。
+
+> 这一节写得细一些，因为 agent 框架是本项目**最需要自己造**的部分。
+
+#### 3.4.1 先讲清楚：agent 到底是什么
+
+普通 LLM 调用是**一问一答**：你发一句话，它回一句话。
+
+**Agent** 是让 LLM 能**自己决定调用工具、看到结果、再继续想**——也就是把"一次性回答"变成**循环**：
+
+```
+用户问："现在几点了？帮我看看 D 盘那个日志最后 10 行"
+
+  第 1 轮：LLM 想 → 「我需要先知道时间」→ 输出 tool_call: get_time()
+  框架执行工具 → 结果："2026-09-21 14:30"
+  第 2 轮：LLM 想 → 「还需要读文件」→ 输出 tool_call: read_file(path, tail=10)
+  框架执行工具 → 结果："<日志内容>"
+  第 3 轮：LLM 想 → 「信息够了」→ 输出文本回答（不再调工具）
+  循环结束，返回最终文本
+```
+
+**关键点**：
+- LLM **只输出意图**（"我要调 get_time"），**执行由框架负责**
+- 工具结果作为一条新消息**追加进上下文**，再喂回 LLM
+- 循环的**终止条件**是没有新的工具调用（或达到轮次上限）
+
+#### 3.4.2 核心抽象
+
+```csharp
+public interface IAgent
+{
+    /// 跑一轮完整对话（含工具调用循环），产出事件流
+    IAsyncEnumerable<AgentEvent> RunAsync(AgentRunRequest request, CancellationToken ct);
+}
+
+public sealed record AgentRunRequest
+{
+    public required string SessionId { get; init; }        // 会话隔离的关键
+    public required IReadOnlyList<ChatMessage> Inputs { get; init; }
+    public string? SystemPrompt { get; init; }             // 多角色人格切换的入口
+    public IReadOnlyList<string>? EnabledTools { get; init; }  // 本轮允许用哪些工具（可空=全部）
+}
+```
+
+#### 3.4.3 Agent 事件（**这是 UI 实时展示的基础**）
+
+agent 循环的每一步都产出事件，经 WebSocket 推给客户端：
+
+```csharp
+public abstract record AgentEvent(long Seq, DateTimeOffset Time);
+
+public sealed record RunStartedEvent(...)      : AgentEvent;   // 本轮开始
+public sealed record TextDeltaEvent(string Text) : AgentEvent;  // 流式文本增量（逐字上屏）
+public sealed record ReasoningDeltaEvent(string Text) : AgentEvent; // 思考过程（若模型支持）
+public sealed record ToolCallStartedEvent(string CallId, string ToolName, JsonNode? Args) : AgentEvent;
+public sealed record ToolCallFinishedEvent(string CallId, ToolResult Result, TimeSpan Elapsed) : AgentEvent;
+public sealed record RunFinishedEvent(string? FinalText, RunStopReason Reason) : AgentEvent;
+public sealed record RunFailedEvent(string Error) : AgentEvent;
+
+public enum RunStopReason { Completed, MaxRoundsReached, Cancelled, Error }
+```
+
+> 客户端拿到这些事件就能画出"正在思考…→ 调用了 get_time → 结果 → 正在回答…"的实时时间线。
+
+#### 3.4.4 循环的骨架（**伪代码，不是实现**）
+
+```
+RunAsync(request):
+    上下文 = [System(request.SystemPrompt)] + request.Inputs
+    轮次 = 0
+    yield RunStartedEvent
+
+    while 轮次 < MaxRounds:                      // 默认 8~10，防止无限循环
+        轮次++
+
+        # ① 上下文预算检查（见 3.4.5）
+        if 估算token(上下文) > 预算:
+            上下文 = 压缩(上下文)
+
+        # ② 调 LLM（流式），同时累积文本与 tool_calls
+        累积文本 = ""
+        累积工具调用 = []
+        foreach chunk in llm.StreamAsync(上下文, tools=启用工具, ct):
+            if chunk 是文本增量:
+                累积文本 += chunk.Text
+                yield TextDeltaEvent(chunk.Text)
+            if chunk 是工具调用增量:
+                累积工具调用.合并(chunk)          # ⚠️ 工具调用参数是分片到达的，要拼
+
+        # ③ 把 assistant 这一轮的消息（含工具调用意图）写回上下文
+        上下文.追加(Assistant(文本=累积文本, 工具调用=累积工具调用))
+
+        # ④ 没有工具调用 → 收敛，结束
+        if 累积工具调用 为空:
+            yield RunFinishedEvent(累积文本, Completed)
+            return
+
+        # ⑤ 有工具调用 → 逐个执行（可并发），把结果写回上下文
+        foreach call in 累积工具调用:
+            yield ToolCallStartedEvent(call)
+            result = 执行工具(call, 权限校验, 超时, 异常隔离)   # 见 3.4.6
+            yield ToolCallFinishedEvent(call, result)
+            上下文.追加(Tool(结果=result))
+
+    # ⑥ 轮次用尽
+    yield RunFinishedEvent(最后文本, MaxRoundsReached)
+```
+
+**三个最容易写错的点**：
+
+1. **工具调用参数是分片到达的**——流式响应里 `tool_calls[0].function.arguments` 会分多次 delta 推送，必须**按 index 累积拼接**，拼完才是合法 JSON。
+2. **`assistant` 那条消息必须原样回写**（含 tool_calls），否则下一轮 LLM 会认为"我没调过工具"，导致重复调用。
+3. **工具结果必须与 `tool_call_id` 配对**——否则 API 报错。
+
+#### 3.4.5 上下文管理
+
+| 关注点 | 做法 |
+|---|---|
+| **token 预算** | `模型上限 - 预留输出 - 安全余量`；每轮前估算，超了就压缩 |
+| **压缩策略（按代价递增）** | ① 丢弃最老的**工具结果**（保留文本对话）→ ② 把老对话**摘要**成一条 system → ③ 硬截断最早的轮次 |
+| **system prompt 永不丢弃** | 人格设定的根基 |
+| **最近 N 轮永不压缩** | 保证连续性（N 建议 3~5） |
+| **会话隔离** | 上下文按 `SessionId` 分开存放，**绝不共用**（一个群一个 session） |
+
+> ⚠️ 压缩会丢信息，所以**压缩动作本身要产出事件**（让 UI 显示"上下文已压缩"），别偷偷干。
+
+#### 3.4.6 工具执行的安全边界（接缝 C）
+
+```csharp
+public sealed record ToolContext
+{
+    public required string SessionId { get; init; }
+    public required string RequesterId { get; init; }    // 谁触发的（QQ 号）
+    public required MemberRole Role { get; init; }        // 权限等级：Owner/Admin/User
+    public required IServiceProvider Services { get; init; }
+}
+```
+
+执行工具时**四道关**：
+
+1. **权限校验**：`tool.RequiredPermission <= context.Role`，否则**直接拒绝**并把拒绝结果回填给 LLM（让它知道"你调不了这个"），而不是抛异常炸掉整轮
+2. **超时**：每个工具都要有超时（默认 30s），超时视为失败
+3. **异常隔离**：工具抛异常 → 转成失败的 `ToolResult` 回填，**不能让异常冒泡炸掉 agent 循环**
+4. **输出限长**：工具结果可能巨大（比如读了整个大文件）→ 截断并标注（`<已截断，共 N 字符>`），防止一次吃掉全部上下文
+
+#### 3.4.7 工具定义与注册表
+
+**工具契约**（放在 `ZipperAIQQ.Agent` —— 它属于 agent 领域）：
+
+```csharp
+public interface ITool
+{
+    string Name { get; }                        // 全局唯一；重名在启动时报错
+    string Description { get; }                 // 给 LLM 看的用途说明，要写清"什么时候该用"
+    JsonNode ParameterSchema { get; }             // JSON Schema，直接塞进 OpenAI 的 tools 数组
+    ToolPermission RequiredPermission { get; }  // 权限门禁依据（接缝 C）
+    Task<ToolResult> InvokeAsync(JsonNode? arguments, ToolContext context, CancellationToken ct);
+}
+
+public enum ToolPermission { User, Admin, Owner }   // 有序：数值越大要求越高
+
+public sealed record ToolResult(bool Success, string? Content, string? Error);
+```
+
+**注册表**：
+
+```csharp
+public interface IToolRegistry
+{
+    IReadOnlyCollection<ITool> All { get; }
+    ITool? Find(string name);
+    JsonArray BuildToolSchema(IEnumerable<string>? enabledNames);   // 转成 OpenAI tools 数组
+}
+```
+
+- 工具以 `IEnumerable<ITool>` 注入（DI 收集），**新增工具 = 新增一个类 + 一行注册**
+- 工具名**全局唯一**，重名在**启动时**报错（不要等到运行时才发现）
+- **`Description` 决定 LLM 会不会用这个工具** —— 必须写清"何时使用"，而不是复述工具名
+- **参数校验在工具内自己做**：JSON Schema 是给 LLM 的提示，**不是运行时校验**；非法参数应返回失败的 `ToolResult`，**不要抛异常**（否则会炸掉 agent 循环）
+
+#### 3.4.8 需要决定的设计取舍
+
+| 取舍 | 选项 | 建议 |
+|---|---|---|
+| 工具并发执行 | 串行 / 并发 | 第一版**串行**（好调试、好排序事件）；并发留接口 |
+| 上下文存哪 | 内存 / 每轮查库 | 内存缓存 + 落库异步写（重启可恢复） |
+| 流式文本如何聚合 | 逐 delta 推 / 聚合后推 | 逐 delta 推（UI 体验好），但**限流**（如 50ms 合并一次）避免刷爆 WS |
+| 多角色 | 多套 system prompt / 多 agent 实例 | 第一版：**配置驱动的 system prompt**，按会话选 |
+

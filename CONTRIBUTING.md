@@ -52,21 +52,7 @@ git clone https://github.com/xrzxrzx/ZipperAIQQ.git
 cd ZipperAIQQ
 ```
 
-### ⚠️ 协作者额外一步（**很重要，别跳过**）
-
-本项目有**两份内容**：公开的代码仓库，以及一份**独立的私有仓库**（内部设计文档、决策记录）。
-
-maintainer 会把你加进那个私有仓库。它的工作树放在代码仓库里的 `ai-docs/` 目录。**你需要把它排除掉**：
-
-```powershell
-# 在代码仓库根目录执行
-Add-Content -Path '.git\info\exclude' -Value "ai-docs/"
-```
-
-- 用 **`.git/info/exclude`**（**本地、不进版本库**），**不要**用 `.gitignore`
-  —— 后者会把这一行**公开出去**，等于告诉全世界这里有个私有夹
-- **这一步是每个克隆都要各自做一次的**：`info/exclude` 是本地文件，不随仓库分发
-- 忘了做的后果：`git add -A` 会试着把内部文档提交进**公开仓库**（那就泄漏了）
+> 📌 **文档就在同一个仓库的 `docs/` 里**（2026-10-20 起），克隆完即可阅读，无需额外设置。
 
 ---
 
@@ -119,8 +105,7 @@ test(transport): 补分帧边界用例
    ```powershell
    git status --short
    ```
-   尤其确认 `ai-docs/` 没出现在列表里。
-   > ⚠️ CI 里有一条守卫会拦这个 —— 但**被 CI 拦下就已经算提交过一次了**，自己先看更体面。
+   尤其确认**没有**把 token / API key / `appsettings.Local.json` 之类的机密带进来。
 
 ### PR 描述请包含
 

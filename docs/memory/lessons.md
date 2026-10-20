@@ -1,0 +1,147 @@
+# 踩坑与教训
+
+> 只记**真实发生过**的坑，每条带来源。
+
+---
+
+## 环境类
+
+### 本机没有 .NET 9 运行时
+- **现象**：`net9.0` 项目编译成功，运行时直接报 `You must install or update .NET to run this application`。
+- **根因**：本机 `dotnet --list-runtimes` 只有 6.0.36 / 8.0.11 / 8.0.31 / 10.0.12（**无 9**）。SDK 是 10.0.401。
+- **结论**：**TFM 用 `net10.0`**（用户既定：新项目一律 .NET 10）。**编译通过 ≠ 能运行**。
+- **来源**：2026-09-21 Lagrange demo 实测。
+- ⚠️ **修正说明（2026-09-22）**：本条原结论误写为"用 net8.0"——那是为迁就 `Lagrange.Core` 的**临时选择**，**不是项目基线**。详见 `decisions.md` 2026-09-22 修正条目。
+
+### `[UnsafeAccessorType]` 在本机 SDK 上编译不可用
+- **现象**：`error CS0246: 未能找到类型或命名空间名"UnsafeAccessorTypeAttribute"`（即使已 `using System.Runtime.CompilerServices;`）。同一处的 `[UnsafeAccessor]`（无 Type 变体）却能编译。
+- **替代**：改用**普通反射**达到同样效果。
+  ```csharp
+  var t = assembly.GetType("Lagrange.Core.Common.DefaultBotSignProvider", throwOnError: false);
+  var f = t?.GetField("WhiteListCommand", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+  var whitelist = f?.GetValue(null) as HashSet<string>;
+  ```
+- **来源**：2026-09-21 Lagrange demo 实测。
+
+### 本机 hosts 屏蔽了 GitHub
+- **现象**：`web_fetch` 访问 `github.com` / `api.github.com` / `raw.githubusercontent.com` 报「resolves to a non-public IP address」。
+- **绕过**：用**服务器**（能访问）去 curl；或用 **jsDelivr CDN** 读 GitHub 源码。
+  - 源码：`https://cdn.jsdelivr.net/gh/<owner>/<repo>@<branch>/<path>`
+  - 文件树：`https://data.jsdelivr.com/v1/package/gh/<owner>/<repo>@<branch>/flat`
+- **来源**：2026-09-21 调研。
+
+### `ssh_exec` 里不要用 `nohup ... &` 启动后台进程
+- **现象**：SSH channel 中途断开（`connection lost mid-flight`），后续命令没执行到。
+- **后果**：本次断线发生在包安装**完成之后**，未造成损害（8 个生产服务全正常），但清理步骤没跑到。
+- **正确做法**：远端命令用**前台可控**写法；需要后台时用 `systemd-run` 或明确的重定向 + 立即收尾。
+- **来源**：2026-09-20 服务器 Xvfb 探针。
+
+---
+
+## 第三方库类
+
+### Lagrange.Core：二维码不会自动重发
+- **现象**：二维码过期/被取消后，`BotQrCodeQueryEvent` 报 `Canceled`，`Login()` **直接返回 `false` 并结束流程**，不会自己重新取码。
+- **对策**：检测到 `CodeExpired` / `Canceled` / `Invalid` 时**自己重新调用 `Login()`**（注意加次数上限，别无限重试）。
+- **来源**：2026-09-21 demo 实测。
+
+### Lagrange.Core：登录必需命令在签名白名单内
+- **现象**：没有签名 token 时，扫码后被腾讯拒绝授权，手机端提示「扫码授权失败，请前往 QQ 官网下载最新版 QQ 后重试」——**提示语有误导性**，容易让人去折腾版本号。
+- **真相**：白名单里含 `ConnAuthSvr.fast_qq_login` / `get_app_info` / `get_auth_api_list` 等**登录必需命令** → 无 token 必然被拒。
+- **教训**：**别被第三方的错误提示语带偏**，要回到源码/协议层找根因。
+- **来源**：2026-09-21 demo 实测 + 源码核对。
+
+### Lagrange.Core：事件名是 `BotSMSEvent`
+- **坑**：写成 `BotSmsEvent` 编译不过。
+- **来源**：2026-09-21 demo 编译。
+
+---
+
+## 旧项目 QQAIChat 的教训（复用时务必先修）
+
+> 来源：2026-09-20 对 `D:\Works\QQAIChat` 的逐文件审查。
+
+1. **`.Result` 同步等待** → UI/单线程上下文死锁
+2. **`async void`** → 异常无法捕获，进程静默出错
+3. **普通 `Dictionary` 被多线程并发读写** → 竞态（应换 `ConcurrentDictionary`）
+4. **`catch` 写在 `while` 内部且无退避** → 连接断开后死循环刷错误日志
+5. **`Disconnect()` 条件判断反了**（用 `!= Open` 才清理）→ 连接关不干净、资源泄漏
+6. **固定 1024 字节 buffer** → 数据截断（历史上真修过一次）
+7. **请求体用了别家模型的专属参数**（`enable_thinking` / `min_p` / `top_k`）→ 换 API 就失效
+8. **`System` 角色被映射成 `assistant`**（`Role == User ? "user" : "assistant"`）→ system prompt 静默失效，人格设定全废
+9. **配置索引器取不到 key 时返回空字符串** → 静默失败，难排查
+10. **无自动重连、无心跳处理、无发送队列/限流**
+
+---
+
+## 🔴 2026-09-22 · `git add -A` 把用户未提交的代码一起提交并推送了（**助手的错**）
+
+**发生了什么**：用户在写 `ZipperAIQQ.Core/`（事件总线），文件是**未跟踪**状态。
+助手跑文档重构收尾时用了 **`git add -A`** → 把用户的代码一并收进提交 → 用 **`docs:`** 的提交信息推到了**公开仓库**。
+
+**三条错，一条比一条重**：
+
+| # | 错 | 说明 |
+|---|---|---|
+| 1 | **用了 `git add -A`** | 助手**明明知道**那些文件是未跟踪的（上一轮还说过"你的代码我一个字没动"），却按了全选 |
+| 2 | **提交信息是 `docs:`** | 完全没提代码 → **历史记录误导**（以后查"这些代码哪来的"会看不懂） |
+| 3 | **推到了公开仓库** | 而且**改写已推送历史被 `AGENTS.md` §六 禁止** → 只能用新提交补救 |
+
+**教训（写法层面的硬规则）**：
+
+1. **在"可能有他人未提交工作"的仓库里，永远不要用 `git add -A` / `git add .`**
+   → **用显式路径**：`git add <具体文件>`。文档任务就只 add 文档。
+2. **提交前先看清工作区**：`git status --porcelain -uall`
+   （`-uall` 很关键 —— **不加时新目录只显示成 `?? dir/`，看不出里面有你的东西**）
+3. **发现工作区里有别人的未跟踪文件 → 停下问，不要顺手带**
+
+**善后原则**：不能 amend / force-push → **只能用新提交补救**；
+但**"补救方式"要先问用户**（保留 + 补说明提交 / `git revert` 移除）—— **由用户选**。
+
+> **一句话**：**`-A` 是"我确定这个仓库里只有我该提交的东西"时才用的开关。** 判断不了就别用。
+
+## 🔴 2026-09-22 · **检查报了问题，我却继续提交了**（助手的纪律错误）
+
+**发生了什么**：提交文档改动前跑了链接检查，**检查明确报出 1 处断链**
+（`architecture-proposal.md -> ../../docs/contracts/`，多退了一层目录）——
+**但助手在同一条命令里接着把 `git commit` + `git push` 执行完了**。
+
+**为什么这是纪律问题（而不是普通笔误）**：
+**跑检查的意义就是"结果决定下一步"。** 报了问题还继续 → **那这次检查和没跑一样**，
+只是给自己留了个"我跑过检查"的心理安慰。**这比不跑更糟**，因为它让人以为有防线。
+
+**硬规则**：
+
+> **自检脚本一旦报出问题，就【不许】继续执行后续的提交/推送动作。**
+> 流程必须是：**检查 → 有红就停 → 修 → 重跑 → 全绿才提交**。
+
+**配套做法**：把"检查"和"提交"**拆成两条命令**（或在脚本里让检查失败即中止），
+**不要写成一个"反正都会往下跑"的流水线**。
+
+**关联**：这条与「排除误报」那两条是一套的 ——
+- 检查器**不能老是误报**（否则人开始忽略它）
+- 检查器**报了真问题必须真的拦住动作**（否则它没有约束力）
+
+> 两个都要满足，检查才有意义。**一个"报了也不影响什么"的检查，等于装饰品。**
+
+---
+
+## 🔴 2026-09-22 · CI 的 `cache: true` 会**直接抛错**（**助手的 bug**）
+
+**现象**：CI 的「构建与测试」作业第一次真跑就红，**失败在「安装 .NET SDK」那一步**（后面 `还原`/`构建`/`测试` 全 `skipped`）。
+
+**根因**：`actions/setup-dotnet` 的 `cache: true` 要求仓库里有 **`packages.lock.json`**。它 README 的原话：
+
+> The action searches for NuGet Lock files (`packages.lock.json`) in the repository root...
+> **If lock file does not exist, this action throws error.**
+
+本项目**没有启用 NuGet 锁文件** → 抛错是必然的。
+
+**修法**：`cache: false`（并留注释说明"将来开了 `RestorePackagesWithLockFile` 才能打开"）。
+
+**两条通用教训**：
+
+1. **看失败点，别看"红"** —— 红的作业名是"构建与测试"，但**真正死的地方是装 SDK**。
+   只看作业名会一路去查代码，**方向就错了**。（而且这次代码其实是好的 —— 用户早已修掉那 2 个 CS8602。）
+2. **写 CI 时，"到处都能看到的常用配置"必须回官方文档核对前提** —— `cache: true` 人人这么写，但它**有前提**。
+   > 与"MEAI 第一个 `.Use` 是最外层"那次同源：**凭印象写的配置，迟早用一个红叉来找你。**
