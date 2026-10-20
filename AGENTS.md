@@ -56,16 +56,16 @@
 | 客户端 | **WPF**（Windows-only，仅表现层；服务端必须保持跨平台） |
 | **MVVM 框架** | **`CommunityToolkit.Mvvm`**（微软官方，Source Generator 驱动） |
 | **IoC 容器** | **`Microsoft.Extensions.DependencyInjection`**（服务端由 `Microsoft.Extensions.Hosting` 提供，客户端手工建 `ServiceCollection`） |
-| **公共基础设施** | **`ZipperAIQQ.Core`**（第 7 个项目）—— **横切关注点**：配置 / 日志 / 进程内事件总线。**准入规则两条都要满足**：① 能说出第二个消费者 ② 它是横切关注点而非运行时能力（判据：「把所有业务模块删光，这东西还需要吗？」⇒ `Transport` / `Storage` **因此不进 Core**）。详见 `docs/design/configuration-design.md` §1.3 |
+| **公共基础设施** | **`ZipperAIQQ.Core`**（第 7 个项目）—— **横切关注点**：配置 / 日志 / 进程内事件总线。**准入规则两条都要满足**：① 能说出第二个消费者 ② 它是横切关注点而非运行时能力（判据：「把所有业务模块删光，这东西还需要吗？」⇒ `Transport` / `Storage` **因此不进 Core**）。详见 `docs/03-设计/配置与日志设计.md` §1.3 |
 | **配置** | `Microsoft.Extensions.Configuration` + `IOptions<T>`；**Options 类型跟着消费者模块走**（不集中在 Core）；机密只走环境变量 / `appsettings.Local.json` |
 | **日志** | **Serilog** —— 容器里注册 `Serilog.ILogger` 直接注入（`ForContext<T>()` 取上下文）；**写盘前脱敏** |
 | 客户端通信 | **HTTP 单端点（非 REST）+ WebSocket**；**不引 gRPC** |
 | QQ 通道 | **NapCat**（OneBot 11），抽象为 `IQQChannel`（正向 WS + 反向 WS 双实现）<br>⚠️ **待 S2 修订**：多平台泛化，命名见 §三 接缝 B |
-| AI | **MEAI（`Microsoft.Extensions.AI`）打底 + 部分自研** —— 自动工具循环用 MEAI 的 `FunctionInvokingChatClient`，OpenAI 兼容端点（DeepSeek）用 `Microsoft.Extensions.AI.OpenAI`；**自研**会话隔离 / 上下文压缩策略 / 工具注册与权限门禁 / `AgentEvent` 事件流。**不引 MAF**（理由见 `docs/memory/decisions.md`）<br>⚠️ **待 S2 修订**：接入改走 **Responses API**（`GetResponsesClient`），不用 `previous_response_id` |
+| AI | **MEAI（`Microsoft.Extensions.AI`）打底 + 部分自研** —— 自动工具循环用 MEAI 的 `FunctionInvokingChatClient`，OpenAI 兼容端点（DeepSeek）用 `Microsoft.Extensions.AI.OpenAI`；**自研**会话隔离 / 上下文压缩策略 / 工具注册与权限门禁 / `AgentEvent` 事件流。**不引 MAF**（理由见 `docs/07-记忆/决策记录.md`）<br>⚠️ **待 S2 修订**：接入改走 **Responses API**（`GetResponsesClient`），不用 `previous_response_id` |
 | **JSON 库** | **`System.Text.Json`（全项目统一）** —— 契约 DTO、OneBot 事件、LLM 报文、配置一律用它（**与 MEAI 同栈，避免双轨**） |
 | 存储 | SQLite |
 
-### 通信契约（详见 `docs/architecture-proposal.md` §3.5）
+### 通信契约（详见 `docs/02-架构/架构方案.md` §3.5）
 
 - **HTTP 只发命令**：`POST /api`，body `{action, payload}`，响应 `{code, message, data}`
 - **WebSocket 只收事件**：`WS /events`，帧 `{type, seq, time, data}`
@@ -75,7 +75,7 @@
 
 ## 三、架构约束（改代码前先读）
 
-完整方案见 `docs/architecture-proposal.md`（架构方案，单一事实来源）。三个**不可破坏**的接缝：
+完整方案见 `docs/02-架构/架构方案.md`（架构方案，单一事实来源）。三个**不可破坏**的接缝：
 
 | 接缝 | 约束 |
 |---|---|
@@ -105,17 +105,17 @@
 
 | 位置 | 用途 |
 |---|---|
-| [`docs/architecture-proposal.md`](docs/architecture-proposal.md) | **架构方案（单一事实来源）** |
-| [`docs/architecture.md`](docs/architecture.md) | 架构说明（面向新人，较浅，先读它） |
-| [`docs/design/`](docs/design/) | 详细设计 —— **索引见 [`docs/design/README.md`](docs/design/README.md)** |
-| [`docs/contracts/`](docs/contracts/) | 通信契约样例（测试要跑它） |
-| [`docs/standards/`](docs/standards/) | 编码规范 |
-| [`docs/research/`](docs/research/) | 调研报告 |
-| [`docs/memory/`](docs/memory/) | **项目本地记忆**：决策、进度、踩坑、教训 |
-| [`docs/onboarding.md`](docs/onboarding.md) | 新人上手 |
+| [`docs/02-架构/架构方案.md`](docs/02-架构/架构方案.md) | **架构方案（单一事实来源）** |
+| [`docs/02-架构/架构说明-新人版.md`](docs/02-架构/架构说明-新人版.md) | 架构说明（面向新人，较浅，先读它） |
+| [`docs/03-设计/`](docs/03-设计) | 详细设计 —— **索引见 [`docs/03-设计/README.md`](docs/03-设计/README.md)** |
+| [`docs/05-契约/`](docs/05-契约) | 通信契约样例（测试要跑它） |
+| [`docs/04-规范/`](docs/04-规范) | 编码规范 |
+| [`docs/06-调研/`](docs/06-调研) | 调研报告 |
+| [`docs/07-记忆/`](docs/07-记忆) | **项目本地记忆**：决策、进度、踩坑、教训 |
+| [`docs/08-上手/新人上手.md`](docs/08-上手/新人上手.md) | 新人上手 |
 
 - **决策一旦改变**，必须同步更新架构文档 + 记忆，**不得只在对话里说**
-- 记忆写入规则：项目内的事写 `docs/memory/`；跨项目通用的结论另写全局记忆库
+- 记忆写入规则：项目内的事写 `docs/07-记忆/`；跨项目通用的结论另写全局记忆库
 
 ### 5.2 仓库可见性
 
@@ -157,7 +157,7 @@ git status --porcelain -uall      # ← -uall 不能省
 
 > 背景：2026-09-22 助手用 `git add -A` 把用户正在写、**尚未提交**的 `ZipperAIQQ.Core/`
 > 一并提交并推送到了公开仓库（提交信息还写着 `docs:`）。因为已推送，**无法 amend**，只能用新提交说明。
-> 完整复盘见 `docs/memory/lessons.md`。
+> 完整复盘见 `docs/07-记忆/教训.md`。
 
 ### 6.3 分支约定（2026-10-20 定）
 

@@ -1,8 +1,8 @@
 # ZipperAIQQ Agent 设计（MEAI 打底 + 部分自研）
 
 > **定位**：`ZipperAIQQ.Agent` 项目的详细设计
-> **上层文档**：[`overview.md`](overview.md)（原 `technical-design-v1.md` 的 §3.4 已**归档**，见 [`archive/technical-design-legacy.md`](archive/technical-design-legacy.md)）
-> **决策依据**：[`docs/memory/decisions.md`](../memory/decisions.md) 「Agent 实现改为 MEAI + 部分自研」
+> **上层文档**：[`项目总览.md`](项目总览.md)（原 `technical-design-v1.md` 的 §3.4 已**归档**，见 [`archive/旧技术设计.md`](../99-归档/旧技术设计.md)）
+> **决策依据**：[`docs/07-记忆/决策记录.md`](../07-记忆/决策记录.md) 「Agent 实现改为 MEAI + 部分自研」
 > **实测依据**：`D:\temp\MeaiSpike`（2026-09-22 spike，见 §1.2）
 > **状态**：待用户确认
 
@@ -366,7 +366,7 @@ public sealed class AgentEventTranslator
 ### 4.2 推送
 
 翻译出的 `AgentEvent` → `IEventBus.Publish` → `EventBroadcaster` → WS `/events` → WPF 客户端。
-（**事件总线与广播的细节见 `transport-design.md` 与技术设计 §3.9。**）
+（**事件总线与广播的细节见 `通信层设计.md` 与技术设计 §3.9。**）
 
 > **要点**：`Agent` 层**只发事件到事件总线**，**不直接持有 WS 连接**（保持层次）。
 
@@ -519,7 +519,7 @@ spike 确认 **MEAI 无内置重试** → 自研 `RetryingChatClient : Delegatin
 | **超时** | 视为网络错误，重试 |
 | **取消（用户主动）** | **不重试**，直接抛 `OperationCanceledException` |
 
-> ⚠️ **不要**用 `.Result` / `.Wait()` 等异步结果（`csharp-编码规范.md` §3.1）。
+> ⚠️ **不要**用 `.Result` / `.Wait()` 等异步结果（`CSharp编码规范.md` §3.1）。
 
 ---
 
@@ -644,7 +644,7 @@ public interface IDriftCorrector
 | ~~Q2~~ | ~~「设定漂移」具体指哪一类？~~ | —— | ✅ **已明确（2026-09-22）**：① 人格/语气 ② 指令遵循 ③ 事实（自我矛盾/幻觉）—— **不含话题漂移**。§8 已按此写完 |
 | Q3 | 流式文本限流阈值（50ms？N 字符？） | UI 体验 vs WS 压力 | 先 50ms，实测后调 |
 | Q4 | 摘要用什么模型？主模型还是更便宜的模型？ | 成本 | 倾向用主模型（简单），量大后再拆 |
-| ~~Q5~~ | ~~`LlmOptions` 放哪？~~ | —— | ✅ **已定（2026-09-22）：放 `ZipperAIQQ.Agent`** —— 见 `decisions.md` 取消 `Llm` 项目那一条 |
+| ~~Q5~~ | ~~`LlmOptions` 放哪？~~ | —— | ✅ **已定（2026-09-22）：放 `ZipperAIQQ.Agent`** —— 见 `决策记录.md` 取消 `Llm` 项目那一条 |
 | ~~Q6~~ | ~~要不要 MCP 接入？~~ | —— | ✅ **已定（2026-09-22）：要**（三类工具来源都做）。**但分期**：第一版只做 ① 自研方法，② MCP 与 ③ OS 能力留接口、后置实现 —— 见 §3.4 |
 | Q7 | 事实清单（`ISessionFactStore`）要不要第一版就做？ | 事实漂移防线的成本 | 倾向**第一版只做"落库 + 常驻 system"的最小版**，冲突检测后置（§8.4） |
 | Q8 | MCP 依赖包的确切版本与体积 | 依赖膨胀（MAF 教训） | 引入前**先算传递闭包**，别重蹈 32 包的坑 |
@@ -655,9 +655,9 @@ public interface IDriftCorrector
 
 | 文档 | 关系 |
 |---|---|
-| [`overview.md`](overview.md) | **总览**。其原 §3.4（Agent）与 §3.3（Llm）已被本文取代 → 已**归档** |
-| [`archive/technical-design-legacy.md`](archive/technical-design-legacy.md) | **本文取代的那两块旧设计在这里**（保留存痕，**勿参照**） |
-| [`composition-design.md`](composition-design.md) | `AddZipperAgent` 的注册内容与装配位置 |
-| [`transport-design.md`](transport-design.md) | 本文的事件流经它推送 |
-| [`../memory/decisions.md`](../memory/decisions.md) | 决策依据（MEAI + 部分自研、不引 MAF） |
+| [`项目总览.md`](项目总览.md) | **总览**。其原 §3.4（Agent）与 §3.3（Llm）已被本文取代 → 已**归档** |
+| [`archive/旧技术设计.md`](../99-归档/旧技术设计.md) | **本文取代的那两块旧设计在这里**（保留存痕，**勿参照**） |
+| [`组合与注册.md`](组合与注册.md) | `AddZipperAgent` 的注册内容与装配位置 |
+| [`通信层设计.md`](通信层设计.md) | 本文的事件流经它推送 |
+| [`../07-记忆/决策记录.md`](../07-记忆/决策记录.md) | 决策依据（MEAI + 部分自研、不引 MAF） |
 | `D:\temp\MeaiSpike` | 本文 §1.2 与 §4.1 的实测来源（spike，不在主仓库） |

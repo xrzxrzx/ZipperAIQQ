@@ -869,10 +869,10 @@ system.threading.channels 10.0.12
 
 - **不要用 `Microsoft.Agents.AI.Hosting.*`**（避开 #7733），自己写 HTTP/WS 端点，MAF 只当 in-process 的 agent 引擎
 - **不要引 `Microsoft.Agents.AI.Workflows`**（避开 `OpenTelemetry.Api`，也避开 BSP 屏障），只用 `Microsoft.Agents.AI` + `.OpenAI`
-- **先在 `docs/research/` 里做一个 spike**：只验证"DeepSeek 走 `OpenAIClientOptions.Endpoint` → `AsAIAgent` → 流式工具事件能拿到 `FunctionCallContent`/`FunctionResultContent`"这一条链路，**不动主代码**
+- **先在 `docs/06-调研/` 里做一个 spike**：只验证"DeepSeek 走 `OpenAIClientOptions.Endpoint` → `AsAIAgent` → 流式工具事件能拿到 `FunctionCallContent`/`FunctionResultContent`"这一条链路，**不动主代码**
 - **把 `Newtonsoft` / `STJ` 的边界写进架构文档**：明确哪些 DTO 走哪个序列化器，以及两边的 naming/null/number 策略如何对齐
 
-**如果最终决定维持手写循环**，那么这次调研的净收益是：**你确认了 MAF 在 net8.0 上可用（排除了一个错误的阻塞假设）**，并且**明确了将来若要切换，代价集中在 JSON 与 DI 作用域两处**。可以把这个结论记进 `docs/memory/decisions.md`，并保留"未来重新评估"的入口——尤其是等 `System.Text.Json` 这条约束松动、或 issue #7733 关闭之后。
+**如果最终决定维持手写循环**，那么这次调研的净收益是：**你确认了 MAF 在 net8.0 上可用（排除了一个错误的阻塞假设）**，并且**明确了将来若要切换，代价集中在 JSON 与 DI 作用域两处**。可以把这个结论记进 `docs/07-记忆/决策记录.md`，并保留"未来重新评估"的入口——尤其是等 `System.Text.Json` 这条约束松动、或 issue #7733 关闭之后。
 
 ---
 

@@ -8,7 +8,7 @@
 > - §2.3 的环境实测数据（Xvfb 依赖、LinuxQQ 包体积）**换到 T30 上同样有参考意义**
 > - 那段**「Xvfb 怎么装、要装什么」**的经验，正是 T30 走 Linux 路线时会用到的
 >
-> 👉 **当前部署设计见 [`design/deployment-design.md`](design/deployment-design.md)。**
+> 👉 **当前部署设计见 [`03-设计/部署设计.md`](../03-设计/部署设计.md)。**
 
 > **评估日期**：2026-09-20
 > **目标服务器**：`zipper-server`（8.141.89.50，标签 `production`）
@@ -120,7 +120,7 @@
 
 | 手段 | 状态 | 说明 |
 |---|---|---|
-| **cgroup v1 memory 控制器** | ✅ **可用** | `/sys/fs/cgroup/memory/memory.limit_in_bytes` 存在 |
+| **cgroup v1 memory 控制器** | ✅ **可用** | `/sys/fs/cgroup/07-记忆/memory.limit_in_bytes` 存在 |
 | **`systemd-run -p MemoryLimit=`** | ✅ **实测生效** | 已用 `systemd-run --scope -q -p MemoryLimit=50M /bin/true` 验证通过 |
 | `OOMScoreAdjust` | ✅ 可用（systemd 239） | 可让内核**优先杀 NapCat 而非 mysqld** |
 | 调 `vm.swappiness` | ⚠️ **建议但需批准** | 当前为 0；调到 10–60 可让 1.7 GB 空闲 swap 真正发挥作用 |
