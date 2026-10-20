@@ -53,8 +53,8 @@
 |---|---|
 | 语言 / 运行时 | **C# / .NET 10**（`net10.0`，LTS）。用户既定：**新项目一律 .NET 10** |
 | 服务端 | 跨平台（Windows + Linux），`Microsoft.Extensions.Hosting` + ASP.NET Core (Kestrel) |
-| 客户端 | **WPF**（Windows-only，仅表现层；服务端必须保持跨平台） |
-| **MVVM 框架** | **`CommunityToolkit.Mvvm`**（微软官方，Source Generator 驱动） |
+| 客户端 | **WinUI3**（Windows App SDK；Windows-only，仅表现层；服务端必须保持跨平台） |
+| **MVVM 框架** | **`CommunityToolkit.Mvvm`**（微软官方，Source Generator 驱动；WinUI3 下同样适用） |
 | **IoC 容器** | **`Microsoft.Extensions.DependencyInjection`**（服务端由 `Microsoft.Extensions.Hosting` 提供，客户端手工建 `ServiceCollection`） |
 | **公共基础设施** | **`ZipperAIQQ.Core`**（第 7 个项目）—— **横切关注点**：配置 / 日志 / 进程内事件总线。**准入规则两条都要满足**：① 能说出第二个消费者 ② 它是横切关注点而非运行时能力（判据：「把所有业务模块删光，这东西还需要吗？」⇒ `Transport` / `Storage` **因此不进 Core**）。详见 `docs/03-设计/配置与日志设计.md` §1.3 |
 | **配置** | `Microsoft.Extensions.Configuration` + `IOptions<T>`；**Options 类型跟着消费者模块走**（不集中在 Core）；机密只走环境变量 / `appsettings.Local.json` |
