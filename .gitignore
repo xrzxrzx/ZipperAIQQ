@@ -42,3 +42,6 @@ qrcode*.png
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ───── 临时工作区（spike / 模型文件等，绝不提交）─────
+/temp/
