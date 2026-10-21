@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -49,6 +49,19 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, MessagesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SessionsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
+
+        // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
+        // 用 try/catch 而不是查 PRAGMA：重复执行时报"duplicate column"忽略即可，
+        // 这样迁移逻辑不需要额外维护版本状态表。
+        try
+        {
+            await ExecuteAsync(conn, "ALTER TABLE Messages ADD COLUMN Direction INTEGER NOT NULL DEFAULT 0;", ct).ConfigureAwait(false);
+            _logger.Information("已应用迁移：Messages.Direction");
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        {
+            // 已迁移过
+        }
 
         // 版本行只写一次；已有则不动
         await using (var cmd = conn.CreateCommand())

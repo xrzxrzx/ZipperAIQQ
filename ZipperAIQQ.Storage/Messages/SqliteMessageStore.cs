@@ -34,7 +34,30 @@ public sealed class SqliteMessageStore : IMessageStore
     public Task<long> AppendAsync(IncomingMessage message, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
+        return AppendCoreAsync(message, direction: 0, ct);
+    }
 
+    public Task<long> AppendOutgoingAsync(
+        OutgoingMessage message, string senderUserId, DateTimeOffset sentAt, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentException.ThrowIfNullOrWhiteSpace(senderUserId);
+
+        // 出站消息复用同一张表：把 Sender 记成机器人自己，Direction=1 区分方向
+        var asInbound = new IncomingMessage
+        {
+            Chat = message.Chat,
+            Sender = new SenderInfo { UserId = senderUserId, Nickname = "AI" },
+            Segments = message.Segments,
+            OccurredAt = sentAt,
+            ReplyToMessageId = message.ReplyToMessageId,
+        };
+
+        return AppendCoreAsync(asInbound, direction: 1, ct);
+    }
+
+    private Task<long> AppendCoreAsync(IncomingMessage message, int direction, CancellationToken ct)
+    {
         return _db.WriteAsync(async (conn, token) =>
         {
             await using var cmd = conn.CreateCommand();
@@ -54,6 +77,7 @@ public sealed class SqliteMessageStore : IMessageStore
             cmd.Parameters.AddWithValue("@sentAtMs", message.OccurredAt.ToUnixTimeMilliseconds());
             cmd.Parameters.AddWithValue("@receivedAtMs", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             cmd.Parameters.AddWithValue("@replyToMessageId", (object?)message.ReplyToMessageId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@direction", direction);
 
             var result = await cmd.ExecuteScalarAsync(token).ConfigureAwait(false);
             return Convert.ToInt64(result, CultureInfo.InvariantCulture);
@@ -142,11 +166,11 @@ public sealed class SqliteMessageStore : IMessageStore
         INSERT INTO Messages (
             Platform, SessionId, ChatType, ChatId, MessageId,
             SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
-            PlainText, SegmentsJson, SentAtMs, ReceivedAtMs, ReplyToMessageId
+            PlainText, SegmentsJson, SentAtMs, ReceivedAtMs, ReplyToMessageId, Direction
         ) VALUES (
             @platform, @sessionId, @chatType, @chatId, @messageId,
             @senderUserId, @senderGroupCard, @senderNickname, @senderIsFriend,
-            @plainText, @segmentsJson, @sentAtMs, @receivedAtMs, @replyToMessageId
+            @plainText, @segmentsJson, @sentAtMs, @receivedAtMs, @replyToMessageId, @direction
         )
         RETURNING Id;
         """;

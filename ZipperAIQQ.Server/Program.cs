@@ -81,7 +81,10 @@ builder.Services.AddSingleton<IChatClient>(_ => ChatClientFactory.Create(
 
 var agentOptions = new ChatAgentOptions
 {
-    SystemPrompt = "你是一个角色扮演助手。用简短、自然的中文回复，像在聊天软件里说话。",
+    SystemPrompt =
+        "你是一个角色扮演助手，在聊天软件里和人对话。" +
+        "**你必须调用 send_message 工具来把话发出去** —— 直接输出文本对方是看不到的。" +
+        "可以一次发多条（像真人把一句话分几条发）。回复要简短自然。",
 };
 
 builder.Services.AddSingleton<IChatAgentPool>(sp =>
@@ -89,7 +92,7 @@ builder.Services.AddSingleton<IChatAgentPool>(sp =>
     var client = sp.GetRequiredService<IChatClient>();
     var channel = sp.GetRequiredService<IMessageChannel>();
     return new ChatAgentPool(chat => new ChatAgent(
-        chat.SessionId, client, channel, agentOptions, Log.Logger));
+        chat.SessionId, client, channel, sp.GetRequiredService<IMessageStore>(), agentOptions, Log.Logger));
 });
 
 builder.Services.AddHostedService<MessageRouter>();
