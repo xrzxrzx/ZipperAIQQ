@@ -4,6 +4,7 @@ using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Core.Time;
+using ZipperAIQQ.Storage.Messages;
 
 namespace ZipperAIQQ.Agent;
 
@@ -21,6 +22,7 @@ public sealed class ChatAgent : IChatAgent
 {
     private readonly IChatClient _client;
     private readonly IMessageChannel _channel;
+    private readonly IMessageStore _store;
     private readonly ChatAgentOptions _options;
     private readonly ILogger _logger;
 
@@ -31,21 +33,28 @@ public sealed class ChatAgent : IChatAgent
         string sessionId,
         IChatClient client,
         IMessageChannel channel,
+        IMessageStore store,
         ChatAgentOptions options,
         ILogger logger)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         SessionId = sessionId;
         _client = client;
         _channel = channel;
+        _store = store;
+        _store = store;
         _options = options;
         _logger = logger;
     }
+
+    /// <summary>机器人自身标识（M1-B 用固定值；接真 self_id 后替换）。</summary>
+    public const string BotUserId = "bot";
 
     public string SessionId { get; }
 
@@ -80,6 +89,8 @@ public sealed class ChatAgent : IChatAgent
         var sent = 0;
         var tool = SendMessageTool.Create(
             _channel,
+            _store,
+            BotUserId,
             request.Chat,
             _options.MaxMessagesPerCall,
             n => sent += n);
@@ -109,15 +120,23 @@ public sealed class ChatAgent : IChatAgent
         {
             try
             {
-                await _channel.SendAsync(
-                    new OutgoingMessage
-                    {
-                        Chat = request.Chat,
-                        Segments = [new TextSegment(finalText)],
-                    },
-                    ct).ConfigureAwait(false);
+                var fallback = new OutgoingMessage
+                {
+                    Chat = request.Chat,
+                    Segments = [new TextSegment(finalText)],
+                };
 
+                await _channel.SendAsync(fallback, ct).ConfigureAwait(false);
                 sent = 1;
+
+                try
+                {
+                    await _store.AppendOutgoingAsync(fallback, BotUserId, request.Now, ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // 已发出，落库失败不改变事实
+                }
                 _logger.Information("兜底发送生效（会话 {SessionId}）：模型未调用工具", SessionId);
             }
             catch (Exception ex)

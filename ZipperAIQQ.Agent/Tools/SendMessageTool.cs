@@ -1,6 +1,8 @@
 using Microsoft.Extensions.AI;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Core.Time;
+using ZipperAIQQ.Storage.Messages;
 
 namespace ZipperAIQQ.Agent.Tools;
 
@@ -18,11 +20,14 @@ public static class SendMessageTool
 
     public static AIFunction Create(
         IMessageChannel channel,
+        IMessageStore store,
+        string botUserId,
         ChatRef chat,
         int maxMessages,
         Action<int> onSent)
     {
         ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(chat);
         ArgumentNullException.ThrowIfNull(onSent);
 
@@ -46,17 +51,28 @@ public static class SendMessageTool
 
                 foreach (var text in toSend)
                 {
+                    var outgoing = new OutgoingMessage
+                    {
+                        Chat = chat,
+                        Segments = [new TextSegment(text)],
+                    };
+
                     try
                     {
-                        await channel.SendAsync(
-                            new OutgoingMessage
-                            {
-                                Chat = chat,
-                                Segments = [new TextSegment(text)],
-                            },
-                            ct).ConfigureAwait(false);
-
+                        await channel.SendAsync(outgoing, ct).ConfigureAwait(false);
                         sent++;
+
+                        // 发出的也要落库（FR-20.3：聊天记录要能看到 AI 说了什么）
+                        // 落库失败不影响「已经发出去」这个事实，所以单独 try
+                        try
+                        {
+                            await store.AppendOutgoingAsync(outgoing, botUserId, BeijingTime.Now, ct).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            // 只记不抛：消息已经发出去了，落库失败不该让工具报错
+                            _ = ex;
+                        }
                     }
                     catch (Exception ex)
                     {
