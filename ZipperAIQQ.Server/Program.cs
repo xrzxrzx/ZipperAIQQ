@@ -171,7 +171,9 @@ var app = builder.Build();
 Log.Information("配置就绪：WS={Ws} 模型={Model} 库={Db}", wsUrl, model, fullDbPath);
 Log.Information("过滤：{Mode}（{Count} 条）", filterOptions.Mode, filterOptions.Entries.Count);
 Log.Information("表情目录：{Count} 个（{Path}）", faceCatalog.Count, facesPath);
-Log.Information("全局发送间隔：{Interval} ms", sendIntervalMs);
+Log.Information("全局发送间隔：{Interval} ms；连发上限 {Max} 条后冷却 {Cooldown} ms",
+    sendIntervalMs, maxConsecutive, cooldownMs);
+Log.Information("向量模型：{Dim} 维（{Path}）", embedding.Dimension, embeddingModelDir);
 
 try
 {
