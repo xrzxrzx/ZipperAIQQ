@@ -42,3 +42,14 @@ qrcode*.png
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ───── 临时工作区（spike / 模型文件等，绝不提交）─────
+/temp/
+
+# ───── AI 模型文件（体积大，部署时单独拉取，绝不入库）─────
+*.onnx
+*.onnx.data
+/models/
+
+# ───── 本地启动脚本（含真实 token，永不入库）─────
+scripts/*.local.ps1

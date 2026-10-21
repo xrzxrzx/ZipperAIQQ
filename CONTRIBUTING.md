@@ -21,16 +21,16 @@
 
 ## 一、开始之前，请先读这三份
 
-> 🚀 **如果是第一次参与**（包括"没什么基础"的同学）：**先看 [`docs/onboarding.md`](docs/onboarding.md)** ——
+> 🚀 **如果是第一次参与**（包括"没什么基础"的同学）：**先看 [`docs/新人上手.md`](docs/08-上手/新人上手.md)** ——
 > 那里有克隆、环境、验证设置、第一个任务的完整步骤。下面三份是**准备读代码时**该看的。
 
 | 顺序 | 文档 | 为什么 |
 |---|---|---|
-| 1️⃣ | [`docs/architecture.md`](docs/architecture.md) | **分层与三个接缝** —— 不读这个，改代码就是蒙的 |
-| 2️⃣ | [`docs/standards/csharp-编码规范.md`](docs/standards/csharp-编码规范.md) | 编码规范，**提交前必读** |
-| 3️⃣ | [`docs/contracts/README.md`](docs/contracts/README.md) | 契约样例怎么回事、为什么它是个安全网 |
+| 1️⃣ | [`docs/架构说明-新人版.md`](docs/02-架构/架构说明-新人版.md) | **分层与三个接缝** —— 不读这个，改代码就是蒙的 |
+| 2️⃣ | [`docs/04-规范/CSharp编码规范.md`](docs/04-规范/CSharp编码规范.md) | 编码规范，**提交前必读** |
+| 3️⃣ | [`docs/05-契约/README.md`](docs/05-契约/README.md) | 契约样例怎么回事、为什么它是个安全网 |
 
-> 💡 想快速上手，直接从 architecture.md **§8「我要改 XX，该动哪里？」** 那张表找你的场景。
+> 💡 想快速上手，直接从 架构说明-新人版.md **§8「我要改 XX，该动哪里？」** 那张表找你的场景。
 
 ---
 
@@ -52,21 +52,7 @@ git clone https://github.com/xrzxrzx/ZipperAIQQ.git
 cd ZipperAIQQ
 ```
 
-### ⚠️ 协作者额外一步（**很重要，别跳过**）
-
-本项目有**两份内容**：公开的代码仓库，以及一份**独立的私有仓库**（内部设计文档、决策记录）。
-
-maintainer 会把你加进那个私有仓库。它的工作树放在代码仓库里的 `ai-docs/` 目录。**你需要把它排除掉**：
-
-```powershell
-# 在代码仓库根目录执行
-Add-Content -Path '.git\info\exclude' -Value "ai-docs/"
-```
-
-- 用 **`.git/info/exclude`**（**本地、不进版本库**），**不要**用 `.gitignore`
-  —— 后者会把这一行**公开出去**，等于告诉全世界这里有个私有夹
-- **这一步是每个克隆都要各自做一次的**：`info/exclude` 是本地文件，不随仓库分发
-- 忘了做的后果：`git add -A` 会试着把内部文档提交进**公开仓库**（那就泄漏了）
+> 📌 **文档就在同一个仓库的 `docs/` 里**（2026-10-20 起），克隆完即可阅读，无需额外设置。
 
 ---
 
@@ -111,7 +97,7 @@ test(transport): 补分帧边界用例
    ```
    > CI 也会跑，但**本地先跑一遍更省事** —— 不用等 CI 跑完才发现红叉。
 
-2. **如果你改了契约**（`docs/contracts/*.json`）：确认**两端断言测试都更新**了，
+2. **如果你改了契约**（`docs/05-契约/*.json`）：确认**两端断言测试都更新**了，
    而且顺序是**先改样例**（见下面 §7）。
    > ⚠️ CI 会校验：样例必须是合法 JSON，且 **`selfUin` / `userId` / `groupId` 等身份字段只能是占位值**。
 
@@ -119,8 +105,7 @@ test(transport): 补分帧边界用例
    ```powershell
    git status --short
    ```
-   尤其确认 `ai-docs/` 没出现在列表里。
-   > ⚠️ CI 里有一条守卫会拦这个 —— 但**被 CI 拦下就已经算提交过一次了**，自己先看更体面。
+   尤其确认**没有**把 token / API key / `appsettings.Local.json` 之类的机密带进来。
 
 ### PR 描述请包含
 
@@ -155,13 +140,13 @@ test(transport): 补分帧边界用例
 
 **正确顺序**：
 
-1. **先改 [`docs/contracts/`](docs/contracts/) 里的 JSON 样例**
+1. **先改 [`docs/05-契约/`](docs/05-契约) 里的 JSON 样例**
 2. 服务端与客户端的断言测试**同时变红** → 强制你同步两端
 3. 两边都绿 → 契约事实上一致
 
 > 🔴 **硬纪律：样例里禁止出现真实标识**
 > 所有 QQ 号 / 群号一律用占位号（如 `1000000000`），昵称用 `"示例昵称"`，
-> 凭证字段一律 `null` 或 `""`。**详情见 [`docs/contracts/README.md`](docs/contracts/README.md)。**
+> 凭证字段一律 `null` 或 `""`。**详情见 [`docs/05-契约/README.md`](docs/05-契约/README.md)。**
 
 ---
 

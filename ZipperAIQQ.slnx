@@ -1,3 +1,6 @@
 <Solution>
+  <Project Path="ZipperAIQQ.Channel/ZipperAIQQ.Channel.csproj" />
   <Project Path="ZipperAIQQ.Core/ZipperAIQQ.Core.csproj" />
+  <Project Path="ZipperAIQQ.Storage/ZipperAIQQ.Storage.csproj" />
+  <Project Path="ZipperAIQQ.Transport/ZipperAIQQ.Transport.csproj" Id="30ceeac2-4f34-4232-9d29-90dc1f2a4e90" />
 </Solution>

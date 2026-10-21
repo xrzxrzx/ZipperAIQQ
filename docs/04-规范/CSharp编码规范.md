@@ -22,7 +22,7 @@
 | 元素 | 规则 | 示例 |
 |---|---|---|
 | 命名空间 / 类 / 接口 / 方法 / 属性 | **PascalCase** | `QqChannelAdapter`、`SendMessageAsync` |
-| 接口 | 前缀 `I` | `IQQChannel`、`IMessageStore` |
+| 接口 | 前缀 `I` | `IMessageChannel`、`IMessageStore` |
 | 局部变量 / 参数 | **camelCase** | `messageId`、`groupId` |
 | 私有字段 | **`_camelCase`** | `_httpClient`、`_logger` |
 | 常量 | PascalCase | `MaxRetryCount` |
@@ -112,7 +112,7 @@ while (!ct.IsCancellationRequested)
 ### 3.5 库代码用 `ConfigureAwait(false)`；UI 代码**不要**用
 
 - **服务端 / 类库**：`await xxx.ConfigureAwait(false);`
-- **WPF 客户端**：**不要**加（需要回到 UI 线程更新控件）
+- **WinUI3 客户端**：**不要**加（需要回到 UI 线程更新控件）
 
 ### 3.6 所有异步 API 都要能取消
 
@@ -291,14 +291,14 @@ var session = _sessions.FirstOrDefault(s => s.Id == id)
 src/
 ├── ZipperAIQQ.Server/           # 服务端宿主（Kestrel，跨平台）
 ├── ZipperAIQQ.Core/             # 编排层 + agent 核心（跨平台类库，无 UI 依赖）
-├── ZipperAIQQ.Channels/         # IQQChannel 实现（NapCat 正向/反向 WS）
+├── ZipperAIQQ.Channels/         # IMessageChannel 实现（NapCat 正向/反向 WS）
 ├── ZipperAIQQ.Storage/          # SQLite 持久化
-└── ZipperAIQQ.Client/           # WPF 客户端（Windows-only）
+└── ZipperAIQQ.Client/           # WinUI3 客户端（Windows-only）
 tests/
 └── ZipperAIQQ.Core.Tests/
 ```
 
-**约束**：`Server` / `Core` / `Channels` / `Storage` **不得引用任何 WPF/Windows 专有程序集**——这是"服务端保持跨平台"的物理保障。
+**约束**：`Server` / `Core` / `Channels` / `Storage` **不得引用任何 WinUI3/Windows 专有程序集**——这是"服务端保持跨平台"的物理保障。
 
 ---
 
