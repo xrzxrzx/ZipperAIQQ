@@ -1,6 +1,8 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Serilog;
 using ZipperAIQQ.Agent;
 using ZipperAIQQ.Agent.Llm;
@@ -96,6 +98,22 @@ builder.Services.AddSingleton<IChatAgentPool>(sp =>
 });
 
 builder.Services.AddHostedService<MessageRouter>();
+
+// ── 可观测性（FR-10）：追踪由 Agent 的 ActivitySource 提供，HTTP 调用自动追踪 ──
+// Console 导出默认关闭（会把控制台刷满），需要时设 ZIPPER_OTEL_CONSOLE=1。
+var otelConsole = Env("ZIPPER_OTEL_CONSOLE") == "1";
+builder.Services.AddOpenTelemetry()
+    // 没有它，接到 Grafana/Jaeger 后所有数据会显示成 unknown_service
+    .ConfigureResource(resource => resource.AddService("ZipperAIQQ.Server"))
+    .WithTracing(tracing =>
+    {
+        tracing.AddSource(AgentTelemetry.SourceName)
+               .AddHttpClientInstrumentation();
+        if (otelConsole)
+        {
+            tracing.AddConsoleExporter();
+        }
+    });
 
 var app = builder.Build();
 
