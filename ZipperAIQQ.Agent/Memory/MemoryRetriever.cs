@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using Serilog;
 using ZipperAIQQ.Agent.Embedding;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Metrics;
 
 namespace ZipperAIQQ.Agent.Memory;
 
@@ -26,22 +28,26 @@ public sealed class MemoryRetriever
     private readonly IEmbeddingService _embedding;
     private readonly IEmbeddingStore _vectors;
     private readonly IMessageStore _messages;
+    private readonly IMetricsStore _metrics;
     private readonly ILogger _logger;
 
     public MemoryRetriever(
         IEmbeddingService embedding,
         IEmbeddingStore vectors,
         IMessageStore messages,
+        IMetricsStore metrics,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(embedding);
         ArgumentNullException.ThrowIfNull(vectors);
         ArgumentNullException.ThrowIfNull(messages);
+        ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(logger);
 
         _embedding = embedding;
         _vectors = vectors;
         _messages = messages;
+        _metrics = metrics;
         _logger = logger;
     }
 
@@ -59,6 +65,7 @@ public sealed class MemoryRetriever
             return 0;
         }
 
+        var sw = Stopwatch.StartNew();
         var count = 0;
         foreach (var item in pending)
         {
@@ -73,6 +80,13 @@ public sealed class MemoryRetriever
                 // 单条失败不该让整批停下
                 _logger.Warning(ex, "消息 #{Id} 向量化失败", item.MessageId);
             }
+        }
+        sw.Stop();
+
+        // 按**批次**记一行：一次补算可能几十上百条，按条记会把表迅速撑爆
+        if (count > 0)
+        {
+            await RecordAsync(sessionId, "embedding.backfill", sw.Elapsed.TotalMilliseconds).ConfigureAwait(false);
         }
 
         _logger.Debug("会话 {SessionId} 补算向量 {Count} 条", sessionId, count);
@@ -98,6 +112,26 @@ public sealed class MemoryRetriever
             return [];
         }
 
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            return await RetrieveCoreAsync(sessionId, query, topK, excludeRecentCount, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            // 检索失败也要记耗时 —— 「检索慢了」本身就是最该被看见的信号
+            sw.Stop();
+            await RecordAsync(sessionId, "retrieval", sw.Elapsed.TotalMilliseconds).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<IReadOnlyList<StoredMessage>> RetrieveCoreAsync(
+        string sessionId,
+        string query,
+        int topK,
+        int excludeRecentCount,
+        CancellationToken ct)
+    {
         var queryVector = _embedding.Embed(query);
 
         // 多取一些，因为要剔除已经在热窗里的
@@ -149,4 +183,19 @@ public sealed class MemoryRetriever
         IReadOnlyList<long> ids,
         CancellationToken ct) =>
         _messages.GetByIdsAsync(sessionId, ids, ct);
+
+    /// <summary>记一行调用指标；失败就当观测丢了一次，绝不影响主流程。</summary>
+    private async Task RecordAsync(string sessionId, string kind, double elapsedMs)
+    {
+        try
+        {
+            await _metrics
+                .RecordAsync(new MetricEntry(sessionId, kind, elapsedMs, null, null))
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug(ex, "指标记录失败：{Kind}", kind);
+        }
+    }
 }
