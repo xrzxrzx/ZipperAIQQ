@@ -9,6 +9,8 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Metrics;
+using ZipperAIQQ.Storage.Personas;
 using ZipperAIQQ.Storage.Summaries;
 
 namespace ZipperAIQQ.Agent;
@@ -32,45 +34,40 @@ public sealed class ChatAgent : IChatAgent
     private readonly MemoryRetriever _retriever;
     private readonly SummaryService _summaries;
     private readonly ISummaryStore _summaryStore;
+    private readonly IPersonaStore _personas;
+    private readonly IMetricsStore _metrics;
     private readonly ChatAgentOptions _options;
     private readonly ILogger _logger;
 
     private readonly List<ChatMessage> _history = new();
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    public ChatAgent(
-        string sessionId,
-        IChatClient client,
-        IMessageChannel channel,
-        IMessageStore store,
-        FaceCatalog faces,
-        MemoryRetriever retriever,
-        SummaryService summaries,
-        ISummaryStore summaryStore,
-        ChatAgentOptions options,
-        ILogger logger)
+    /// <summary>
+    /// 人设锚点（D4 的第 1 条 system）：实例存活期间**永不改变**。
+    /// </summary>
+    /// <remarks>
+    /// 它保证「最初设定」始终在上下文最前方；后面那条会随轮次刷新的重注入
+    /// 负责「让模型最近又看到一次」。两条各司其职，缺一个都会慢慢漂。
+    /// </remarks>
+    private string? _anchorPersona;
+
+    public ChatAgent(string sessionId, ChatAgentDependencies deps)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
-        ArgumentNullException.ThrowIfNull(client);
-        ArgumentNullException.ThrowIfNull(channel);
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(faces);
-        ArgumentNullException.ThrowIfNull(retriever);
-        ArgumentNullException.ThrowIfNull(summaries);
-        ArgumentNullException.ThrowIfNull(summaryStore);
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(deps);
 
         SessionId = sessionId;
-        _client = client;
-        _channel = channel;
-        _store = store;
-        _faces = faces;
-        _retriever = retriever;
-        _summaries = summaries;
-        _summaryStore = summaryStore;
-        _options = options;
-        _logger = logger;
+        _client = deps.Client;
+        _channel = deps.Channel;
+        _store = deps.Store;
+        _faces = deps.Faces;
+        _retriever = deps.Retriever;
+        _summaries = deps.Summaries;
+        _summaryStore = deps.SummaryStore;
+        _personas = deps.Personas;
+        _metrics = deps.Metrics;
+        _options = deps.Options;
+        _logger = deps.Logger;
     }
 
     /// <summary>机器人自身标识（M1-B 用固定值；接真 self_id 后替换）。</summary>
@@ -155,23 +152,39 @@ public sealed class ChatAgent : IChatAgent
         {
             _logger.Warning(ex, "检索失败（会话 {SessionId}），本轮不带长期记忆", SessionId);
         }
-        var messages = new List<ChatMessage>
-        {
-            new(ChatRole.System, _options.SystemPrompt),
-        };
+        // ── 人设（D4/D12）：会话级覆盖全局，完全替换而非叠加 ──
+        var persona = await _personas
+            .GetAsync(request.Chat.Platform, request.Chat.Type.ToString(), request.Chat.Id, ct)
+            .ConfigureAwait(false);
 
-        // 温层：更早对话的摘要。放在历史之前、人设之后 ——
-        // 它不是人设（D4 的永久锚点仍是第一条），而是一段"背景交代"。
+        // 锚点：首次锁定后**永不改动**，保证「最初设定」一直在最前方
+        _anchorPersona ??= persona.Content;
+
+        // 重注入内容 = 人设 + 摘要。
+        // 摘要并进这里而不是单独占一条 system —— D4 要求人设 system 恰好两条，
+        // 多一条会让人分不清哪个才是"角色设定"。
         var summary = await _summaryStore.GetAsync(SessionId, ct).ConfigureAwait(false);
+        var reinject = new StringBuilder(persona.Content);
         if (summary is not null && !string.IsNullOrWhiteSpace(summary.Summary))
         {
-            messages.Add(new ChatMessage(
-                ChatRole.System,
-                $"[之前对话的摘要（仅供理解上下文，不必逐条回应）]\n{summary.Summary}"));
+            reinject.AppendLine().AppendLine()
+                    .AppendLine("【之前对话的摘要（供理解上下文，不必逐条回应）】")
+                    .Append(summary.Summary);
             activity?.SetTag("memory.summary", "yes");
         }
 
+        var messages = new List<ChatMessage>
+        {
+            // ① 锚点 system：永远第一条
+            new(ChatRole.System, _anchorPersona),
+        };
+
         messages.AddRange(_history);
+
+        // ② 重注入 system：紧邻当前消息之前。
+        //    位置很关键 —— 放在历史前面就退化成"和锚点差不多远"，
+        //    起不到「最近又提醒一次」的作用。
+        messages.Add(new ChatMessage(ChatRole.System, reinject.ToString()));
 
         // 时间注入（FR-15）：每条消息带时间，且每次都给发送者双名
         var memoryBlock = BuildMemoryBlock(related);
@@ -206,6 +219,17 @@ public sealed class ChatAgent : IChatAgent
             llmSw.Stop();
             llmActivity?.SetTag("llm.elapsed.ms", llmSw.ElapsedMilliseconds);
             llmActivity?.SetStatus(ActivityStatusCode.Ok);
+
+            // token 用量与耗时落库 —— 客户端要能看「哪类调用最慢 / token 烧多快」
+            await _metrics.RecordAsync(new MetricEntry(
+                SessionId,
+                "llm.call",
+                llmSw.Elapsed.TotalMilliseconds,
+                response.Usage?.InputTokenCount,
+                response.Usage?.OutputTokenCount), ct).ConfigureAwait(false);
+
+            llmActivity?.SetTag("llm.input.tokens", response.Usage?.InputTokenCount);
+            llmActivity?.SetTag("llm.output.tokens", response.Usage?.OutputTokenCount);
         }
         catch (Exception ex)
         {

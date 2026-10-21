@@ -33,6 +33,9 @@ public sealed record ServerOptions
     public string FacesPath { get; init; } = "./config/faces.qq.json";
     public string EmbeddingModelDirectory { get; init; } = "./temp/bge-small-zh-v1.5";
 
+    /// <summary>全局人设文件（Markdown）。会话级人设可以在运行时覆盖它。</summary>
+    public string PersonaPath { get; init; } = "./config/persona.md";
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;
@@ -101,6 +104,7 @@ public sealed record ServerOptions
             DatabasePath = Optional("ZIPPER_DB") ?? "./data/zipperaiqq.db",
             FacesPath = Optional("ZIPPER_FACES") ?? "./config/faces.qq.json",
             EmbeddingModelDirectory = Optional("ZIPPER_EMBEDDING_MODEL") ?? "./temp/bge-small-zh-v1.5",
+            PersonaPath = Optional("ZIPPER_PERSONA") ?? "./config/persona.md",
 
             SendIntervalMs = IntOrDefault("ZIPPER_SEND_INTERVAL_MS", 300),
             MaxConsecutive = IntOrDefault("ZIPPER_MAX_CONSECUTIVE", 10),

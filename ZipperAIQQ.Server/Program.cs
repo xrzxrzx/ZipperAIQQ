@@ -5,6 +5,7 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Server.Composition;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Storage;
+using ZipperAIQQ.Storage.Metrics;
 
 // 中文日志在 GBK 代码页的控制台里会乱码（文件日志是 UTF-8，不受影响）
 try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
@@ -58,13 +59,14 @@ static async Task<int> RunAsync(HostApplicationBuilder builder, ServerOptions op
 
     var app = builder.Build();
 
-    LogStartupSummary(app.Services, options, databasePath);
+    await LogStartupSummaryAsync(app.Services, options, databasePath);
 
     await app.RunAsync();
     return 0;
 }
 
-static void LogStartupSummary(IServiceProvider services, ServerOptions options, string databasePath)
+static async Task LogStartupSummaryAsync(
+    IServiceProvider services, ServerOptions options, string databasePath)
 {
     var faces = services.GetRequiredService<FaceCatalog>();
     var mode = options.Whitelist.Count > 0 ? "Whitelist" : "Blacklist（空=全放行）";
@@ -75,5 +77,23 @@ static void LogStartupSummary(IServiceProvider services, ServerOptions options, 
     Log.Information("发送限速={Interval} ms，连发 {Max} 条后冷却 {Cooldown} ms",
         options.SendIntervalMs, options.MaxConsecutive, options.CooldownMs);
     Log.Information("表情目录={Count} 个（{Path}）", faces.Count, options.FacesPath);
+    Log.Information("人设文件={Path}", Path.GetFullPath(options.PersonaPath));
     Log.Information("向量模型目录={Dir}", options.EmbeddingModelDirectory);
+
+    // 历史指标：让「上次跑得快不快」一开机就能看见，而不用等客户端接上
+    var metrics = services.GetRequiredService<IMetricsStore>();
+    var summary = await metrics.GetSummaryAsync(windowHours: 0).ConfigureAwait(false);
+    if (summary.Count == 0)
+    {
+        Log.Information("调用指标：暂无数据");
+        return;
+    }
+
+    Log.Information("调用指标（按平均耗时降序）：");
+    foreach (var item in summary)
+    {
+        Log.Information("  {Kind,-22} {Count,6} 次  平均 {Avg,8:F1}ms  范围 {Min:F1}~{Max:F1}ms  token {In}/{Out}",
+            item.Kind, item.Count, item.AvgMs, item.MinMs, item.MaxMs,
+            item.TotalInputTokens, item.TotalOutputTokens);
+    }
 }
