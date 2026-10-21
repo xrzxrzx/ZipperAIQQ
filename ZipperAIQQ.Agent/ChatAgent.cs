@@ -93,7 +93,7 @@ public sealed class ChatAgent : IChatAgent
 
         // 时间注入（FR-15）：每条消息带时间，且每次都给发送者双名
         var userLine = $"[{BeijingTime.Format(request.Now)}] {request.Sender.DisplayName}：{RenderContent(request)}";
-        messages.Add(new ChatMessage(ChatRole.User, userLine));
+        messages.Add(BuildUserMessage(request, userLine));
 
         // send_message 绑定当前会话（模型无法指定发给谁）
         var sent = 0;
@@ -186,8 +186,59 @@ public sealed class ChatAgent : IChatAgent
         {
             _history.RemoveRange(0, _history.Count - max);
         }
+        }
+
+    /// <summary>
+    /// 构建发给模型的当前消息。**有图片时走多模态**（deepseek-flash 支持视觉输入）。
+    /// </summary>
+    /// <remarks>
+    /// 只对**当前消息**这样做：历史里的图片仍是 <c>[图片]</c> 占位。
+    /// 否则每轮都要把所有历史图片重传一遍，token 会迅速烧光，
+    /// 而且旧图对当前这轮几乎没有价值。
+    /// </remarks>
+    private ChatMessage BuildUserMessage(AgentRunRequest request, string textVersion)
+    {
+        var hasImage = request.Segments.Any(s => s is ImageSegment { Url: not null });
+        if (!hasImage)
+        {
+            return new ChatMessage(ChatRole.User, textVersion);
+        }
+
+        var contents = new List<AIContent>
+        {
+            new TextContent($"[{BeijingTime.Format(request.Now)}] {request.Sender.DisplayName}："),
+        };
+
+        foreach (var segment in request.Segments)
+        {
+            switch (segment)
+            {
+                case TextSegment text:
+                    contents.Add(new TextContent(text.Text));
+                    break;
+
+                case FaceSegment face:
+                    contents.Add(new TextContent(RenderFace(face)));
+                    break;
+
+                case ImageSegment image when Uri.TryCreate(image.Url, UriKind.Absolute, out var uri):
+                    contents.Add(new UriContent(uri, "image/jpeg"));
+                    break;
+
+                case ImageSegment:
+                    contents.Add(new TextContent("[图片]"));
+                    break;
+
+                case MentionSegment mention:
+                    contents.Add(new TextContent("@" + mention.UserId + " "));
+                    break;
+            }
+        }
+
+        return new ChatMessage(ChatRole.User, contents);
     }
-/// <summary>
+
+    /// <summary>
     /// 把消息片段渲染成 AI 能读的文本（表情会变成 [微笑] 这类名字）。
     /// </summary>
     /// <remarks>
