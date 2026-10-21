@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -49,6 +49,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, MessagesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SessionsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, EmbeddingsTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, SummariesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -175,6 +176,27 @@ public sealed class DatabaseInitializer
         );
         CREATE INDEX IF NOT EXISTS IX_MessageEmbeddings_Session
             ON MessageEmbeddings (SessionId);
+        """;
+
+    /// <summary>
+    /// 会话摘要（M1-C 的「温层」）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 热窗只能覆盖最近几十条，再往前就丢了。全丢掉会让 AI「忘了你之前说过什么」，
+    /// 全部保留又会把上下文撑爆。摘要就是中间那层：**把旧对话压成一段话**。
+    /// </para>
+    /// <para>
+    /// <c>CoversUpToId</c> 记录「已经压到哪条消息」，避免重复压缩，也避免漏压。
+    /// </para>
+    /// </remarks>
+    private const string SummariesTable = """
+        CREATE TABLE IF NOT EXISTS SessionSummaries (
+            SessionId    TEXT    NOT NULL PRIMARY KEY,
+            Summary      TEXT    NOT NULL,
+            CoversUpToId INTEGER NOT NULL,
+            UpdatedAtMs  INTEGER NOT NULL
+        );
         """;
 
     private const string SchemaVersionTable = """

@@ -9,6 +9,7 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Summaries;
 
 namespace ZipperAIQQ.Agent;
 
@@ -29,6 +30,8 @@ public sealed class ChatAgent : IChatAgent
     private readonly IMessageStore _store;
     private readonly FaceCatalog _faces;
     private readonly MemoryRetriever _retriever;
+    private readonly SummaryService _summaries;
+    private readonly ISummaryStore _summaryStore;
     private readonly ChatAgentOptions _options;
     private readonly ILogger _logger;
 
@@ -42,6 +45,8 @@ public sealed class ChatAgent : IChatAgent
         IMessageStore store,
         FaceCatalog faces,
         MemoryRetriever retriever,
+        SummaryService summaries,
+        ISummaryStore summaryStore,
         ChatAgentOptions options,
         ILogger logger)
     {
@@ -51,6 +56,8 @@ public sealed class ChatAgent : IChatAgent
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(faces);
         ArgumentNullException.ThrowIfNull(retriever);
+        ArgumentNullException.ThrowIfNull(summaries);
+        ArgumentNullException.ThrowIfNull(summaryStore);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -60,6 +67,8 @@ public sealed class ChatAgent : IChatAgent
         _store = store;
         _faces = faces;
         _retriever = retriever;
+        _summaries = summaries;
+        _summaryStore = summaryStore;
         _options = options;
         _logger = logger;
     }
@@ -81,7 +90,48 @@ public sealed class ChatAgent : IChatAgent
         finally
         {
             _lock.Release();
+            TriggerCompressionInBackground();
         }
+    }
+
+    private int _compressing;
+
+    /// <summary>
+    /// 后台尝试压缩摘要。
+    /// </summary>
+    /// <remarks>
+    /// **不 await**：压缩要调一次模型（1~2 秒），放在回复路径上会让人等两倍时间。
+    /// 没到阈值时它自己会立刻返回，几乎零成本。
+    /// <para>
+    /// **用独立 CancellationToken**：不能用请求的 ct，
+    /// 否则请求一结束压缩就被取消，摘要永远压不出来。
+    /// </para>
+    /// </remarks>
+    private void TriggerCompressionInBackground()
+    {
+        // 同一实例同时只跑一个压缩任务
+        if (Interlocked.CompareExchange(ref _compressing, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _summaries
+                    .TryCompressAsync(SessionId, _options.HotWindowMessages, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning(ex, "摘要压缩失败（会话 {SessionId}）", SessionId);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _compressing, 0);
+            }
+        }, CancellationToken.None);
     }
 
     private async Task<AgentRunResult> RunCoreAsync(AgentRunRequest request, CancellationToken ct)
@@ -109,6 +159,18 @@ public sealed class ChatAgent : IChatAgent
         {
             new(ChatRole.System, _options.SystemPrompt),
         };
+
+        // 温层：更早对话的摘要。放在历史之前、人设之后 ——
+        // 它不是人设（D4 的永久锚点仍是第一条），而是一段"背景交代"。
+        var summary = await _summaryStore.GetAsync(SessionId, ct).ConfigureAwait(false);
+        if (summary is not null && !string.IsNullOrWhiteSpace(summary.Summary))
+        {
+            messages.Add(new ChatMessage(
+                ChatRole.System,
+                $"[之前对话的摘要（仅供理解上下文，不必逐条回应）]\n{summary.Summary}"));
+            activity?.SetTag("memory.summary", "yes");
+        }
+
         messages.AddRange(_history);
 
         // 时间注入（FR-15）：每条消息带时间，且每次都给发送者双名

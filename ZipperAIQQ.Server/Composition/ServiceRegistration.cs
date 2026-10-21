@@ -15,6 +15,7 @@ using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Storage.Database;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Summaries;
 using ZipperAIQQ.Transport.Client;
 
 namespace ZipperAIQQ.Server.Composition;
@@ -43,6 +44,7 @@ public static class ServiceRegistration
             new SqliteDatabase(connectionString, sp.GetRequiredService<ILogger>()));
         services.AddSingleton<IMessageStore, SqliteMessageStore>();
         services.AddSingleton<IEmbeddingStore, SqliteEmbeddingStore>();
+        services.AddSingleton<ISummaryStore, SqliteSummaryStore>();
 
         // ── 接收过滤：白名单空 = 全放行仅在"没配置白名单"时启用，避免默认什么都收 ──
         services.AddSingleton<IChatFilter>(_ => new ChatFilter(BuildFilterOptions(options)));
@@ -84,6 +86,13 @@ public static class ServiceRegistration
             new LlmEndpoint("primary", options.LlmBaseUrl, options.LlmModel, options.LlmApiKind),
             options.LlmApiKey));
 
+        // ── 摘要（温层）：在后台把滑出热窗的旧对话压成一段话 ──
+        services.AddSingleton(sp => new SummaryService(
+            sp.GetRequiredService<IChatClient>(),
+            sp.GetRequiredService<IMessageStore>(),
+            sp.GetRequiredService<ISummaryStore>(),
+            sp.GetRequiredService<ILogger>()));
+
         // ── Agent 池：一个聊天一个实例（D9）──
         services.AddSingleton<IChatAgentPool>(sp =>
         {
@@ -92,11 +101,14 @@ public static class ServiceRegistration
             var store = sp.GetRequiredService<IMessageStore>();
             var faces = sp.GetRequiredService<FaceCatalog>();
             var retriever = sp.GetRequiredService<MemoryRetriever>();
+            var summaries = sp.GetRequiredService<SummaryService>();
+            var summaryStore = sp.GetRequiredService<ISummaryStore>();
             var logger = sp.GetRequiredService<ILogger>();
             var agentOptions = BuildAgentOptions();
 
             return new ChatAgentPool(chat => new ChatAgent(
-                chat.SessionId, client, channel, store, faces, retriever, agentOptions, logger));
+                chat.SessionId, client, channel, store, faces, retriever,
+                summaries, summaryStore, agentOptions, logger));
         });
 
         // ── 消息路由 ──
