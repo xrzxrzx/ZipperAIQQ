@@ -15,6 +15,7 @@ using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Api;
 using ZipperAIQQ.Server.Api.Handlers;
+using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Server.Scheduler;
@@ -73,6 +74,20 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, GetAuditAction>();
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
+
+        // ── M2-C：命令系统（新增命令 = 新增一个类 + 这里加一行）──
+        services.AddSingleton<ICommand, HelpCommand>();
+        services.AddSingleton<ICommand, StatusCommand>();
+        services.AddSingleton<ICommand, PersonaCommand>();
+        services.AddSingleton<ICommand, RememberCommand>();
+        services.AddSingleton<ICommand, SearchCommand>();
+        services.AddSingleton<ICommand, CompactCommand>();
+        services.AddSingleton<ICommand, ResetCommand>();
+        services.AddSingleton<ICommand, ForgetCommand>();
+        services.AddSingleton<ICommand, ExportCommand>();
+        services.AddSingleton<ICommand, PurgeCommand>();
+        services.AddSingleton<ICommand, ModeCommand>();
+        services.AddSingleton<CommandRouter>();
 
         // ── 权限与工作区（M1-E / FR-6 / FR-7）──
         // PermissionGate 构造时就校验硬底线：越界配置直接拒绝启动（FR-6.6）

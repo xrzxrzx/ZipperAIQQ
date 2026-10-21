@@ -43,6 +43,14 @@ public interface IChatAgent
     string SessionId { get; }
 
     Task<AgentRunResult> RunAsync(AgentRunRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// 清空内存里的上下文历史（<c>/reset</c>）。**日志不动**。
+    /// </summary>
+    /// <remarks>
+    /// 清完还要把"已从库恢复"的标记置上 —— 否则下一次对话会重新把历史捞回来，等于没清。
+    /// </remarks>
+    void ResetHistory();
 }
 
 /// <summary>按会话取/建 agent 实例。</summary>

@@ -22,6 +22,8 @@ public sealed class MessageRouter : BackgroundService
     private readonly IMessageStore _store;
     private readonly IChatAgentPool _agents;
     private readonly MemoryRetriever _retriever;
+    private readonly Commands.CommandRouter _commands;
+    private readonly Agent.Security.IRoleResolver _roles;
     private readonly ILogger _logger;
 
     public MessageRouter(
@@ -29,18 +31,24 @@ public sealed class MessageRouter : BackgroundService
         IMessageStore store,
         IChatAgentPool agents,
         MemoryRetriever retriever,
+        Commands.CommandRouter commands,
+        Agent.Security.IRoleResolver roles,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(agents);
         ArgumentNullException.ThrowIfNull(retriever);
+        ArgumentNullException.ThrowIfNull(commands);
+        ArgumentNullException.ThrowIfNull(roles);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
         _store = store;
         _agents = agents;
         _retriever = retriever;
+        _commands = commands;
+        _roles = roles;
         _logger = logger;
     }
 
@@ -93,6 +101,14 @@ public sealed class MessageRouter : BackgroundService
     {
         // ① 先落库（无论是否回复，历史都要留）
         var id = await _store.AppendAsync(msg, ct).ConfigureAwait(false);
+
+        // ② 命令优先（FR-9.1）：命中就执行并回复，**不进 agent**
+        //    没命中（比如 "/foo" 这种普通文本）继续走原流程，用户无感知（9.2）
+        var role = _roles.Resolve(msg.Sender.UserId);
+        if (await _commands.TryExecuteAsync(msg, role, ct).ConfigureAwait(false))
+        {
+            return;
+        }
 
         // ② 补算向量（M1-C 检索的前提）。
         //    失败不影响本轮回复 —— 顶多是这条以后检索不到，不能因为向量化失败就不回话。

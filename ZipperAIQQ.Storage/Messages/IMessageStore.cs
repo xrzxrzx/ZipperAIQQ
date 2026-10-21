@@ -28,6 +28,19 @@ public interface IMessageStore
         CancellationToken ct = default);
 
     /// <summary>
+    /// 追加一条**命令响应**（<c>Direction=2</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 与 AI 发言分开存（FR-9.4）：命令结果不能伪装成"AI 自己说的话"，
+    /// 否则后续对话里模型会误以为那是它说的。
+    /// </remarks>
+    Task<long> AppendCommandAsync(
+        OutgoingMessage message,
+        string senderUserId,
+        DateTimeOffset sentAt,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// 取某会话最近 <paramref name="limit"/> 条消息，**按时间正序**返回。
     /// </summary>
     Task<IReadOnlyList<StoredMessage>> GetRecentAsync(string sessionId, int limit, CancellationToken ct = default);
@@ -49,6 +62,12 @@ public interface IMessageStore
 
     /// <summary>会话概览（按最后消息时间倒序），供 M2 客户端列出"当前在接收的聊天"。</summary>
     Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(int limit, CancellationToken ct = default);
+
+    /// <summary>
+    /// 删除某会话的全部消息（<c>/purge</c>，**不可恢复**）。
+    /// </summary>
+    /// <returns>删除的条数。</returns>
+    Task<int> PurgeAsync(string sessionId, CancellationToken ct = default);
 }
 
 /// <summary>一个会话的概览。</summary>

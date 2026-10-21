@@ -92,6 +92,32 @@ public sealed class ChatAgent : IChatAgent
 
     public string SessionId { get; }
 
+    /// <summary>
+    /// 清空内存历史（<c>/reset</c>）：日志仍在库里，但本轮之后不再自动恢复。
+    /// </summary>
+    public void ResetHistory()
+    {
+        // 与 RunAsync 用同一把锁：避免清到一半又被追加
+        if (!_lock.Wait(TimeSpan.FromSeconds(5)))
+        {
+            _logger.Warning("重置历史超时（会话 {SessionId}），跳过", SessionId);
+            return;
+        }
+
+        try
+        {
+            _history.Clear();
+            // 关键：标记为"已加载"，否则下次对话会从库里再捞回来
+            _historyLoadTask = Task.CompletedTask;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        _logger.Information("会话 {SessionId} 上下文已重置", SessionId);
+    }
+
     public async Task<AgentRunResult> RunAsync(AgentRunRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -393,6 +419,13 @@ public sealed class ChatAgent : IChatAgent
     /// <summary>把入库消息还原成给模型看的历史条目（格式与实时消息保持一致）。</summary>
     private static ChatMessage ToHistoryMessage(StoredMessage stored)
     {
+        // 命令响应单独标注：它**不是 AI 说的话**（FR-9.4），
+        // 不标注的话模型会把「/status 的输出」当成自己之前的发言。
+        if (stored.IsCommand)
+        {
+            return new ChatMessage(ChatRole.User, $"[命令结果] {stored.Message.PlainText}");
+        }
+
         var text =
             $"[{BeijingTime.Format(stored.Message.OccurredAt)}] {stored.Message.Sender.DisplayName}：{stored.Message.PlainText}";
 
