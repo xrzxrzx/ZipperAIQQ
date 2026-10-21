@@ -4,6 +4,7 @@ using Serilog;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
+using System.Text;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
@@ -91,7 +92,7 @@ public sealed class ChatAgent : IChatAgent
         messages.AddRange(_history);
 
         // 时间注入（FR-15）：每条消息带时间，且每次都给发送者双名
-        var userLine = $"[{BeijingTime.Format(request.Now)}] {request.Sender.DisplayName}：{request.UserText}";
+        var userLine = $"[{BeijingTime.Format(request.Now)}] {request.Sender.DisplayName}：{RenderContent(request)}";
         messages.Add(new ChatMessage(ChatRole.User, userLine));
 
         // send_message 绑定当前会话（模型无法指定发给谁）
@@ -185,5 +186,42 @@ public sealed class ChatAgent : IChatAgent
         {
             _history.RemoveRange(0, _history.Count - max);
         }
+    }
+/// <summary>
+    /// 把消息片段渲染成 AI 能读的文本（表情会变成 [微笑] 这类名字）。
+    /// </summary>
+    /// <remarks>
+    /// 不能直接用 PlainText —— 它只含文本段，表情会被静默丢掉，
+    /// 表现出来就是「AI 读不了表情」。
+    /// </remarks>
+    private string RenderContent(AgentRunRequest request)
+    {
+        if (request.Segments.Count == 0)
+        {
+            return request.UserText;
+        }
+
+        var sb = new StringBuilder();
+        foreach (var segment in request.Segments)
+        {
+            sb.Append(segment switch
+            {
+                TextSegment text => text.Text,
+                FaceSegment face => RenderFace(face),
+                ImageSegment => "[图片]",
+                MentionSegment mention => "@" + mention.UserId + " ",
+                ReplySegment => string.Empty,
+                _ => string.Empty,
+            });
+        }
+
+        var rendered = sb.ToString().Trim();
+        return rendered.Length > 0 ? rendered : request.UserText;
+    }
+
+    private string RenderFace(FaceSegment face)
+    {
+        var entry = _faces.GetById(face.Id);
+        return entry is null ? "[表情]" : "[" + entry.Name + "]";
     }
 }

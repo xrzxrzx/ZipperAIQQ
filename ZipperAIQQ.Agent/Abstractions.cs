@@ -8,6 +8,14 @@ public sealed record AgentRunRequest
     public required ChatRef Chat { get; init; }
     public required SenderInfo Sender { get; init; }
     public required string UserText { get; init; }
+
+    /// <summary>
+    /// 原始消息片段（含表情/图片等）。
+    /// </summary>
+    /// <remarks>
+    /// UserText 只是纯文本，**看不到表情**；渲染上下文时要看这个。
+    /// </remarks>
+    public IReadOnlyList<MessageSegment> Segments { get; init; } = [];
     public required DateTimeOffset Now { get; init; }
 }
 
