@@ -2,11 +2,17 @@ using ZipperAIQQ.Agent.Llm;
 
 namespace ZipperAIQQ.Agent;
 
-/// <summary>Agent 的运行时选项（M1-B 最小集；人设/预取等在 M1-C/D 扩展）。</summary>
+/// <summary>Agent 的运行时选项。</summary>
 public sealed record ChatAgentOptions
 {
-    /// <summary>system 提示（M1-B 先用固定文本，M1-D 换成可配置人设）。</summary>
-    public required string SystemPrompt { get; init; }
+    /// <summary>
+    /// 人设缺失时的兜底 system 文本。
+    /// </summary>
+    /// <remarks>
+    /// M1-D 起人设改由 <see cref="Storage.Personas.IPersonaStore"/> 提供（会话级可覆盖）。
+    /// 这里只在**全局人设文件也读不到**时兜底，保证不会出现"没有 system"的空壳对话。
+    /// </remarks>
+    public string? FallbackSystemPrompt { get; init; }
 
     /// <summary>单次 send_message 最多发几条（FR-19.2）。</summary>
     public int MaxMessagesPerCall { get; init; } = 5;

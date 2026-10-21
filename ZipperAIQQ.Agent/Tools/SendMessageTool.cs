@@ -2,10 +2,10 @@ using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
-using System.Text.RegularExpressions;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Metrics;
 
 namespace ZipperAIQQ.Agent.Tools;
 
@@ -29,11 +29,13 @@ public static class SendMessageTool
         int maxMessages,
         int minIntervalMs,
         FaceCatalog faces,
+        IMetricsStore metrics,
         Action<int> onSent)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(chat);
+        ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(onSent);
 
         var cap = Math.Max(1, maxMessages);
@@ -59,6 +61,8 @@ public static class SendMessageTool
                 toolActivity?.SetTag("message.count", toSend.Length);
                 toolActivity?.SetTag("min.interval.ms", interval);
 
+                var sw = Stopwatch.StartNew();
+
                 foreach (var text in toSend)
                 {
                     // 最小发送间隔（防风控）：第一条不等
@@ -70,7 +74,7 @@ public static class SendMessageTool
                     var outgoing = new OutgoingMessage
                     {
                         Chat = chat,
-                        Segments = ParseContent(text, faces),
+                        Segments = MessageContentParser.Parse(text, faces),
                     };
 
                     try
@@ -96,6 +100,9 @@ public static class SendMessageTool
                     }
                 }
 
+                sw.Stop();
+                await RecordMetricsAsync(metrics, chat.SessionId, sw.Elapsed.TotalMilliseconds).ConfigureAwait(false);
+
                 if (sent > 0)
                 {
                     onSent(sent);
@@ -111,58 +118,26 @@ public static class SendMessageTool
                 $"可以一次发送多条（最多 {cap} 条），用于模拟真人把一句话分几条发。" +
                 "不需要也不能指定发给谁 —— 会话是固定的。");
     }
-/// <summary>
-    /// 匹配 [表情:名字] 或裸写的 [名字]（后者更自然，模型经常这么写）。
-    /// 裸写时**只有能查到表情表的名字才转换** —— 否则 [图片][链接] 这类普通方括号会被误伤。
-    /// </summary>
-    private static readonly Regex FaceToken = new(@"\[(?:表情:)?([^\]]+)\]", RegexOptions.Compiled);
 
     /// <summary>
-    /// 把文本里的 [表情:名称] 或 [名称] 解析成真实消息段。
+    /// 记录一次工具调用的耗时。
     /// </summary>
     /// <remarks>
-    /// 查不到的**原样保留为文本** —— 静默吞掉会让 AI 以为发出去了，实际对方什么都没看到。
+    /// 一次调用可能发多条消息，所以按**调用**记一行：
+    /// 按条记会让表迅速膨胀，而「工具调用慢在哪」本来就该按调用看。
+    /// 指标失败不影响发送结果 —— 消息已经发出去了。
     /// </remarks>
-    private static List<MessageSegment> ParseContent(string text, FaceCatalog catalog)
+    private static async Task RecordMetricsAsync(IMetricsStore metrics, string sessionId, double elapsedMs)
     {
-        var result = new List<MessageSegment>();
-        var pos = 0;
-
-        foreach (Match m in FaceToken.Matches(text))
+        try
         {
-            if (m.Index > pos)
-            {
-                result.Add(new TextSegment(text[pos..m.Index]));
-            }
-
-            var name = m.Groups[1].Value.Trim();
-            var entry = catalog.GetByName(name);
-
-            if (entry is null)
-            {
-                result.Add(new TextSegment(m.Value));
-            }
-            else if (entry.Kind == "system" && !string.IsNullOrEmpty(entry.Id))
-            {
-                result.Add(new FaceSegment(entry.Id));
-            }
-            else if (!string.IsNullOrEmpty(entry.File))
-            {
-                result.Add(new ImageSegment(entry.File, null));
-            }
-            else
-            {
-                result.Add(new TextSegment(m.Value));
-            }
-
-            pos = m.Index + m.Length;
+            await metrics
+                .RecordAsync(new MetricEntry(sessionId, "tool.send_message", elapsedMs, null, null))
+                .ConfigureAwait(false);
         }
-
-        if (pos < text.Length)
+        catch
         {
-            result.Add(new TextSegment(text[pos..]));
+            // 指标是观测，不是功能；失败不上抛
         }
-
-        return result.Count > 0 ? result : [new TextSegment(text)];
     }
 }

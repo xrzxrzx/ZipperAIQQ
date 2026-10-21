@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 7;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -50,6 +50,9 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, SessionsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, EmbeddingsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SummariesTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, PersonasTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, CallMetricsTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, ScheduleTasksTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -65,19 +68,42 @@ public sealed class DatabaseInitializer
             // 已迁移过
         }
 
-        // 版本行只写一次；已有则不动
-        await using (var cmd = conn.CreateCommand())
+        // 版本记录必须**与真实 schema 一致**：这里每次都核对，而不是"只写一次"。
+        //
+        // 旧写法 `INSERT ... WHERE NOT EXISTS` 只在空表时写 → 之后永远停在第一次的值，
+        // 而日志里的 v6 是从常量打印的 —— 表里写着 v1、日志说 v6，等于多了一份对不上的真相。
+        var recorded = await ReadSchemaVersionAsync(conn, ct).ConfigureAwait(false);
+
+        if (recorded is null)
         {
-            cmd.CommandText = """
-                INSERT INTO SchemaVersion (Version)
-                SELECT @version
-                WHERE NOT EXISTS (SELECT 1 FROM SchemaVersion);
-                """;
-            cmd.Parameters.AddWithValue("@version", CurrentSchemaVersion);
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            await using var insert = conn.CreateCommand();
+            insert.CommandText = "INSERT INTO SchemaVersion (Version) VALUES (@version);";
+            insert.Parameters.AddWithValue("@version", CurrentSchemaVersion);
+            await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            _logger.Information("schema 版本记录初始化：v{Version}", CurrentSchemaVersion);
+        }
+        else if (recorded.Value != CurrentSchemaVersion)
+        {
+            await using var update = conn.CreateCommand();
+            update.CommandText = "UPDATE SchemaVersion SET Version = @version;";
+            update.Parameters.AddWithValue("@version", CurrentSchemaVersion);
+            await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            _logger.Warning(
+                "schema 版本记录不一致：记录 v{Recorded} → 实际 v{Current}，已修正",
+                recorded.Value, CurrentSchemaVersion);
         }
 
         _logger.Information("数据库就绪（schema v{SchemaVersion}）", CurrentSchemaVersion);
+    }
+
+    /// <summary>读取表里记录的 schema 版本；没有记录时返回 <c>null</c>。</summary>
+    private static async Task<long?> ReadSchemaVersionAsync(SqliteConnection conn, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Version FROM SchemaVersion LIMIT 1;";
+        var value = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+
+        return value is null or DBNull ? null : Convert.ToInt64(value);
     }
 
     private static async Task ExecuteAsync(SqliteConnection conn, string sql, CancellationToken ct)
@@ -199,9 +225,87 @@ public sealed class DatabaseInitializer
         );
         """;
 
+    /// <summary>
+    /// 会话级人设覆盖（M1-D）。
+    /// </summary>
+    /// <remarks>
+    /// 只存**被覆盖**的会话；没有记录的会话回落到全局人设。
+    /// 这样切人设是「写一行」，而不是「给每个会话都复制一份」。
+    /// </remarks>
+    private const string PersonasTable = """
+        CREATE TABLE IF NOT EXISTS SessionPersonas (
+            SessionId   TEXT NOT NULL PRIMARY KEY,
+            Name        TEXT NOT NULL,
+            Content     TEXT NOT NULL,
+            UpdatedAtMs INTEGER NOT NULL
+        );
+        """;
+
+/// <summary>
+    /// 调用指标（耗时与 token 用量）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 每类调用记一行：LLM 调用、工具执行、向量化、检索。
+    /// 客户端要做「平均耗时排序 / token 消耗」时直接查这张表。
+    /// </para>
+    /// <para>
+    /// **只记元数据，不记内容** —— 耗时和 token 数不敏感，消息正文才敏感。
+    /// </para>
+    /// </remarks>
+    private const string CallMetricsTable = """
+        CREATE TABLE IF NOT EXISTS CallMetrics (
+            Id           INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            SessionId    TEXT,
+            Kind         TEXT    NOT NULL,
+            ElapsedMs    REAL    NOT NULL,
+            InputTokens  INTEGER,
+            OutputTokens INTEGER,
+            CreatedAtMs  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS IX_CallMetrics_Kind_Time
+            ON CallMetrics (Kind, CreatedAtMs);
+        """;
+
     private const string SchemaVersionTable = """
         CREATE TABLE IF NOT EXISTS SchemaVersion (
             Version INTEGER NOT NULL
         );
+        """;
+
+    /// <summary>
+    /// 定时任务表（M1-F）：**数据库即队列**（FR-14 / D21）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 不另建内存队列 —— 那会引入「DB 与内存两份真相」。
+    /// 单实例部署下，带 <c>(Status, NextRunAtMs)</c> 索引的到期查询 &lt; 1ms。
+    /// </para>
+    /// <para>
+    /// <c>NextRunAtMs</c> 存 **UTC Unix 毫秒**；显示与解析一律北京时间（FR-15.3）。
+    /// </para>
+    /// </remarks>
+    private const string ScheduleTasksTable = """
+        CREATE TABLE IF NOT EXISTS ScheduleTasks (
+            Id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            SessionId       TEXT    NOT NULL,
+            Platform        TEXT    NOT NULL,
+            ChatType        INTEGER NOT NULL,
+            ChatId          TEXT    NOT NULL,
+            Content         TEXT    NOT NULL,
+            MentionUserId   TEXT,
+            RepeatKind      INTEGER NOT NULL,
+            IntervalMinutes INTEGER NOT NULL,
+            NextRunAtMs     INTEGER NOT NULL,
+            CreatedAtMs     INTEGER NOT NULL,
+            CreatedBy       TEXT    NOT NULL,
+            Status          INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_ScheduleTasks_Due
+            ON ScheduleTasks (Status, NextRunAtMs);
+
+        CREATE INDEX IF NOT EXISTS IX_ScheduleTasks_Session
+            ON ScheduleTasks (SessionId);
         """;
 }

@@ -6,15 +6,21 @@ using ZipperAIQQ.Agent.Embedding;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
+using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.NapCat;
 using ZipperAIQQ.Channel.Throttling;
+using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Orchestration;
+using ZipperAIQQ.Server.Scheduler;
 using ZipperAIQQ.Storage.Database;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Metrics;
+using ZipperAIQQ.Storage.Personas;
+using ZipperAIQQ.Storage.Schedules;
 using ZipperAIQQ.Storage.Summaries;
 using ZipperAIQQ.Transport.Client;
 
@@ -39,12 +45,23 @@ public static class ServiceRegistration
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
+        // ── 事件总线（Agent 事件：漂移 / 降级；M2 客户端接 WS 后订阅同一批事件）──
+        services.AddSingleton<IEventBus>(sp => new EventBus(sp.GetRequiredService<ILogger>()));
+
+        // ── 权限与工作区（M1-E / FR-6 / FR-7）──
+        // PermissionGate 构造时就校验硬底线：越界配置直接拒绝启动（FR-6.6）
+        services.AddSingleton<IPermissionGate>(_ => new PermissionGate());
+        services.AddSingleton<IRoleResolver>(_ => new ConfiguredRoleResolver(options.Admins, options.ToolWhitelist));
+        services.AddSingleton(_ => new WorkspacePathResolver(options.WorkspacePath));
+
         // ── 存储 ──
         services.AddSingleton<ISqliteDatabase>(sp =>
             new SqliteDatabase(connectionString, sp.GetRequiredService<ILogger>()));
         services.AddSingleton<IMessageStore, SqliteMessageStore>();
         services.AddSingleton<IEmbeddingStore, SqliteEmbeddingStore>();
         services.AddSingleton<ISummaryStore, SqliteSummaryStore>();
+        services.AddSingleton<IMetricsStore, SqliteMetricsStore>();
+        services.AddSingleton<IScheduleStore, SqliteScheduleStore>();
 
         // ── 接收过滤：白名单空 = 全放行仅在"没配置白名单"时启用，避免默认什么都收 ──
         services.AddSingleton<IChatFilter>(_ => new ChatFilter(BuildFilterOptions(options)));
@@ -76,10 +93,16 @@ public static class ServiceRegistration
             sp.GetRequiredService<IEmbeddingService>(),
             sp.GetRequiredService<IEmbeddingStore>(),
             sp.GetRequiredService<IMessageStore>(),
+            sp.GetRequiredService<IMetricsStore>(),
             sp.GetRequiredService<ILogger>()));
 
         // ── 表情目录 ──
         services.AddSingleton(_ => FaceCatalog.Load(Path.GetFullPath(options.FacesPath)));
+
+        // ── 人设（D4/D12）：全局来自文件，会话级可在运行时覆盖 ──
+        var globalPersona = LoadGlobalPersona(options.PersonaPath);
+        services.AddSingleton<IPersonaStore>(sp => new DefaultPersonaStore(
+            sp.GetRequiredService<ISqliteDatabase>(), globalPersona));
 
         // ── 模型 ──
         services.AddSingleton<IChatClient>(_ => ChatClientFactory.Create(
@@ -91,25 +114,38 @@ public static class ServiceRegistration
             sp.GetRequiredService<IChatClient>(),
             sp.GetRequiredService<IMessageStore>(),
             sp.GetRequiredService<ISummaryStore>(),
+            sp.GetRequiredService<IMetricsStore>(),
             sp.GetRequiredService<ILogger>()));
 
         // ── Agent 池：一个聊天一个实例（D9）──
         services.AddSingleton<IChatAgentPool>(sp =>
         {
-            var client = sp.GetRequiredService<IChatClient>();
-            var channel = sp.GetRequiredService<IMessageChannel>();
-            var store = sp.GetRequiredService<IMessageStore>();
-            var faces = sp.GetRequiredService<FaceCatalog>();
-            var retriever = sp.GetRequiredService<MemoryRetriever>();
-            var summaries = sp.GetRequiredService<SummaryService>();
-            var summaryStore = sp.GetRequiredService<ISummaryStore>();
-            var logger = sp.GetRequiredService<ILogger>();
-            var agentOptions = BuildAgentOptions();
+            var deps = new ChatAgentDependencies
+            {
+                Client = sp.GetRequiredService<IChatClient>(),
+                Channel = sp.GetRequiredService<IMessageChannel>(),
+                Store = sp.GetRequiredService<IMessageStore>(),
+                Faces = sp.GetRequiredService<FaceCatalog>(),
+                Retriever = sp.GetRequiredService<MemoryRetriever>(),
+                Summaries = sp.GetRequiredService<SummaryService>(),
+                SummaryStore = sp.GetRequiredService<ISummaryStore>(),
+                Personas = sp.GetRequiredService<IPersonaStore>(),
+                Metrics = sp.GetRequiredService<IMetricsStore>(),
+                Events = sp.GetRequiredService<IEventBus>(),
+                PermissionGate = sp.GetRequiredService<IPermissionGate>(),
+                Roles = sp.GetRequiredService<IRoleResolver>(),
+                Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
+                FileMaxBytes = options.FileMaxBytes,
+                Schedules = sp.GetRequiredService<IScheduleStore>(),
+                Options = BuildAgentOptions(),
+                Logger = sp.GetRequiredService<ILogger>(),
+            };
 
-            return new ChatAgentPool(chat => new ChatAgent(
-                chat.SessionId, client, channel, store, faces, retriever,
-                summaries, summaryStore, agentOptions, logger));
+            return new ChatAgentPool(chat => new ChatAgent(chat.SessionId, deps));
         });
+
+        // ── 定时任务轮询（FR-14：数据库即队列，1 分钟精度，启动时补执行）──
+        services.AddHostedService<SchedulePoller>();
 
         // ── 消息路由 ──
         services.AddHostedService<MessageRouter>();
@@ -126,11 +162,24 @@ public static class ServiceRegistration
 
     private static ChatAgentOptions BuildAgentOptions() => new()
     {
-        SystemPrompt =
-            "你是一个角色扮演助手，在聊天软件里和人对话。" +
-            "**你必须调用 send_message 工具来把话发出去** —— 直接输出文本对方是看不到的。" +
-            "可以一次发多条（像真人把一句话分几条发）。回复要简短自然。" +
-            "**发表情时**：先调用 list_faces 查询（不传关键词看常用，传关键词搜名称/标签），" +
-            "然后把 [表情:名字] 写进消息里。**单独一条只写 [表情:名字] 会作为大表情发送**（有特效）。",
+        // 人设由 IPersonaStore 提供；这里只是「连人设文件都读不到」时的兜底，
+        // 保证永远有一条 system，不会出现没有角色的空壳对话。
+        FallbackSystemPrompt = "你是一个聊天助手，用简短自然的中文回复。",
     };
+
+    /// <summary>读取全局人设文件；读不到就用兜底文案。</summary>
+    private static Persona LoadGlobalPersona(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (File.Exists(fullPath))
+        {
+            var content = File.ReadAllText(fullPath);
+            if (!string.IsNullOrWhiteSpace(content))
+            {
+                return new Persona(Path.GetFileNameWithoutExtension(fullPath), content.Trim());
+            }
+        }
+
+        return new Persona("fallback", "你是一个聊天助手，用简短自然的中文回复。");
+    }
 }

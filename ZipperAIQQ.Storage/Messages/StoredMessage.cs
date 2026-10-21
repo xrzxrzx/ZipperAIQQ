@@ -13,4 +13,5 @@ namespace ZipperAIQQ.Storage.Messages;
 public sealed record StoredMessage(
     long Id,
     IncomingMessage Message,
-    DateTimeOffset ReceivedAt);
+    DateTimeOffset ReceivedAt,
+    bool IsOutgoing);

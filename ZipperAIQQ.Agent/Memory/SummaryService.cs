@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.AI;
 using Serilog;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Metrics;
 using ZipperAIQQ.Storage.Summaries;
 
 namespace ZipperAIQQ.Agent.Memory;
@@ -45,22 +47,26 @@ public sealed class SummaryService
     private readonly IChatClient _client;
     private readonly IMessageStore _messages;
     private readonly ISummaryStore _summaries;
+    private readonly IMetricsStore _metrics;
     private readonly ILogger _logger;
 
     public SummaryService(
         IChatClient client,
         IMessageStore messages,
         ISummaryStore summaries,
+        IMetricsStore metrics,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(summaries);
+        ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(logger);
 
         _client = client;
         _messages = messages;
         _summaries = summaries;
+        _metrics = metrics;
         _logger = logger;
     }
 
@@ -97,7 +103,7 @@ public sealed class SummaryService
             return false;
         }
 
-        var newSummary = await SummarizeAsync(existing?.Summary, toCompress, ct).ConfigureAwait(false);
+        var newSummary = await SummarizeAsync(sessionId, existing?.Summary, toCompress, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(newSummary))
         {
             return false;
@@ -115,6 +121,7 @@ public sealed class SummaryService
     }
 
     private async Task<string?> SummarizeAsync(
+        string sessionId,
         string? previousSummary,
         IReadOnlyList<StoredMessage> messages,
         CancellationToken ct)
@@ -143,9 +150,19 @@ public sealed class SummaryService
             new(ChatRole.User, body.ToString()),
         };
 
+        var sw = Stopwatch.StartNew();
         try
         {
             var response = await _client.GetResponseAsync(request, cancellationToken: ct).ConfigureAwait(false);
+            sw.Stop();
+
+            // 摘要也烧 token，而且它跑在后台 —— 不记就完全隐形
+            await RecordAsync(
+                sessionId,
+                sw.Elapsed.TotalMilliseconds,
+                response.Usage?.InputTokenCount,
+                response.Usage?.OutputTokenCount).ConfigureAwait(false);
+
             return response.Text?.Trim();
         }
         catch (Exception ex)
@@ -153,6 +170,21 @@ public sealed class SummaryService
             // 压缩失败不影响对话，下一轮再试
             _logger.Warning(ex, "摘要生成失败");
             return null;
+        }
+    }
+
+    /// <summary>记一行摘要调用的耗时与 token；指标失败不影响压缩结果。</summary>
+    private async Task RecordAsync(string sessionId, double elapsedMs, long? inputTokens, long? outputTokens)
+    {
+        try
+        {
+            await _metrics
+                .RecordAsync(new MetricEntry(sessionId, "summary", elapsedMs, inputTokens, outputTokens))
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug(ex, "指标记录失败：summary");
         }
     }
 }

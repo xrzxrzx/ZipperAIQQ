@@ -199,7 +199,8 @@ public sealed class SqliteMessageStore : IMessageStore
         return new StoredMessage(
             Id: reader.GetInt64(0),
             Message: message,
-            ReceivedAt: DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(9)));
+            ReceivedAt: DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(9)),
+            IsOutgoing: reader.GetInt32(13) != 0);
     }
 
     private const string InsertSql = """
@@ -218,13 +219,13 @@ public sealed class SqliteMessageStore : IMessageStore
     private const string SelectColumnsSql = """
         Id, Platform, ChatType, ChatId, MessageId,
         SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
-        ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId
+        ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction
         """;
 
     private const string SelectRecentSql = """
         SELECT Id, Platform, ChatType, ChatId, MessageId,
                SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
-               ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId
+               ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction
         FROM Messages
         WHERE SessionId = @sessionId
         ORDER BY SentAtMs DESC, Id DESC

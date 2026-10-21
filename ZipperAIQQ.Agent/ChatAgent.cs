@@ -1,14 +1,20 @@
 using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using Serilog;
+using ZipperAIQQ.Agent.Events;
+using ZipperAIQQ.Agent.Faces;
+using ZipperAIQQ.Agent.Memory;
+using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
 using System.Text;
-using ZipperAIQQ.Agent.Faces;
-using ZipperAIQQ.Agent.Memory;
+using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Metrics;
+using ZipperAIQQ.Storage.Personas;
+using ZipperAIQQ.Storage.Schedules;
 using ZipperAIQQ.Storage.Summaries;
 
 namespace ZipperAIQQ.Agent;
@@ -32,45 +38,52 @@ public sealed class ChatAgent : IChatAgent
     private readonly MemoryRetriever _retriever;
     private readonly SummaryService _summaries;
     private readonly ISummaryStore _summaryStore;
+    private readonly IPersonaStore _personas;
+    private readonly IMetricsStore _metrics;
+    private readonly IEventBus _events;
+    private readonly IPermissionGate _permissionGate;
+    private readonly IRoleResolver _roles;
+    private readonly WorkspacePathResolver _workspace;
+    private readonly int _fileMaxBytes;
+    private readonly IScheduleStore _schedules;
     private readonly ChatAgentOptions _options;
     private readonly ILogger _logger;
 
     private readonly List<ChatMessage> _history = new();
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    public ChatAgent(
-        string sessionId,
-        IChatClient client,
-        IMessageChannel channel,
-        IMessageStore store,
-        FaceCatalog faces,
-        MemoryRetriever retriever,
-        SummaryService summaries,
-        ISummaryStore summaryStore,
-        ChatAgentOptions options,
-        ILogger logger)
+    /// <summary>
+    /// 人设锚点（D4 的第 1 条 system）：实例存活期间**永不改变**。
+    /// </summary>
+    /// <remarks>
+    /// 它保证「最初设定」始终在上下文最前方；后面那条会随轮次刷新的重注入
+    /// 负责「让模型最近又看到一次」。两条各司其职，缺一个都会慢慢漂。
+    /// </remarks>
+    private string? _anchorPersona;
+
+    public ChatAgent(string sessionId, ChatAgentDependencies deps)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
-        ArgumentNullException.ThrowIfNull(client);
-        ArgumentNullException.ThrowIfNull(channel);
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(faces);
-        ArgumentNullException.ThrowIfNull(retriever);
-        ArgumentNullException.ThrowIfNull(summaries);
-        ArgumentNullException.ThrowIfNull(summaryStore);
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(deps);
 
         SessionId = sessionId;
-        _client = client;
-        _channel = channel;
-        _store = store;
-        _faces = faces;
-        _retriever = retriever;
-        _summaries = summaries;
-        _summaryStore = summaryStore;
-        _options = options;
-        _logger = logger;
+        _client = deps.Client;
+        _channel = deps.Channel;
+        _store = deps.Store;
+        _faces = deps.Faces;
+        _retriever = deps.Retriever;
+        _summaries = deps.Summaries;
+        _summaryStore = deps.SummaryStore;
+        _personas = deps.Personas;
+        _metrics = deps.Metrics;
+        _events = deps.Events;
+        _permissionGate = deps.PermissionGate;
+        _roles = deps.Roles;
+        _workspace = deps.Workspace;
+        _fileMaxBytes = deps.FileMaxBytes;
+        _schedules = deps.Schedules;
+        _options = deps.Options;
+        _logger = deps.Logger;
     }
 
     /// <summary>机器人自身标识（M1-B 用固定值；接真 self_id 后替换）。</summary>
@@ -139,6 +152,11 @@ public sealed class ChatAgent : IChatAgent
         using var activity = AgentTelemetry.Source.StartActivity("agent.run");
         activity?.SetTag("session.id", SessionId);
         activity?.SetTag("chat.type", request.Chat.Type.ToString());
+
+        // 会话从库恢复（M1-C 遗留的补做）：实例存活期内只做一次。
+        // 放在打 hot.window 标签之前，否则标签永远显示 0。
+        await EnsureHistoryLoadedAsync(request, ct).ConfigureAwait(false);
+
         activity?.SetTag("hot.window", _history.Count);
 
         // 长期记忆检索：热窗只覆盖最近几条，很久前提过的事要靠这个找回来。
@@ -155,23 +173,48 @@ public sealed class ChatAgent : IChatAgent
         {
             _logger.Warning(ex, "检索失败（会话 {SessionId}），本轮不带长期记忆", SessionId);
         }
-        var messages = new List<ChatMessage>
-        {
-            new(ChatRole.System, _options.SystemPrompt),
-        };
+        // ── 人设（D4/D12）：会话级覆盖全局，完全替换而非叠加 ──
+        var persona = await _personas
+            .GetAsync(request.Chat.Platform, request.Chat.Type.ToString(), request.Chat.Id, ct)
+            .ConfigureAwait(false);
 
-        // 温层：更早对话的摘要。放在历史之前、人设之后 ——
-        // 它不是人设（D4 的永久锚点仍是第一条），而是一段"背景交代"。
+        // 锚点：首次锁定后**永不改动**，保证「最初设定」一直在最前方
+        _anchorPersona ??= persona.Content;
+
+        // 重注入内容 = 人设 + 摘要。
+        // 摘要并进这里而不是单独占一条 system —— D4 要求人设 system 恰好两条，
+        // 多一条会让人分不清哪个才是"角色设定"。
         var summary = await _summaryStore.GetAsync(SessionId, ct).ConfigureAwait(false);
+        var reinject = new StringBuilder(persona.Content);
         if (summary is not null && !string.IsNullOrWhiteSpace(summary.Summary))
         {
-            messages.Add(new ChatMessage(
-                ChatRole.System,
-                $"[之前对话的摘要（仅供理解上下文，不必逐条回应）]\n{summary.Summary}"));
+            reinject.AppendLine().AppendLine()
+                    .AppendLine("【之前对话的摘要（供理解上下文，不必逐条回应）】")
+                    .Append(summary.Summary);
             activity?.SetTag("memory.summary", "yes");
         }
 
+        // 能力声明：工具按角色隐藏时，模型会**幻觉**「我做了」——
+        // 实测：普通成员被要求写文件，它回了「test2.txt 建好了」，实际什么都没建。
+        // 所以必须**告诉它没有这个能力**，而不是让它自己猜（FR-6.4 的另一半）。
+        var capabilityNote = BuildCapabilityNote(_roles.Resolve(request.Sender.UserId));
+        if (capabilityNote.Length > 0)
+        {
+            reinject.AppendLine().AppendLine(capabilityNote);
+        }
+
+        var messages = new List<ChatMessage>
+        {
+            // ① 锚点 system：永远第一条
+            new(ChatRole.System, _anchorPersona),
+        };
+
         messages.AddRange(_history);
+
+        // ② 重注入 system：紧邻当前消息之前。
+        //    位置很关键 —— 放在历史前面就退化成"和锚点差不多远"，
+        //    起不到「最近又提醒一次」的作用。
+        messages.Add(new ChatMessage(ChatRole.System, reinject.ToString()));
 
         // 时间注入（FR-15）：每条消息带时间，且每次都给发送者双名
         var memoryBlock = BuildMemoryBlock(related);
@@ -188,24 +231,19 @@ public sealed class ChatAgent : IChatAgent
             _options.MaxMessagesPerCall,
             _options.MinSendIntervalMs,
             _faces,
+            _metrics,
             n => sent += n);
 
         var chatOptions = new ChatOptions
         {
-            Tools = [tool, ListFacesTool.Create(_faces)],
+            Tools = BuildTools(request, tool),
             // 温度之类先不调，保持端点默认
         };
 
         ChatResponse response;
         try
         {
-            using var llmActivity = AgentTelemetry.Source.StartActivity("llm.call");
-            llmActivity?.SetTag("llm.message.count", messages.Count);
-            var llmSw = System.Diagnostics.Stopwatch.StartNew();
-            response = await _client.GetResponseAsync(messages, chatOptions, ct).ConfigureAwait(false);
-            llmSw.Stop();
-            llmActivity?.SetTag("llm.elapsed.ms", llmSw.ElapsedMilliseconds);
-            llmActivity?.SetStatus(ActivityStatusCode.Ok);
+            response = await CallLlmAsync(messages, chatOptions, "llm.call", ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -215,35 +253,64 @@ public sealed class ChatAgent : IChatAgent
 
         var finalText = response.Text;
 
-        // ⭐ 兜底发送（FR-2.1）：模型没调工具、但产出了文本 → 直接发出去。
-        // 不这么做的话，模型一旦"忘记调工具"，群里就表现为"叫了不理人"。
+        // ══════ §8.3 指令遵循漂移：该调工具却没调 ══════
+        // 检测信号是"可判定的"：这一轮一条都没发出去（sent == 0），却产出了文本。
+        //
+        // 硬规矩：**只在没有副作用时才重试**。sent == 0 说明本轮什么都没发出去，
+        // 重跑整条链是安全的；一旦本轮已经发过消息，重跑就可能把同样的话再发一遍 ——
+        // 宁可这一轮答得不好，也不能让消息重复。
         if (sent == 0 && !string.IsNullOrWhiteSpace(finalText))
         {
+            activity?.SetTag("drift.detected", "no_tool_call");
+            PublishEvent(new DriftDetectedEvent(SessionId, BeijingTime.Now, "instruction", "no_tool_call"));
+
+            messages.Add(new ChatMessage(ChatRole.User, DriftCorrectionPrompt));
             try
             {
-                var fallback = new OutgoingMessage
+                var retry = await CallLlmAsync(messages, chatOptions, "llm.retry", ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(retry.Text))
                 {
-                    Chat = request.Chat,
-                    Segments = [new TextSegment(finalText)],
-                };
-
-                await _channel.SendAsync(fallback, ct).ConfigureAwait(false);
-                sent = 1;
-
-                try
-                {
-                    await _store.AppendOutgoingAsync(fallback, BotUserId, request.Now, ct).ConfigureAwait(false);
+                    finalText = retry.Text;
                 }
-                catch
-                {
-                    // 已发出，落库失败不改变事实
-                }
-                _logger.Information("兜底发送生效（会话 {SessionId}）：模型未调用工具", SessionId);
+
+                activity?.SetTag("drift.retry.sent", sent);
+                _logger.Information(
+                    "指令遵循漂移：已回填具体原因并重试 1 次（会话 {SessionId}），重试后发出 {Sent} 条",
+                    SessionId, sent);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "兜底发送失败（会话 {SessionId}）", SessionId);
+                _logger.Warning(ex, "漂移纠正重试失败（会话 {SessionId}），转入降级发送", SessionId);
             }
+        }
+
+        // ══════ §8.3 降级：连续 2 次都没调工具 → 由我们代发 ══════
+        // 兜底不是"随便发发"：表情照样解析、按空行分条，与 send_message 工具**同一套解析**。
+        // （上一版这里直接拼 TextSegment，结果表情变字面量、几句话挤成一条 —— 实测抓到的 bug。）
+        if (sent == 0 && !string.IsNullOrWhiteSpace(finalText))
+        {
+            var parts = MessageContentParser.SplitByBlankLine(finalText, _options.MaxMessagesPerCall);
+            var interval = Math.Max(0, _options.MinSendIntervalMs);
+
+            foreach (var part in parts)
+            {
+                // 最小发送间隔（防风控）：第一条不等
+                if (sent > 0 && interval > 0)
+                {
+                    await Task.Delay(interval, ct).ConfigureAwait(false);
+                }
+
+                if (await TrySendAsync(request.Chat, MessageContentParser.Parse(part, _faces), ct).ConfigureAwait(false))
+                {
+                    sent++;
+                }
+            }
+
+            activity?.SetTag("drift.degraded", "yes");
+            PublishEvent(new SendDegradedEvent(SessionId, BeijingTime.Now, sent));
+            _logger.Warning(
+                "降级发送（会话 {SessionId}）：连续 2 次未调用工具，已代发 {Sent} 条",
+                SessionId, sent);
         }
 
         // 更新历史
@@ -259,6 +326,230 @@ public sealed class ChatAgent : IChatAgent
         activity?.SetStatus(ActivityStatusCode.Ok);
 
         return new AgentRunResult(finalText, sent);
+    }
+
+    /// <summary>历史是否已经从库里加载过（实例存活期内只加载一次）。</summary>
+    private Task? _historyLoadTask;
+
+    /// <summary>
+    /// 从库里恢复热窗历史（**实例存活期内只做一次**）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 重启后 <c>_history</c> 是空的，只靠摘要 + 检索，模型会把「最开始说过什么」
+    /// 答成旧摘要。这就是「会话从库恢复」：照着最近 N 条把对话接上。
+    /// </para>
+    /// <para>
+    /// ⚠️ 本轮这批消息**已经落库**（路由是先存再调），必须按 <c>EventId</c> 排除，
+    /// 否则同一条消息会在「恢复的历史」和「本轮 userLine」里各出现一次。
+    /// </para>
+    /// </remarks>
+    private Task EnsureHistoryLoadedAsync(AgentRunRequest request, CancellationToken ct)
+    {
+        return _historyLoadTask ??= LoadHistoryAsync(request, ct);
+    }
+
+    private async Task LoadHistoryAsync(AgentRunRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var currentIds = request.Batch
+                .Select(m => m.EventId)
+                .Where(id => !string.IsNullOrEmpty(id))
+                .ToHashSet(StringComparer.Ordinal);
+
+            // 多取批内条数，保证排除掉本批之后仍能凑满热窗
+            var recent = await _store
+                .GetRecentAsync(SessionId, _options.HotWindowMessages + Math.Max(1, request.Batch.Count), ct)
+                .ConfigureAwait(false);
+
+            var added = 0;
+            foreach (var stored in recent)
+            {
+                if (stored.Message.EventId is { Length: > 0 } id && currentIds.Contains(id))
+                {
+                    continue;
+                }
+
+                _history.Add(ToHistoryMessage(stored));
+                added++;
+            }
+
+            TrimHistory();
+
+            if (added > 0)
+            {
+                _logger.Information("会话 {SessionId} 从库恢复历史 {Count} 条", SessionId, _history.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            // 恢复失败就当没有历史：不能因为读库失败把对话卡死
+            _logger.Warning(ex, "会话 {SessionId} 历史恢复失败，本轮从空历史开始", SessionId);
+        }
+    }
+
+    /// <summary>把入库消息还原成给模型看的历史条目（格式与实时消息保持一致）。</summary>
+    private static ChatMessage ToHistoryMessage(StoredMessage stored)
+    {
+        var text =
+            $"[{BeijingTime.Format(stored.Message.OccurredAt)}] {stored.Message.Sender.DisplayName}：{stored.Message.PlainText}";
+
+        return new ChatMessage(stored.IsOutgoing ? ChatRole.Assistant : ChatRole.User, text);
+    }
+
+    /// <summary>
+    /// 组装本次调用可用的工具：基础工具 + **按角色**可用的文件工具。
+    /// </summary>
+    /// <remarks>
+    /// 不可用的工具**连 schema 都不给模型** —— 比「看得见但调不动」更省 token，也少试探。
+    /// 但可见性**不是**唯一防线：每个文件工具执行前还会再过一次门禁。
+    /// </remarks>
+    private List<AITool> BuildTools(AgentRunRequest request, AIFunction sendMessage)
+    {
+        var context = new ToolCallContext
+        {
+            Chat = request.Chat,
+            Sender = request.Sender,
+            Role = _roles.Resolve(request.Sender.UserId),
+        };
+
+        var tools = new List<AITool>
+        {
+            sendMessage,
+            ListFacesTool.Create(_faces),
+        };
+
+        tools.AddRange(FileTools.Create(context, _permissionGate, _workspace, _fileMaxBytes));
+        tools.AddRange(ScheduleTools.Create(context, _permissionGate, _schedules));
+        return tools;
+    }
+
+    /// <summary>
+    /// 按角色生成「能力限制」说明，塞进重注入 system。
+    /// </summary>
+    /// <remarks>
+    /// 工具不可见时**必须显式告知**，否则模型会编造"已完成" ——
+    /// 这是实测抓到的：普通成员要求写文件，它回「test2.txt 建好了」，工作区空空如也。
+    /// </remarks>
+    private string BuildCapabilityNote(Role role)
+    {
+        var missing = new List<string>();
+
+        if (!_permissionGate.IsAllowed(ToolCapability.ReadFile, role))
+        {
+            missing.Add("读文件");
+        }
+
+        if (!_permissionGate.IsAllowed(ToolCapability.WriteFile, role))
+        {
+            missing.Add("写文件");
+        }
+
+        if (!_permissionGate.IsAllowed(ToolCapability.DeleteFile, role))
+        {
+            missing.Add("删除文件");
+        }
+
+        return missing.Count == 0
+            ? string.Empty
+            : $"【能力限制】你当前**没有**{string.Join("、", missing)}的能力（不是权限被拒，是这些工具根本没提供给你）。" +
+              "被要求做这些事时，**明确说做不到**，不要声称已经完成。";
+    }
+
+    /// <summary>发 Agent 事件；订阅方抛异常不能反过来影响对话。</summary>
+    private void PublishEvent<T>(T evt) where T : AgentEvent
+    {
+        try
+        {
+            _events.Publish(evt);
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug(ex, "Agent 事件发布失败：{Event}", typeof(T).Name);
+        }
+    }
+
+    /// <summary>
+    /// §8.3 的纠正提示：必须说清**哪里不对** —— 只说「重新来」等于没说。
+    /// </summary>
+    private const string DriftCorrectionPrompt =
+        "（系统提示）你上一条只输出了文本，**没有调用 send_message 工具**，所以对方一个字都没收到。\n" +
+        "请调用 send_message 把你要说的话真正发出去；需要分几条说就分几条。";
+
+    /// <summary>
+    /// 一次模型调用 + 指标落库（耗时 / token）。
+    /// </summary>
+    /// <param name="metricKind">
+    /// 指标分类：正常调用记 <c>llm.call</c>，漂移纠正的重试记 <c>llm.retry</c> ——
+    /// 分开记才能看出「因为漂移多烧了多少次调用」。
+    /// </param>
+    private async Task<ChatResponse> CallLlmAsync(
+        List<ChatMessage> messages,
+        ChatOptions options,
+        string metricKind,
+        CancellationToken ct)
+    {
+        using var llmActivity = AgentTelemetry.Source.StartActivity("llm.call");
+        llmActivity?.SetTag("llm.message.count", messages.Count);
+        llmActivity?.SetTag("llm.kind", metricKind);
+
+        var sw = Stopwatch.StartNew();
+        var response = await _client.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
+        sw.Stop();
+
+        llmActivity?.SetTag("llm.elapsed.ms", sw.ElapsedMilliseconds);
+        llmActivity?.SetStatus(ActivityStatusCode.Ok);
+        llmActivity?.SetTag("llm.input.tokens", response.Usage?.InputTokenCount);
+        llmActivity?.SetTag("llm.output.tokens", response.Usage?.OutputTokenCount);
+
+        // token 用量与耗时落库 —— 客户端要能看「哪类调用最慢 / token 烧多快」
+        await _metrics.RecordAsync(new MetricEntry(
+            SessionId,
+            metricKind,
+            sw.Elapsed.TotalMilliseconds,
+            response.Usage?.InputTokenCount,
+            response.Usage?.OutputTokenCount), ct).ConfigureAwait(false);
+
+        return response;
+    }
+
+    /// <summary>
+    /// 发送一条消息并落库（降级路径用）。
+    /// </summary>
+    /// <returns>是否成功发出；落库失败只记日志，不改变「已经发出去」这个事实。</returns>
+    private async Task<bool> TrySendAsync(
+        ChatRef chat,
+        IReadOnlyList<MessageSegment> segments,
+        CancellationToken ct)
+    {
+        var outgoing = new OutgoingMessage
+        {
+            Chat = chat,
+            Segments = segments,
+        };
+
+        try
+        {
+            await _channel.SendAsync(outgoing, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "发送失败（会话 {SessionId}）", SessionId);
+            return false;
+        }
+
+        try
+        {
+            await _store.AppendOutgoingAsync(outgoing, BotUserId, BeijingTime.Now, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // 已发出，落库失败不改变事实
+            _logger.Warning(ex, "落库失败（会话 {SessionId}）", SessionId);
+        }
+
+        return true;
     }
 
     /// <summary>热窗裁剪（M1-C 会换成真正的三层策略）。</summary>
