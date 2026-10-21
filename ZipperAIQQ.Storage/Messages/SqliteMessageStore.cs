@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Storage.Database;
 
 namespace ZipperAIQQ.Storage.Messages;
 
@@ -10,8 +11,9 @@ namespace ZipperAIQQ.Storage.Messages;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 每次操作**新开一个连接**（SQLite 连接很轻，且连接池由驱动管理），
-/// 不持有长连接：长连接在网络盘/休眠恢复后容易变成「僵尸连接」。
+/// **不自建连接**：读写一律走 <see cref="ISqliteDatabase"/>（FR-16.1）。
+/// 这样多个 agent 实例并发写库时，并发点只有一个（统一入口里的信号量），
+/// 而不是散落在每个仓储里。
 /// </para>
 /// <para>
 /// 全部走**参数化**，不拼 SQL 字符串 —— 消息内容来自任意群成员，属于不可信输入。
@@ -21,84 +23,83 @@ public sealed class SqliteMessageStore : IMessageStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly string _connectionString;
+    private readonly ISqliteDatabase _db;
 
-    public SqliteMessageStore(string connectionString)
+    public SqliteMessageStore(ISqliteDatabase db)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
-        _connectionString = connectionString;
+        ArgumentNullException.ThrowIfNull(db);
+        _db = db;
     }
 
-    public async Task<long> AppendAsync(IncomingMessage message, CancellationToken ct = default)
+    public Task<long> AppendAsync(IncomingMessage message, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
 
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct).ConfigureAwait(false);
+        return _db.WriteAsync(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = InsertSql;
 
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = InsertSql;
+            cmd.Parameters.AddWithValue("@platform", message.Chat.Platform);
+            cmd.Parameters.AddWithValue("@sessionId", message.Chat.SessionId);
+            cmd.Parameters.AddWithValue("@chatType", (int)message.Chat.Type);
+            cmd.Parameters.AddWithValue("@chatId", message.Chat.Id);
+            cmd.Parameters.AddWithValue("@messageId", (object?)message.EventId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@senderUserId", message.Sender.UserId);
+            cmd.Parameters.AddWithValue("@senderGroupCard", (object?)message.Sender.GroupCard ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@senderNickname", (object?)message.Sender.Nickname ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@senderIsFriend", message.Sender.IsFriend ? 1 : 0);
+            cmd.Parameters.AddWithValue("@plainText", message.PlainText);
+            cmd.Parameters.AddWithValue("@segmentsJson", JsonSerializer.Serialize(message.Segments, JsonOptions));
+            cmd.Parameters.AddWithValue("@sentAtMs", message.OccurredAt.ToUnixTimeMilliseconds());
+            cmd.Parameters.AddWithValue("@receivedAtMs", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            cmd.Parameters.AddWithValue("@replyToMessageId", (object?)message.ReplyToMessageId ?? DBNull.Value);
 
-        cmd.Parameters.AddWithValue("@platform", message.Chat.Platform);
-        cmd.Parameters.AddWithValue("@sessionId", message.Chat.SessionId);
-        cmd.Parameters.AddWithValue("@chatType", (int)message.Chat.Type);
-        cmd.Parameters.AddWithValue("@chatId", message.Chat.Id);
-        cmd.Parameters.AddWithValue("@messageId", (object?)message.EventId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@senderUserId", message.Sender.UserId);
-        cmd.Parameters.AddWithValue("@senderGroupCard", (object?)message.Sender.GroupCard ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@senderNickname", (object?)message.Sender.Nickname ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@senderIsFriend", message.Sender.IsFriend ? 1 : 0);
-        cmd.Parameters.AddWithValue("@plainText", message.PlainText);
-        cmd.Parameters.AddWithValue("@segmentsJson", JsonSerializer.Serialize(message.Segments, JsonOptions));
-        cmd.Parameters.AddWithValue("@sentAtMs", message.OccurredAt.ToUnixTimeMilliseconds());
-        cmd.Parameters.AddWithValue("@receivedAtMs", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        cmd.Parameters.AddWithValue("@replyToMessageId", (object?)message.ReplyToMessageId ?? DBNull.Value);
-
-        var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
-        return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+            var result = await cmd.ExecuteScalarAsync(token).ConfigureAwait(false);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, ct);
     }
 
-    public async Task<IReadOnlyList<StoredMessage>> GetRecentAsync(
+    public Task<IReadOnlyList<StoredMessage>> GetRecentAsync(
         string sessionId, int limit, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
 
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct).ConfigureAwait(false);
-
-        await using var cmd = conn.CreateCommand();
-        // 先按时间倒序取最近 N 条，再由调用方按正序使用
-        cmd.CommandText = SelectRecentSql;
-        cmd.Parameters.AddWithValue("@sessionId", sessionId);
-        cmd.Parameters.AddWithValue("@limit", limit);
-
-        var buffer = new List<StoredMessage>(capacity: Math.Min(limit, 256));
-
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        return _db.ReadAsync<IReadOnlyList<StoredMessage>>(async (conn, token) =>
         {
-            buffer.Add(ReadRow(reader));
-        }
+            await using var cmd = conn.CreateCommand();
+            // 先按时间倒序取最近 N 条，再反转成正序
+            cmd.CommandText = SelectRecentSql;
+            cmd.Parameters.AddWithValue("@sessionId", sessionId);
+            cmd.Parameters.AddWithValue("@limit", limit);
 
-        // 倒序取 → 反转成正序
-        buffer.Reverse();
-        return buffer;
+            var buffer = new List<StoredMessage>(capacity: Math.Min(limit, 256));
+
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                buffer.Add(ReadRow(reader));
+            }
+
+            buffer.Reverse();
+            return buffer;
+        }, ct);
     }
 
-    public async Task<long> CountAsync(string sessionId, CancellationToken ct = default)
+    public Task<long> CountAsync(string sessionId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
 
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct).ConfigureAwait(false);
+        return _db.ReadAsync(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM Messages WHERE SessionId = @sessionId;";
+            cmd.Parameters.AddWithValue("@sessionId", sessionId);
 
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM Messages WHERE SessionId = @sessionId;";
-        cmd.Parameters.AddWithValue("@sessionId", sessionId);
-
-        var result = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
-        return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+            var result = await cmd.ExecuteScalarAsync(token).ConfigureAwait(false);
+            return Convert.ToInt64(result, CultureInfo.InvariantCulture);
+        }, ct);
     }
 
     private static StoredMessage ReadRow(SqliteDataReader reader)
