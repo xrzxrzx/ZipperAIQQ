@@ -22,7 +22,7 @@
 | 元素 | 规则 | 示例 |
 |---|---|---|
 | 命名空间 / 类 / 接口 / 方法 / 属性 | **PascalCase** | `QqChannelAdapter`、`SendMessageAsync` |
-| 接口 | 前缀 `I` | `IQQChannel`、`IMessageStore` |
+| 接口 | 前缀 `I` | `IMessageChannel`、`IMessageStore` |
 | 局部变量 / 参数 | **camelCase** | `messageId`、`groupId` |
 | 私有字段 | **`_camelCase`** | `_httpClient`、`_logger` |
 | 常量 | PascalCase | `MaxRetryCount` |
@@ -291,7 +291,7 @@ var session = _sessions.FirstOrDefault(s => s.Id == id)
 src/
 ├── ZipperAIQQ.Server/           # 服务端宿主（Kestrel，跨平台）
 ├── ZipperAIQQ.Core/             # 编排层 + agent 核心（跨平台类库，无 UI 依赖）
-├── ZipperAIQQ.Channels/         # IQQChannel 实现（NapCat 正向/反向 WS）
+├── ZipperAIQQ.Channels/         # IMessageChannel 实现（NapCat 正向/反向 WS）
 ├── ZipperAIQQ.Storage/          # SQLite 持久化
 └── ZipperAIQQ.Client/           # WPF 客户端（Windows-only）
 tests/
