@@ -45,16 +45,23 @@ public sealed class FaceCatalog
 {
     private readonly List<FaceEntry> _all;
     private readonly Dictionary<string, FaceEntry> _byName;
+    private readonly Dictionary<string, FaceEntry> _byId;
 
     private FaceCatalog(List<FaceEntry> all)
     {
         _all = all;
         _byName = new Dictionary<string, FaceEntry>(StringComparer.OrdinalIgnoreCase);
+        _byId = new Dictionary<string, FaceEntry>(StringComparer.Ordinal);
         foreach (var f in all)
         {
             if (!string.IsNullOrWhiteSpace(f.Name))
             {
                 _byName[f.Name] = f;
+            }
+
+            if (f.Kind == "system" && !string.IsNullOrEmpty(f.Id))
+            {
+                _byId[f.Id] = f;
             }
         }
     }
@@ -80,6 +87,10 @@ public sealed class FaceCatalog
 
         return doc?.Faces is { Count: > 0 } faces ? new FaceCatalog(faces) : Empty;
     }
+
+    /// <summary>按 face id 查（把收到的表情渲染成名称时走这里）。</summary>
+    public FaceEntry? GetById(string id) =>
+        _byId.TryGetValue(id, out var entry) ? entry : null;
 
     /// <summary>按名称查（AI 用 <c>[表情:名称]</c> 发送时走这里）。</summary>
     public FaceEntry? GetByName(string name) =>

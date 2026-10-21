@@ -98,6 +98,7 @@ public sealed class MessageRouter : BackgroundService
                 Chat = msg.Chat,
                 Sender = msg.Sender,
                 UserText = msg.PlainText,
+                Segments = msg.Segments,
                 Now = msg.OccurredAt,
             },
             ct).ConfigureAwait(false);
