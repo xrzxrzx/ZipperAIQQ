@@ -3,6 +3,9 @@ namespace ZipperAIQQ.Storage.Embeddings;
 /// <summary>一条检索结果：消息主键 + 相似度分数。</summary>
 public sealed record ScoredMessage(long MessageId, float Score);
 
+/// <summary>一条待补算向量的消息。</summary>
+public sealed record PendingEmbedding(long MessageId, string Text);
+
 /// <summary>
 /// 消息向量的存储与检索。
 /// </summary>
@@ -37,8 +40,10 @@ public interface IEmbeddingStore
         int topK,
         CancellationToken ct = default);
 
-    /// <summary>取出还没算过向量的消息（用于补算）。</summary>
-    Task<IReadOnlyList<long>> GetMessageIdsWithoutVectorAsync(
+    /// <summary>
+    /// 取出还没算过向量的消息**及其文本**（补算时不用再查一次库）。
+    /// </summary>
+    Task<IReadOnlyList<PendingEmbedding>> GetPendingAsync(
         string sessionId,
         int limit,
         CancellationToken ct = default);

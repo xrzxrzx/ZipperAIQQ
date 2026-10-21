@@ -97,7 +97,7 @@ public sealed class SqliteEmbeddingStore : IEmbeddingStore
         }, ct);
     }
 
-    public Task<IReadOnlyList<long>> GetMessageIdsWithoutVectorAsync(
+    public Task<IReadOnlyList<PendingEmbedding>> GetPendingAsync(
         string sessionId,
         int limit,
         CancellationToken ct = default)
@@ -109,7 +109,7 @@ public sealed class SqliteEmbeddingStore : IEmbeddingStore
         {
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                SELECT m.Id
+                SELECT m.Id, m.PlainText
                 FROM Messages m
                 LEFT JOIN MessageEmbeddings e ON e.MessageId = m.Id
                 WHERE m.SessionId = @sid
@@ -121,14 +121,14 @@ public sealed class SqliteEmbeddingStore : IEmbeddingStore
             cmd.Parameters.AddWithValue("@sid", sessionId);
             cmd.Parameters.AddWithValue("@take", take);
 
-            var ids = new List<long>();
+            var pending = new List<PendingEmbedding>();
             await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
             while (await reader.ReadAsync(token).ConfigureAwait(false))
             {
-                ids.Add(reader.GetInt64(0));
+                pending.Add(new PendingEmbedding(reader.GetInt64(0), reader.GetString(1)));
             }
 
-            return (IReadOnlyList<long>)ids;
+            return (IReadOnlyList<PendingEmbedding>)pending;
         }, ct);
     }
 

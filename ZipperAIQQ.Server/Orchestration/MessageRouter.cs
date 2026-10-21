@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using ZipperAIQQ.Agent;
+using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Storage.Messages;
@@ -20,22 +21,26 @@ public sealed class MessageRouter : BackgroundService
     private readonly IMessageChannel _channel;
     private readonly IMessageStore _store;
     private readonly IChatAgentPool _agents;
+    private readonly MemoryRetriever _retriever;
     private readonly ILogger _logger;
 
     public MessageRouter(
         IMessageChannel channel,
         IMessageStore store,
         IChatAgentPool agents,
+        MemoryRetriever retriever,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(agents);
+        ArgumentNullException.ThrowIfNull(retriever);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
         _store = store;
         _agents = agents;
+        _retriever = retriever;
         _logger = logger;
     }
 
@@ -88,6 +93,17 @@ public sealed class MessageRouter : BackgroundService
     {
         // ① 先落库（无论是否回复，历史都要留）
         var id = await _store.AppendAsync(msg, ct).ConfigureAwait(false);
+
+        // ② 补算向量（M1-C 检索的前提）。
+        //    失败不影响本轮回复 —— 顶多是这条以后检索不到，不能因为向量化失败就不回话。
+        try
+        {
+            await _retriever.BackfillAsync(msg.Chat.SessionId, maxBatch: 10, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "向量补算失败（会话 {Session}）", msg.Chat.SessionId);
+        }
 
         if (msg.Sender.UserId == "unknown")
         {
