@@ -50,3 +50,6 @@ desktop.ini
 *.onnx
 *.onnx.data
 models/
+
+# ───── 本地启动脚本（含真实 token，永不入库）─────
+scripts/*.local.ps1
