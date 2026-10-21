@@ -20,6 +20,7 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(ImageSegment), "image")]
 [JsonDerivedType(typeof(MentionSegment), "mention")]
 [JsonDerivedType(typeof(ReplySegment), "reply")]
+[JsonDerivedType(typeof(FaceSegment), "face")]
 public abstract record MessageSegment;
 
 /// <summary>纯文本。</summary>
@@ -33,3 +34,6 @@ public sealed record MentionSegment(string UserId) : MessageSegment;
 
 /// <summary>对某条消息的引用回复。</summary>
 public sealed record ReplySegment(string MessageId) : MessageSegment;
+
+/// <summary>QQ 系统表情（face）。保留原始 id，名称由上层按平台表情表渲染。</summary>
+public sealed record FaceSegment(string Id) : MessageSegment;

@@ -11,6 +11,16 @@ public sealed record ChatAgentOptions
     /// <summary>单次 send_message 最多发几条（FR-19.2）。</summary>
     public int MaxMessagesPerCall { get; init; } = 5;
 
+    /// <summary>
+    /// 两条消息之间的**最小发送间隔（毫秒）**。
+    /// </summary>
+    /// <remarks>
+    /// 目的不是"慢"，而是**防风控**：短时间连发多条容易被判定为刷屏。
+    /// 默认 0（不限速）—— 因为实测 NapCat 单条往返只要 ~140ms，
+    /// 而"等 echo"本身已经天然形成了间隔。
+    /// </remarks>
+    public int MinSendIntervalMs { get; init; } = 0;
+
     /// <summary>上下文里保留多少条历史消息（热窗，FR-3）。</summary>
     public int HotWindowMessages { get; init; } = 20;
 }

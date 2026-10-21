@@ -4,6 +4,7 @@ using Serilog;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
 
@@ -24,6 +25,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly IChatClient _client;
     private readonly IMessageChannel _channel;
     private readonly IMessageStore _store;
+    private readonly FaceCatalog _faces;
     private readonly ChatAgentOptions _options;
     private readonly ILogger _logger;
 
@@ -35,6 +37,7 @@ public sealed class ChatAgent : IChatAgent
         IChatClient client,
         IMessageChannel channel,
         IMessageStore store,
+        FaceCatalog faces,
         ChatAgentOptions options,
         ILogger logger)
     {
@@ -42,6 +45,7 @@ public sealed class ChatAgent : IChatAgent
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(faces);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -49,7 +53,7 @@ public sealed class ChatAgent : IChatAgent
         _client = client;
         _channel = channel;
         _store = store;
-        _store = store;
+        _faces = faces;
         _options = options;
         _logger = logger;
     }
@@ -98,18 +102,26 @@ public sealed class ChatAgent : IChatAgent
             BotUserId,
             request.Chat,
             _options.MaxMessagesPerCall,
+            _options.MinSendIntervalMs,
+            _faces,
             n => sent += n);
 
         var chatOptions = new ChatOptions
         {
-            Tools = [tool],
+            Tools = [tool, ListFacesTool.Create(_faces)],
             // 温度之类先不调，保持端点默认
         };
 
         ChatResponse response;
         try
         {
+            using var llmActivity = AgentTelemetry.Source.StartActivity("llm.call");
+            llmActivity?.SetTag("llm.message.count", messages.Count);
+            var llmSw = System.Diagnostics.Stopwatch.StartNew();
             response = await _client.GetResponseAsync(messages, chatOptions, ct).ConfigureAwait(false);
+            llmSw.Stop();
+            llmActivity?.SetTag("llm.elapsed.ms", llmSw.ElapsedMilliseconds);
+            llmActivity?.SetStatus(ActivityStatusCode.Ok);
         }
         catch (Exception ex)
         {
