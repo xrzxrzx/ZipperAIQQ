@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!--
+      OPENAI001：MEAI 对 Responses API 的支持目前标记为【评估版】
+      （GetResponsesClient / AsIChatClient(ResponsesClient)），API 可能变更。
+      本项目按需求 D6【必须】走 Responses API，故显式接受该风险。
+      ⚠️ 将来该 API 转正后，应移除这条抑制并重新评估调用方式。
+    -->
+    <NoWarn>$(NoWarn);OPENAI001</NoWarn>
+  </PropertyGroup>
+
+  <!-- 依赖方向（S2 §2）：Agent → Channel / Storage / Core；Agent 不依赖 Server -->
+  <ItemGroup>
+    <ProjectReference Include="..\ZipperAIQQ.Core\ZipperAIQQ.Core.csproj" />
+    <ProjectReference Include="..\ZipperAIQQ.Channel\ZipperAIQQ.Channel.csproj" />
+    <ProjectReference Include="..\ZipperAIQQ.Storage\ZipperAIQQ.Storage.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.11.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
+    <PackageReference Include="Serilog" Version="4.4.0" />
+  </ItemGroup>
+
+</Project>

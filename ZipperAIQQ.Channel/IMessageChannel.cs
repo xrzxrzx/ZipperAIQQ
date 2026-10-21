@@ -19,6 +19,11 @@ public interface IMessageChannel
     /// <summary>平台标识，如 <c>qq</c>。与 <see cref="ChatRef.Platform"/> 对应。</summary>
     string Platform { get; }
 
+    /// <summary>
+    /// 建立连接（若通道需要）。已连接的实现应幂等。
+    /// </summary>
+    Task StartAsync(CancellationToken ct = default);
+
     /// <summary>本通道支持的消息能力，用于动态生成工具参数描述。</summary>
     ChannelCapabilities Capabilities { get; }
 
