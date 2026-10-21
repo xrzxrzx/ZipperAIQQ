@@ -365,7 +365,7 @@ public sealed class AgentEventTranslator
 
 ### 4.2 推送
 
-翻译出的 `AgentEvent` → `IEventBus.Publish` → `EventBroadcaster` → WS `/events` → WPF 客户端。
+翻译出的 `AgentEvent` → `IEventBus.Publish` → `EventBroadcaster` → WS `/events` → WinUI3 客户端。
 （**事件总线与广播的细节见 `通信层设计.md` 与技术设计 §3.9。**）
 
 > **要点**：`Agent` 层**只发事件到事件总线**，**不直接持有 WS 连接**（保持层次）。
