@@ -75,6 +75,12 @@ public sealed record ChatAgentDependencies
     public required Storage.Summaries.ISummaryStore SummaryStore { get; init; }
     public required Storage.Personas.IPersonaStore Personas { get; init; }
     public required Storage.Metrics.IMetricsStore Metrics { get; init; }
+
+    /// <summary>
+    /// 事件总线：漂移 / 降级等 Agent 事件走这里（§8.3）。
+    /// </summary>
+    public required Core.Events.IEventBus Events { get; init; }
+
     public required ChatAgentOptions Options { get; init; }
     public required Serilog.ILogger Logger { get; init; }
 }

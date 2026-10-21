@@ -1,7 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
+using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
+using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Composition;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Storage;
@@ -59,10 +61,32 @@ static async Task<int> RunAsync(HostApplicationBuilder builder, ServerOptions op
 
     var app = builder.Build();
 
+    SubscribeAgentEvents(app.Services);
+
     await LogStartupSummaryAsync(app.Services, options, databasePath);
 
     await app.RunAsync();
     return 0;
+}
+
+/// <summary>
+/// 订阅 Agent 事件（§8.3：漂移 / 降级要能被看见）。
+/// </summary>
+/// <remarks>
+/// M1 的消费者就是日志；M2 客户端接上 <c>WS /events</c> 后，
+/// 再加一个订阅者把事件转成帧即可 —— **发布点不用改**。
+/// </remarks>
+static void SubscribeAgentEvents(IServiceProvider services)
+{
+    var bus = services.GetRequiredService<IEventBus>();
+
+    bus.Subscribe<DriftDetectedEvent>(e => Log.Warning(
+        "Agent 事件：指令遵循漂移 {Kind}/{Detail}（会话 {SessionId}）",
+        e.Kind, e.Detail, e.SessionId));
+
+    bus.Subscribe<SendDegradedEvent>(e => Log.Warning(
+        "Agent 事件：降级代发 {Count} 条（会话 {SessionId}）",
+        e.SentCount, e.SessionId));
 }
 
 static async Task LogStartupSummaryAsync(
