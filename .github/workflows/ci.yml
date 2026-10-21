@@ -248,7 +248,7 @@ jobs:
           #    并把 packages.lock.json 提交进仓库，才可以打开 cache 并配 cache-dependency-path。
           cache: false
 
-      # 跨平台硬约束：除 Client（WPF）外都必须能在 Linux 构建
+      # 跨平台硬约束：除 Client（WinUI3）外都必须能在 Linux 构建
       - name: 还原
         if: steps.probe.outputs.found == 'true'
         run: dotnet restore
