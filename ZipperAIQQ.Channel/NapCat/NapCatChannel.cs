@@ -239,6 +239,14 @@ public sealed class NapCatChannel : IMessageChannel
                     });
                     break;
 
+                case FaceSegment face:
+                    array.Add(new JsonObject
+                    {
+                        ["type"] = "face",
+                        ["data"] = new JsonObject { ["id"] = face.Id },
+                    });
+                    break;
+
                 case ImageSegment image:
                     var file = image.FileId ?? image.Url;
                     if (!string.IsNullOrEmpty(file))

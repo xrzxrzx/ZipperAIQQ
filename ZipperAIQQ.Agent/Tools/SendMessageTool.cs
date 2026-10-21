@@ -2,6 +2,8 @@ using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
+using System.Text.RegularExpressions;
+using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
 
@@ -25,6 +27,8 @@ public static class SendMessageTool
         string botUserId,
         ChatRef chat,
         int maxMessages,
+        int minIntervalMs,
+        FaceCatalog faces,
         Action<int> onSent)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -33,6 +37,7 @@ public static class SendMessageTool
         ArgumentNullException.ThrowIfNull(onSent);
 
         var cap = Math.Max(1, maxMessages);
+        var interval = Math.Max(0, minIntervalMs);
 
         return AIFunctionFactory.Create(
             async (string[] messages, CancellationToken ct) =>
@@ -50,12 +55,22 @@ public static class SendMessageTool
                 var sent = 0;
                 var failures = new List<string>();
 
+                using var toolActivity = AgentTelemetry.Source.StartActivity("tool.send_message");
+                toolActivity?.SetTag("message.count", toSend.Length);
+                toolActivity?.SetTag("min.interval.ms", interval);
+
                 foreach (var text in toSend)
                 {
+                    // 最小发送间隔（防风控）：第一条不等
+                    if (sent > 0 && interval > 0)
+                    {
+                        await Task.Delay(interval, ct).ConfigureAwait(false);
+                    }
+
                     var outgoing = new OutgoingMessage
                     {
                         Chat = chat,
-                        Segments = [new TextSegment(text)],
+                        Segments = ParseContent(text, faces),
                     };
 
                     try
@@ -95,5 +110,55 @@ public static class SendMessageTool
                 "向**当前会话**发送消息。只有调用这个工具，你说的话才会真正发出去。" +
                 $"可以一次发送多条（最多 {cap} 条），用于模拟真人把一句话分几条发。" +
                 "不需要也不能指定发给谁 —— 会话是固定的。");
+    }
+private static readonly Regex FaceToken = new(@"\[表情:([^\]]+)\]", RegexOptions.Compiled);
+
+    /// <summary>
+    /// 把文本里的 [表情:名称] 解析成真实消息段。
+    /// </summary>
+    /// <remarks>
+    /// 查不到的**原样保留为文本** —— 静默吞掉会让 AI 以为发出去了，实际对方什么都没看到。
+    /// </remarks>
+    private static List<MessageSegment> ParseContent(string text, FaceCatalog catalog)
+    {
+        var result = new List<MessageSegment>();
+        var pos = 0;
+
+        foreach (Match m in FaceToken.Matches(text))
+        {
+            if (m.Index > pos)
+            {
+                result.Add(new TextSegment(text[pos..m.Index]));
+            }
+
+            var name = m.Groups[1].Value.Trim();
+            var entry = catalog.GetByName(name);
+
+            if (entry is null)
+            {
+                result.Add(new TextSegment(m.Value));
+            }
+            else if (entry.Kind == "system" && !string.IsNullOrEmpty(entry.Id))
+            {
+                result.Add(new FaceSegment(entry.Id));
+            }
+            else if (!string.IsNullOrEmpty(entry.File))
+            {
+                result.Add(new ImageSegment(entry.File, null));
+            }
+            else
+            {
+                result.Add(new TextSegment(m.Value));
+            }
+
+            pos = m.Index + m.Length;
+        }
+
+        if (pos < text.Length)
+        {
+            result.Add(new TextSegment(text[pos..]));
+        }
+
+        return result.Count > 0 ? result : [new TextSegment(text)];
     }
 }

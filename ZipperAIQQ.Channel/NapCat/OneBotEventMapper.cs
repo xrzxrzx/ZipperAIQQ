@@ -209,8 +209,29 @@ public static class OneBotEventMapper
                     }
                     break;
 
+                case "face":
+                    // 系统表情：保留 id，名称由上层按平台表情表渲染
+                    var faceId = GetString(data ?? seg, "id");
+                    if (!string.IsNullOrEmpty(faceId))
+                    {
+                        segments.Add(new FaceSegment(faceId));
+                    }
+                    break;
+
                 default:
-                    // face / record / video / json 等 M1 不处理，丢弃片段但不失败
+                    // 未专门处理的段 → **转成可读占位**，而不是丢弃。
+                    // 丢弃会让 AI 完全不知道"这里有个表情/语音"，读起来就像对方什么都没发。
+                    var label = type switch
+                    {
+                        "mface" => "[" + (GetString(data ?? seg, "summary") ?? "动画表情") + "]",
+                        "record" => "[语音]",
+                        "video" => "[视频]",
+                        "json" => "[卡片消息]",
+                        "file" => "[文件]",
+                        "forward" => "[合并转发]",
+                        _ => "[" + (type ?? "未知") + "]",
+                    };
+                    segments.Add(new TextSegment(label));
                     break;
             }
         }

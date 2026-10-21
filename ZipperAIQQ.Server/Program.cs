@@ -5,6 +5,7 @@ using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Serilog;
 using ZipperAIQQ.Agent;
+using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Filtering;
@@ -38,6 +39,7 @@ var model       = Require("ZIPPER_LLM_MODEL");
 var apiKindText = Env("ZIPPER_LLM_APIKIND");           // 可选：Responses | ChatCompletions
 var napcatToken = Env("ZIPPER_NAPCAT_TOKEN");          // 可选
 var dbPath      = Env("ZIPPER_DB") ?? "./data/zipperaiqq.db";
+var facesPath   = Env("ZIPPER_FACES") ?? "./config/faces.qq.json";
 var whitelist   = (Env("ZIPPER_WHITELIST") ?? string.Empty)
                     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
@@ -64,6 +66,9 @@ var connectionString = $"Data Source={fullDbPath}";
 
 await new DatabaseInitializer(connectionString, Log.Logger).InitializeAsync();
 
+// 表情目录：平台相关，放配置文件（接新平台换一份即可）
+var faceCatalog = FaceCatalog.Load(Path.GetFullPath(facesPath));
+
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddSingleton(Log.Logger);
@@ -86,7 +91,9 @@ var agentOptions = new ChatAgentOptions
     SystemPrompt =
         "你是一个角色扮演助手，在聊天软件里和人对话。" +
         "**你必须调用 send_message 工具来把话发出去** —— 直接输出文本对方是看不到的。" +
-        "可以一次发多条（像真人把一句话分几条发）。回复要简短自然。",
+        "可以一次发多条（像真人把一句话分几条发）。回复要简短自然。" +
+        "**发表情时**：先调用 list_faces 查询（不传关键词看常用，传关键词搜名称/标签），" +
+        "然后把 [表情:名字] 写进消息里。**单独一条只写 [表情:名字] 会作为大表情发送**（有特效）。",
 };
 
 builder.Services.AddSingleton<IChatAgentPool>(sp =>
@@ -94,7 +101,7 @@ builder.Services.AddSingleton<IChatAgentPool>(sp =>
     var client = sp.GetRequiredService<IChatClient>();
     var channel = sp.GetRequiredService<IMessageChannel>();
     return new ChatAgentPool(chat => new ChatAgent(
-        chat.SessionId, client, channel, sp.GetRequiredService<IMessageStore>(), agentOptions, Log.Logger));
+        chat.SessionId, client, channel, sp.GetRequiredService<IMessageStore>(), faceCatalog, agentOptions, Log.Logger));
 });
 
 builder.Services.AddHostedService<MessageRouter>();
@@ -119,6 +126,7 @@ var app = builder.Build();
 
 Log.Information("配置就绪：WS={Ws} 模型={Model} 库={Db}", wsUrl, model, fullDbPath);
 Log.Information("过滤：{Mode}（{Count} 条）", filterOptions.Mode, filterOptions.Entries.Count);
+Log.Information("表情目录：{Count} 个（{Path}）", faceCatalog.Count, facesPath);
 
 try
 {

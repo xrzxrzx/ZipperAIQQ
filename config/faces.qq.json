@@ -1,0 +1,818 @@
+{
+  "platform": "qq",
+  "note": "系统表情数据来自 QQ 官方文档（bot.q.qq.com）。custom 项可自行添加：kind=custom + name + file(URL或本地路径)。common=true 的会在无关键词查询时优先返回。",
+  "faces": [
+    {
+      "kind": "system",
+      "id": "4",
+      "name": "得意",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "5",
+      "name": "流泪",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "8",
+      "name": "睡",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "9",
+      "name": "大哭",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "10",
+      "name": "尴尬",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "12",
+      "name": "调皮",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "14",
+      "name": "微笑",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "16",
+      "name": "酷",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "21",
+      "name": "可爱",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "23",
+      "name": "傲慢",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "24",
+      "name": "饥饿",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "25",
+      "name": "困",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "26",
+      "name": "惊恐",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "27",
+      "name": "流汗",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "28",
+      "name": "憨笑",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "29",
+      "name": "悠闲",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "30",
+      "name": "奋斗",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "32",
+      "name": "疑问",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "33",
+      "name": "嘘",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "34",
+      "name": "晕",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "38",
+      "name": "敲打",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "39",
+      "name": "再见",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "41",
+      "name": "发抖",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "42",
+      "name": "爱情",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "43",
+      "name": "跳跳",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "49",
+      "name": "拥抱",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "53",
+      "name": "蛋糕",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "60",
+      "name": "咖啡",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "63",
+      "name": "玫瑰",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "66",
+      "name": "爱心",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "74",
+      "name": "太阳",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "75",
+      "name": "月亮",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "76",
+      "name": "赞",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "78",
+      "name": "握手",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "79",
+      "name": "胜利",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "85",
+      "name": "飞吻",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "89",
+      "name": "西瓜",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "96",
+      "name": "冷汗",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "97",
+      "name": "擦汗",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "98",
+      "name": "抠鼻",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "99",
+      "name": "鼓掌",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "100",
+      "name": "糗大了",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "101",
+      "name": "坏笑",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "102",
+      "name": "左哼哼",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "103",
+      "name": "右哼哼",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "104",
+      "name": "哈欠",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "106",
+      "name": "委屈",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "109",
+      "name": "左亲亲",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "111",
+      "name": "可怜",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "116",
+      "name": "示爱",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "118",
+      "name": "抱拳",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "120",
+      "name": "拳头",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "122",
+      "name": "爱你",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "123",
+      "name": "NO",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "124",
+      "name": "OK",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "125",
+      "name": "转圈",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "129",
+      "name": "挥手",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "144",
+      "name": "喝彩",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "147",
+      "name": "棒棒糖",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "171",
+      "name": "茶",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "173",
+      "name": "泪奔",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "174",
+      "name": "无奈",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "175",
+      "name": "卖萌",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "176",
+      "name": "小纠结",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "179",
+      "name": "doge",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "180",
+      "name": "惊喜",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "181",
+      "name": "骚扰",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "182",
+      "name": "笑哭",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "183",
+      "name": "我最美",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "201",
+      "name": "点赞",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "203",
+      "name": "托脸",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "212",
+      "name": "托腮",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "214",
+      "name": "啵啵",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "219",
+      "name": "蹭一蹭",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "222",
+      "name": "抱抱",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "227",
+      "name": "拍手",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "232",
+      "name": "佛系",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "240",
+      "name": "喷脸",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "243",
+      "name": "甩头",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "246",
+      "name": "加油抱抱",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "262",
+      "name": "脑阔疼",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "264",
+      "name": "捂脸",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "265",
+      "name": "辣眼睛",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "266",
+      "name": "哦哟",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "267",
+      "name": "头秃",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "268",
+      "name": "问号脸",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "269",
+      "name": "暗中观察",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "270",
+      "name": "emm",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "271",
+      "name": "吃瓜",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "272",
+      "name": "呵呵哒",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "273",
+      "name": "我酸了",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "277",
+      "name": "汪汪",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "278",
+      "name": "汗",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "281",
+      "name": "无眼笑",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "282",
+      "name": "敬礼",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "284",
+      "name": "面无表情",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "285",
+      "name": "摸鱼",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "287",
+      "name": "哦",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "289",
+      "name": "睁眼",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "290",
+      "name": "敲开心",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "293",
+      "name": "摸锦鲤",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "294",
+      "name": "期待",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "297",
+      "name": "拜谢",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "298",
+      "name": "元宝",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "299",
+      "name": "牛啊",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "305",
+      "name": "右亲亲",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "306",
+      "name": "牛气冲天",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "307",
+      "name": "喵喵",
+      "tags": [],
+      "common": true
+    },
+    {
+      "kind": "system",
+      "id": "314",
+      "name": "仔细分析",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "315",
+      "name": "加油",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "318",
+      "name": "崇拜",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "319",
+      "name": "比心",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "320",
+      "name": "庆祝",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "322",
+      "name": "拒绝",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "324",
+      "name": "吃糖",
+      "tags": [],
+      "common": false
+    },
+    {
+      "kind": "system",
+      "id": "326",
+      "name": "生气",
+      "tags": [],
+      "common": false
+    }
+  ]
+}
