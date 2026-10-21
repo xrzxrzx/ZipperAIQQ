@@ -7,9 +7,13 @@
   </PropertyGroup>
 
   <!--
-    注意：本项目刻意不引用任何内部项目。
-    平台实现（NapCat 等）会在加 Transport 引用时用到，但那属于实现层，
-    接口与模型层不依赖任何东西 —— 这是「接缝 B」的硬要求（FR-1.1）。
+    依赖方向（S2 §2）：Channel → Transport → Core。
+    平台实现（NapCat）需要 WebSocket，但**接口与模型层不依赖任何平台概念** ——
+    这是「接缝 B」的硬要求（FR-1.1）。
   -->
+  <ItemGroup>
+    <ProjectReference Include="..\ZipperAIQQ.Core\ZipperAIQQ.Core.csproj" />
+    <ProjectReference Include="..\ZipperAIQQ.Transport\ZipperAIQQ.Transport.csproj" />
+  </ItemGroup>
 
 </Project>

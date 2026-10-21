@@ -12,6 +12,10 @@ namespace ZipperAIQQ.Transport.Client;
 /// </remarks>
 public interface IClientTransport : IWebSocketTransport
 {
+    /// <summary>收到消息时的回调。由上层（通道实现）注册。</summary>
+    /// <remarks>未注册时实现方只记日志、不抛异常 —— 一帧没人处理不该把连接干崩。</remarks>
+    Func<JsonNode, ValueTask>? EventHandler { get; set; }
+
     /// <summary>
     /// 连接到远端。
     /// </summary>
