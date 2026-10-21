@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 4;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -48,6 +48,8 @@ public sealed class DatabaseInitializer
 
         await ExecuteAsync(conn, MessagesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SessionsTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, EmbeddingsTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, SummariesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -146,6 +148,54 @@ public sealed class DatabaseInitializer
             ReplyMode      TEXT,
             CreatedAtMs    INTEGER NOT NULL,
             LastActiveAtMs INTEGER NOT NULL
+        );
+        """;
+
+    /// <summary>
+    /// 消息向量表（M1-C 检索用）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Vector 存 BLOB</b>（float32 小端，512 维 = 2048 字节）。
+    /// 用 <c>ModelVersion</c> 标记来源模型 —— 换模型后旧向量和新查询的向量**不在同一空间**，
+    /// 混用会算出无意义的分数，所以必须能识别出来整批重建。
+    /// </para>
+    /// <para>
+    /// <b>不做 ANN 索引</b>：单会话消息量在几千条量级，全表扫描 + 点积约 10ms，
+    /// 引入 HNSW 之类的索引只会增加复杂度。
+    /// </para>
+    /// </remarks>
+    private const string EmbeddingsTable = """
+        CREATE TABLE IF NOT EXISTS MessageEmbeddings (
+            MessageId    INTEGER NOT NULL PRIMARY KEY,
+            SessionId    TEXT    NOT NULL,
+            Vector       BLOB    NOT NULL,
+            Dimension    INTEGER NOT NULL,
+            ModelVersion TEXT    NOT NULL,
+            CreatedAtMs  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS IX_MessageEmbeddings_Session
+            ON MessageEmbeddings (SessionId);
+        """;
+
+    /// <summary>
+    /// 会话摘要（M1-C 的「温层」）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 热窗只能覆盖最近几十条，再往前就丢了。全丢掉会让 AI「忘了你之前说过什么」，
+    /// 全部保留又会把上下文撑爆。摘要就是中间那层：**把旧对话压成一段话**。
+    /// </para>
+    /// <para>
+    /// <c>CoversUpToId</c> 记录「已经压到哪条消息」，避免重复压缩，也避免漏压。
+    /// </para>
+    /// </remarks>
+    private const string SummariesTable = """
+        CREATE TABLE IF NOT EXISTS SessionSummaries (
+            SessionId    TEXT    NOT NULL PRIMARY KEY,
+            Summary      TEXT    NOT NULL,
+            CoversUpToId INTEGER NOT NULL,
+            UpdatedAtMs  INTEGER NOT NULL
         );
         """;
 

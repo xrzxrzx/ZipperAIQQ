@@ -111,6 +111,46 @@ public sealed class SqliteMessageStore : IMessageStore
         }, ct);
     }
 
+    public Task<IReadOnlyList<StoredMessage>> GetByIdsAsync(
+        string sessionId, IReadOnlyList<long> ids, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(ids);
+
+        if (ids.Count == 0)
+        {
+            return Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        }
+
+        return _db.ReadAsync<IReadOnlyList<StoredMessage>>(async (conn, token) =>
+        {
+            // IN 子句必须逐个占位符 —— 拼字符串会把外部输入当 SQL 执行
+            var placeholders = string.Join(", ", Enumerable.Range(0, ids.Count).Select(i => $"@p{i}"));
+
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT {SelectColumnsSql}
+                FROM Messages
+                WHERE SessionId = @sessionId AND Id IN ({placeholders})
+                ORDER BY SentAtMs ASC, Id ASC;
+                """;
+            cmd.Parameters.AddWithValue("@sessionId", sessionId);
+            for (var i = 0; i < ids.Count; i++)
+            {
+                cmd.Parameters.AddWithValue($"@p{i}", ids[i]);
+            }
+
+            var list = new List<StoredMessage>(ids.Count);
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                list.Add(ReadRow(reader));
+            }
+
+            return (IReadOnlyList<StoredMessage>)list;
+        }, ct);
+    }
+
     public Task<long> CountAsync(string sessionId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -173,6 +213,12 @@ public sealed class SqliteMessageStore : IMessageStore
             @plainText, @segmentsJson, @sentAtMs, @receivedAtMs, @replyToMessageId, @direction
         )
         RETURNING Id;
+        """;
+
+    private const string SelectColumnsSql = """
+        Id, Platform, ChatType, ChatId, MessageId,
+        SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
+        ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId
         """;
 
     private const string SelectRecentSql = """
