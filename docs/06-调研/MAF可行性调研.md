@@ -373,7 +373,8 @@ AIAgent agent = chatClient.AsAIAgent(instructions: "...", name: "...");
 > ⚠️ **注意 DeepSeek 走哪个协议**：官方文档把 **Responses API 列为"默认且推荐"**（证据强度：强），但 DeepSeek 提供的是 **Chat Completions 兼容**接口。文档也给了取舍标准：
 > > "Use the **Chat Completions API** when: Migrating existing applications that rely on the Chat Completions format / You need simple, stateless request/response interactions / State management is handled entirely by your client / You're integrating with existing tools that only support Chat Completions"
 >
-> 对本项目，**必须走 Chat Completions**（DeepSeek 不支持 Responses API）。这意味着官方"推荐路径"你**用不上**，实际落在那条被定位为"兼容旧格式"的路线上。
+> ⚠️ **本条结论已过期（2026-10-21 复查）**：DeepSeek 现已支持 Responses API（`/v1/responses`），下文"必须走 Chat Completions"的前提**不再成立**。原文保留以存历史。
+> ~~对本项目，**必须走 Chat Completions**（DeepSeek 不支持 Responses API）。这意味着官方"推荐路径"你**用不上**。~~
 
 ---
 

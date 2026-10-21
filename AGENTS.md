@@ -56,12 +56,12 @@
 | 客户端 | **WinUI3**（Windows App SDK；Windows-only，仅表现层；服务端必须保持跨平台） |
 | **MVVM 框架** | **`CommunityToolkit.Mvvm`**（微软官方，Source Generator 驱动；WinUI3 下同样适用） |
 | **IoC 容器** | **`Microsoft.Extensions.DependencyInjection`**（服务端由 `Microsoft.Extensions.Hosting` 提供，客户端手工建 `ServiceCollection`） |
-| **公共基础设施** | **`ZipperAIQQ.Core`**（第 7 个项目）—— **横切关注点**：配置 / 日志 / 进程内事件总线。**准入规则两条都要满足**：① 能说出第二个消费者 ② 它是横切关注点而非运行时能力（判据：「把所有业务模块删光，这东西还需要吗？」⇒ `Transport` / `Storage` **因此不进 Core**）。详见 `docs/03-设计/配置与日志设计.md` §1.3 |
+| **公共基础设施** | **`ZipperAIQQ.Core`** —— **横切关注点**基础设施项目：配置 / 日志 / 进程内事件总线。**准入规则两条都要满足**：① 能说出第二个消费者 ② 它是横切关注点而非运行时能力（判据：「把所有业务模块删光，这东西还需要吗？」⇒ `Transport` / `Storage` **因此不进 Core**）。详见 `docs/03-设计/配置与日志设计.md` §1.3 |
 | **配置** | `Microsoft.Extensions.Configuration` + `IOptions<T>`；**Options 类型跟着消费者模块走**（不集中在 Core）；**主密钥**只走环境变量 / `appsettings.Local.json`；**LLM API key 由客户端配置并加密落库** |
 | **日志** | **Serilog** —— 容器里注册 `Serilog.ILogger` 直接注入（`ForContext<T>()` 取上下文）；**写盘前脱敏** |
 | 客户端通信 | **HTTP 单端点（非 REST）+ WebSocket**；**不引 gRPC** |
-| QQ 通道 | **NapCat**（OneBot 11），抽象为 `IQQChannel`（正向 WS + 反向 WS 双实现）<br>⚠️ **待 S2 修订**：多平台泛化，命名见 §三 接缝 B |
-| AI | **MEAI（`Microsoft.Extensions.AI`）打底 + 部分自研** —— 自动工具循环用 MEAI 的 `FunctionInvokingChatClient`，OpenAI 兼容端点（DeepSeek）用 `Microsoft.Extensions.AI.OpenAI`；**自研**会话隔离 / 上下文压缩策略 / 工具注册与权限门禁 / `AgentEvent` 事件流。**不引 MAF**（理由见 `docs/07-记忆/决策记录.md`）<br>⚠️ **待 S2 修订**：接入改走 **Responses API**（`GetResponsesClient`），不用 `previous_response_id` |
+| QQ 通道 | **NapCat**（OneBot 11），抽象为 **`IMessageChannel`**（平台无关；QQ 只是首个实现，**正向 WS** 已实现，反向 WS 未做） |
+| AI | **MEAI（`Microsoft.Extensions.AI`）打底 + 部分自研** —— 自动工具循环用 MEAI 的 `FunctionInvokingChatClient`，OpenAI 兼容端点（DeepSeek）用 `Microsoft.Extensions.AI.OpenAI`；**自研**会话隔离 / 上下文压缩策略 / 工具注册与权限门禁 / `AgentEvent` 事件流。**不引 MAF**（理由见 `docs/07-记忆/决策记录.md`）<br>**接入走 Responses API**（`GetResponsesClient`），**不用 `previous_response_id`**（上下文自管理） |
 | **JSON 库** | **`System.Text.Json`（全项目统一）** —— 契约 DTO、OneBot 事件、LLM 报文、配置一律用它（**与 MEAI 同栈，避免双轨**） |
 | 存储 | SQLite |
 
@@ -80,7 +80,7 @@
 | 接缝 | 约束 |
 |---|---|
 | **A. 表现层 ↔ 编排层** | 必须走 HTTP/WS，**不得进程内直连**——这是「本机单体」与「服务器分离」共用一套代码的前提 |
-| **B. 平台通道 ↔ 编排层** | 必须经**平台无关的消息通道抽象**，**上层不得直接依赖任何平台类型**（QQ 实现为 `IQQChannel`；多平台泛化后的命名待 S2 定） |
+| **B. 平台通道 ↔ 编排层** | 必须经**平台无关的消息通道抽象**，**上层不得直接依赖任何平台类型**（QQ 实现为 `NapCatChannel`，接口是 `IMessageChannel`） |
 | **C. 工具执行 → 权限门禁** | 危险操作（执行命令、写/删文件、访问外部服务）**默认仅管理员**；门禁放在**服务端** |
 
 ---
