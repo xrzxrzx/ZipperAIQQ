@@ -15,6 +15,8 @@ using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Storage.Database;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Metrics;
+using ZipperAIQQ.Storage.Personas;
 using ZipperAIQQ.Storage.Summaries;
 using ZipperAIQQ.Transport.Client;
 
@@ -45,6 +47,7 @@ public static class ServiceRegistration
         services.AddSingleton<IMessageStore, SqliteMessageStore>();
         services.AddSingleton<IEmbeddingStore, SqliteEmbeddingStore>();
         services.AddSingleton<ISummaryStore, SqliteSummaryStore>();
+        services.AddSingleton<IMetricsStore, SqliteMetricsStore>();
 
         // ── 接收过滤：白名单空 = 全放行仅在"没配置白名单"时启用，避免默认什么都收 ──
         services.AddSingleton<IChatFilter>(_ => new ChatFilter(BuildFilterOptions(options)));
@@ -81,6 +84,11 @@ public static class ServiceRegistration
         // ── 表情目录 ──
         services.AddSingleton(_ => FaceCatalog.Load(Path.GetFullPath(options.FacesPath)));
 
+        // ── 人设（D4/D12）：全局来自文件，会话级可在运行时覆盖 ──
+        var globalPersona = LoadGlobalPersona(options.PersonaPath);
+        services.AddSingleton<IPersonaStore>(sp => new DefaultPersonaStore(
+            sp.GetRequiredService<ISqliteDatabase>(), globalPersona));
+
         // ── 模型 ──
         services.AddSingleton<IChatClient>(_ => ChatClientFactory.Create(
             new LlmEndpoint("primary", options.LlmBaseUrl, options.LlmModel, options.LlmApiKind),
@@ -96,19 +104,22 @@ public static class ServiceRegistration
         // ── Agent 池：一个聊天一个实例（D9）──
         services.AddSingleton<IChatAgentPool>(sp =>
         {
-            var client = sp.GetRequiredService<IChatClient>();
-            var channel = sp.GetRequiredService<IMessageChannel>();
-            var store = sp.GetRequiredService<IMessageStore>();
-            var faces = sp.GetRequiredService<FaceCatalog>();
-            var retriever = sp.GetRequiredService<MemoryRetriever>();
-            var summaries = sp.GetRequiredService<SummaryService>();
-            var summaryStore = sp.GetRequiredService<ISummaryStore>();
-            var logger = sp.GetRequiredService<ILogger>();
-            var agentOptions = BuildAgentOptions();
+            var deps = new ChatAgentDependencies
+            {
+                Client = sp.GetRequiredService<IChatClient>(),
+                Channel = sp.GetRequiredService<IMessageChannel>(),
+                Store = sp.GetRequiredService<IMessageStore>(),
+                Faces = sp.GetRequiredService<FaceCatalog>(),
+                Retriever = sp.GetRequiredService<MemoryRetriever>(),
+                Summaries = sp.GetRequiredService<SummaryService>(),
+                SummaryStore = sp.GetRequiredService<ISummaryStore>(),
+                Personas = sp.GetRequiredService<IPersonaStore>(),
+                Metrics = sp.GetRequiredService<IMetricsStore>(),
+                Options = BuildAgentOptions(),
+                Logger = sp.GetRequiredService<ILogger>(),
+            };
 
-            return new ChatAgentPool(chat => new ChatAgent(
-                chat.SessionId, client, channel, store, faces, retriever,
-                summaries, summaryStore, agentOptions, logger));
+            return new ChatAgentPool(chat => new ChatAgent(chat.SessionId, deps));
         });
 
         // ── 消息路由 ──
@@ -126,11 +137,24 @@ public static class ServiceRegistration
 
     private static ChatAgentOptions BuildAgentOptions() => new()
     {
-        SystemPrompt =
-            "你是一个角色扮演助手，在聊天软件里和人对话。" +
-            "**你必须调用 send_message 工具来把话发出去** —— 直接输出文本对方是看不到的。" +
-            "可以一次发多条（像真人把一句话分几条发）。回复要简短自然。" +
-            "**发表情时**：先调用 list_faces 查询（不传关键词看常用，传关键词搜名称/标签），" +
-            "然后把 [表情:名字] 写进消息里。**单独一条只写 [表情:名字] 会作为大表情发送**（有特效）。",
+        // 人设由 IPersonaStore 提供；这里只是「连人设文件都读不到」时的兜底，
+        // 保证永远有一条 system，不会出现没有角色的空壳对话。
+        FallbackSystemPrompt = "你是一个聊天助手，用简短自然的中文回复。",
     };
+
+    /// <summary>读取全局人设文件；读不到就用兜底文案。</summary>
+    private static Persona LoadGlobalPersona(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (File.Exists(fullPath))
+        {
+            var content = File.ReadAllText(fullPath);
+            if (!string.IsNullOrWhiteSpace(content))
+            {
+                return new Persona(Path.GetFileNameWithoutExtension(fullPath), content.Trim());
+            }
+        }
+
+        return new Persona("fallback", "你是一个聊天助手，用简短自然的中文回复。");
+    }
 }

@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 6;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -50,6 +50,8 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, SessionsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, EmbeddingsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SummariesTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, PersonasTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, CallMetricsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -197,6 +199,48 @@ public sealed class DatabaseInitializer
             CoversUpToId INTEGER NOT NULL,
             UpdatedAtMs  INTEGER NOT NULL
         );
+        """;
+
+    /// <summary>
+    /// 会话级人设覆盖（M1-D）。
+    /// </summary>
+    /// <remarks>
+    /// 只存**被覆盖**的会话；没有记录的会话回落到全局人设。
+    /// 这样切人设是「写一行」，而不是「给每个会话都复制一份」。
+    /// </remarks>
+    private const string PersonasTable = """
+        CREATE TABLE IF NOT EXISTS SessionPersonas (
+            SessionId   TEXT NOT NULL PRIMARY KEY,
+            Name        TEXT NOT NULL,
+            Content     TEXT NOT NULL,
+            UpdatedAtMs INTEGER NOT NULL
+        );
+        """;
+
+/// <summary>
+    /// 调用指标（耗时与 token 用量）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 每类调用记一行：LLM 调用、工具执行、向量化、检索。
+    /// 客户端要做「平均耗时排序 / token 消耗」时直接查这张表。
+    /// </para>
+    /// <para>
+    /// **只记元数据，不记内容** —— 耗时和 token 数不敏感，消息正文才敏感。
+    /// </para>
+    /// </remarks>
+    private const string CallMetricsTable = """
+        CREATE TABLE IF NOT EXISTS CallMetrics (
+            Id           INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            SessionId    TEXT,
+            Kind         TEXT    NOT NULL,
+            ElapsedMs    REAL    NOT NULL,
+            InputTokens  INTEGER,
+            OutputTokens INTEGER,
+            CreatedAtMs  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS IX_CallMetrics_Kind_Time
+            ON CallMetrics (Kind, CreatedAtMs);
         """;
 
     private const string SchemaVersionTable = """
