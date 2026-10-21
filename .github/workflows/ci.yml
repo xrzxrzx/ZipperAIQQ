@@ -126,9 +126,9 @@ jobs:
           # 允许的占位值 —— 新增占位号请加到这里
           ALLOW = {"1000000000", "10001", "1234567890", "123456789", "示例昵称", "示例群名"}
 
-          files = sorted(glob.glob("docs/contracts/**/*.json", recursive=True))
+          files = sorted(glob.glob("docs/05-契约/**/*.json", recursive=True))
           if not files:
-              print("::error::docs/contracts/ 下没有找到任何样例文件")
+              print("::error::docs/05-契约/ 下没有找到任何样例文件")
               sys.exit(1)
 
           problems = []
@@ -158,7 +158,7 @@ jobs:
               print("::error::契约样例检查未通过（本目录会随代码公开）")
               for p in problems:
                   print(f"::error::{p}")
-              print("::error::身份字段只允许使用占位值，见 docs/contracts/README.md")
+              print("::error::身份字段只允许使用占位值，见 docs/05-契约/README.md")
               sys.exit(1)
 
           print(f"共 {len(files)} 个样例，全部合法且身份字段均为占位值。")
