@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -52,6 +52,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, SummariesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, PersonasTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, CallMetricsTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, ScheduleTasksTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -270,5 +271,41 @@ public sealed class DatabaseInitializer
         CREATE TABLE IF NOT EXISTS SchemaVersion (
             Version INTEGER NOT NULL
         );
+        """;
+
+    /// <summary>
+    /// 定时任务表（M1-F）：**数据库即队列**（FR-14 / D21）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 不另建内存队列 —— 那会引入「DB 与内存两份真相」。
+    /// 单实例部署下，带 <c>(Status, NextRunAtMs)</c> 索引的到期查询 &lt; 1ms。
+    /// </para>
+    /// <para>
+    /// <c>NextRunAtMs</c> 存 **UTC Unix 毫秒**；显示与解析一律北京时间（FR-15.3）。
+    /// </para>
+    /// </remarks>
+    private const string ScheduleTasksTable = """
+        CREATE TABLE IF NOT EXISTS ScheduleTasks (
+            Id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            SessionId       TEXT    NOT NULL,
+            Platform        TEXT    NOT NULL,
+            ChatType        INTEGER NOT NULL,
+            ChatId          TEXT    NOT NULL,
+            Content         TEXT    NOT NULL,
+            MentionUserId   TEXT,
+            RepeatKind      INTEGER NOT NULL,
+            IntervalMinutes INTEGER NOT NULL,
+            NextRunAtMs     INTEGER NOT NULL,
+            CreatedAtMs     INTEGER NOT NULL,
+            CreatedBy       TEXT    NOT NULL,
+            Status          INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_ScheduleTasks_Due
+            ON ScheduleTasks (Status, NextRunAtMs);
+
+        CREATE INDEX IF NOT EXISTS IX_ScheduleTasks_Session
+            ON ScheduleTasks (SessionId);
         """;
 }

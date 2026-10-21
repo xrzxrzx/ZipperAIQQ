@@ -93,6 +93,9 @@ public sealed record ChatAgentDependencies
     /// <summary>单次读写大小上限（字节，FR-7.7）。</summary>
     public int FileMaxBytes { get; init; } = 256 * 1024;
 
+    /// <summary>定时任务仓储（FR-14）。</summary>
+    public required Storage.Schedules.IScheduleStore Schedules { get; init; }
+
     public required ChatAgentOptions Options { get; init; }
     public required Serilog.ILogger Logger { get; init; }
 }

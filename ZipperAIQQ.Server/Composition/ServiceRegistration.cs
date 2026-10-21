@@ -14,11 +14,13 @@ using ZipperAIQQ.Channel.Throttling;
 using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Orchestration;
+using ZipperAIQQ.Server.Scheduler;
 using ZipperAIQQ.Storage.Database;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Metrics;
 using ZipperAIQQ.Storage.Personas;
+using ZipperAIQQ.Storage.Schedules;
 using ZipperAIQQ.Storage.Summaries;
 using ZipperAIQQ.Transport.Client;
 
@@ -59,6 +61,7 @@ public static class ServiceRegistration
         services.AddSingleton<IEmbeddingStore, SqliteEmbeddingStore>();
         services.AddSingleton<ISummaryStore, SqliteSummaryStore>();
         services.AddSingleton<IMetricsStore, SqliteMetricsStore>();
+        services.AddSingleton<IScheduleStore, SqliteScheduleStore>();
 
         // ── 接收过滤：白名单空 = 全放行仅在"没配置白名单"时启用，避免默认什么都收 ──
         services.AddSingleton<IChatFilter>(_ => new ChatFilter(BuildFilterOptions(options)));
@@ -133,12 +136,16 @@ public static class ServiceRegistration
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
                 FileMaxBytes = options.FileMaxBytes,
+                Schedules = sp.GetRequiredService<IScheduleStore>(),
                 Options = BuildAgentOptions(),
                 Logger = sp.GetRequiredService<ILogger>(),
             };
 
             return new ChatAgentPool(chat => new ChatAgent(chat.SessionId, deps));
         });
+
+        // ── 定时任务轮询（FR-14：数据库即队列，1 分钟精度，启动时补执行）──
+        services.AddHostedService<SchedulePoller>();
 
         // ── 消息路由 ──
         services.AddHostedService<MessageRouter>();
