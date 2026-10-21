@@ -86,7 +86,11 @@ var faceCatalog = FaceCatalog.Load(Path.GetFullPath(facesPath));
 
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.Services.AddSingleton(Log.Logger);
+// 让 Host 接管 Serilog 的生命周期（停止时自动 flush），
+// 同时把 Serilog 注册进 Microsoft.Extensions.Logging —— 
+// 这样既可以用 Serilog.ILogger（业务代码），也可以用 ILogger<T>（框架/第三方库）。
+// 配置本身仍走 bootstrap 的 Log.Logger，但**组件一律通过构造参数注入**，不碰静态属性。
+builder.Services.AddSerilog(Log.Logger, dispose: false);
 builder.Services.AddSingleton<ISqliteDatabase>(_ => new SqliteDatabase(connectionString, Log.Logger));
 builder.Services.AddSingleton<IMessageStore, SqliteMessageStore>();
 builder.Services.AddSingleton<IChatFilter>(_ => new ChatFilter(filterOptions));
