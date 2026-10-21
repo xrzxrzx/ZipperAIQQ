@@ -17,6 +17,8 @@ using ZipperAIQQ.Storage.Database;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Transport.Client;
 
+try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
