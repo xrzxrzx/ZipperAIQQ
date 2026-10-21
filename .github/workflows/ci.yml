@@ -4,7 +4,7 @@ name: CI
 # 公开仓库使用 GitHub 托管的 runner 是【免费且不限额度】的。
 on:
   push:
-    branches: [main]
+    branches: [main, dev]   # dev 是 AI 的开发分支，守卫必须也在那里生效
   pull_request:
   workflow_dispatch:
 
@@ -37,6 +37,84 @@ jobs:
             exit 1
           fi
           echo "OK：内部资料目录未入库。"
+
+      # ─────────────────────────────────────────────────────────────────
+      # 敏感信息守卫（2026-10-21 新增）
+      # 由来：AI 把验收输出里的真实 QQ 号直接抄进了文档，违反了同一天定的
+      #      「账号也算敏感信息」规则。既然"记住"失败过两次，就改成机械检查。
+      #
+      # 设计取舍：**强检测失败、弱检测只警告**。
+      #   - 强检测（明确的证据）：qq:g<数字> / qq:p<数字> 形态，以及真实内网 IP → 直接失败
+      #   - 弱检测（可能误报）：孤立的长数字串 → 只警告，由人确认
+      # 理由：老是误报的检查器，人就会开始忽略它（本文件里已经写过一次这句话）。
+      # ─────────────────────────────────────────────────────────────────
+      - name: 守卫 —— 仓库中不得出现真实账号 / 内网地址
+        run: |
+          python3 - <<'PY'
+          import re, subprocess, sys
+
+          tracked = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True).stdout
+          exts = (".md", ".json", ".cs", ".yml", ".yaml", ".ps1", ".csproj", ".slnx", ".txt", ".example")
+          files = [f for f in tracked.splitlines() if f and f.endswith(exts)]
+
+          ALLOW_NUMS = {"1000000000", "1234567890", "123456789"}
+          ALLOW_IPS  = {"127.0.0.1"}
+
+          # 会话号只查 ≥8 位：真实 QQ 号是 9~11 位，而代码注释里的示例是 6 位（qq:g123456）。
+          # 这个下限是「减少误报」的关键 —— 误报多了守卫就会被无视。
+          session_pat = re.compile(r'qq:[pg](\d{8,})')
+
+          # IP 必须**完整四段**。只写前缀会命中文档里的包版本号（如 10.0.13）。
+          ip_pat = re.compile(
+              r'\b(?:192\.168\.\d{1,3}\.\d{1,3}'
+              r'|10\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+              r'|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b')
+
+          num_pat = re.compile(r'(?<![\d.])(\d{9,11})(?![\d.])')
+
+          errors, warns = [], []
+
+          for f in files:
+              try:
+                  text = open(f, encoding="utf-8").read()
+              except Exception:
+                  continue
+
+              # 强检测 1：会话 ID 里的号码
+              for m in session_pat.finditer(text):
+                  num = m.group(1)
+                  if num not in ALLOW_NUMS:
+                      errors.append(f"{f}: 会话 ID 含疑似真实账号 —— qq:?{num}")
+
+              # 强检测 2：真实内网 IP（占位写法 192.168.x.x 不会命中）
+              for m in ip_pat.finditer(text):
+                  if m.group(0) not in ALLOW_IPS:
+                      errors.append(f"{f}: 疑似真实内网地址 —— {m.group(0)}")
+
+              # 弱检测：孤立长数字（只警告）
+              for m in num_pat.finditer(text):
+                  n = m.group(1)
+                  if n in ALLOW_NUMS:
+                      continue
+                  if len(n) == 10 and n.startswith(("16", "17", "18", "19")):
+                      continue   # 多半是 Unix 时间戳
+                  warns.append(f"{f}: 孤立数字串 {n}（请确认不是 QQ 号）")
+
+          for w in warns[:20]:
+              print(f"::warning::{w}")
+          if len(warns) > 20:
+              print(f"::warning::……还有 {len(warns) - 20} 条弱警告")
+
+          if errors:
+              print("::error::发现疑似真实账号 / 内网地址（见 AGENTS.md §七：一律用占位符）")
+              for e in errors:
+                  print(f"::error::{e}")
+              sys.exit(1)
+
+          print(f"OK：扫描 {len(files)} 个文件，未发现真实账号或内网地址。")
+          PY
+
+
 
       # 这条正是 2026-09-22 抓到真实 QQ 号泄漏的那类检查，所以固化下来
       - name: 校验契约样例（合法 JSON + 身份字段必须是占位值）
