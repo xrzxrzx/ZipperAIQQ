@@ -166,6 +166,36 @@ public sealed class SqliteMessageStore : IMessageStore
         }, ct);
     }
 
+    public Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(int limit, CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        return _db.ReadAsync<IReadOnlyList<SessionSummary>>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT SessionId, COUNT(*), MAX(SentAtMs)
+                FROM Messages
+                GROUP BY SessionId
+                ORDER BY MAX(SentAtMs) DESC
+                LIMIT @limit;
+                """;
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            var list = new List<SessionSummary>();
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                list.Add(new SessionSummary(
+                    reader.GetString(0),
+                    reader.GetInt32(1),
+                    DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(2))));
+            }
+
+            return list;
+        }, ct);
+    }
+
     private static StoredMessage ReadRow(SqliteDataReader reader)
     {
         var segmentsJson = reader.GetString(11);

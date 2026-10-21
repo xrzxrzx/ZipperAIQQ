@@ -61,6 +61,16 @@ public sealed record ServerOptions
     /// <summary>单次读写大小上限（字节，FR-7.7）：超限拒绝，不静默截断。</summary>
     public int FileMaxBytes { get; init; } = 256 * 1024;
 
+    // ── HTTP / WS 端点（M2-A）──
+
+    /// <summary>监听地址（<c>host:port</c>）。默认只绑 loopback。</summary>
+    public string HttpAddress { get; init; } = "127.0.0.1:5180";
+
+    /// <summary>
+    /// 鉴权 token：**非 loopback 监听时必须配**，否则拒绝启动（架构 §3.5）。
+    /// </summary>
+    public string? HttpToken { get; init; }
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;
@@ -138,6 +148,9 @@ public sealed record ServerOptions
             ToolWhitelist = SplitList(Optional("ZIPPER_TOOL_WHITELIST")),
             WorkspacePath = Optional("ZIPPER_WORKSPACE") ?? "./workspace",
             FileMaxBytes = IntOrDefault("ZIPPER_FILE_MAX_BYTES", 256 * 1024),
+
+            HttpAddress = Optional("ZIPPER_HTTP_ADDR") ?? "127.0.0.1:5180",
+            HttpToken = Optional("ZIPPER_HTTP_TOKEN"),
 
             SendIntervalMs = IntOrDefault("ZIPPER_SEND_INTERVAL_MS", 300),
             MaxConsecutive = IntOrDefault("ZIPPER_MAX_CONSECUTIVE", 10),

@@ -13,6 +13,8 @@ using ZipperAIQQ.Channel.NapCat;
 using ZipperAIQQ.Channel.Throttling;
 using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Configuration;
+using ZipperAIQQ.Server.Api;
+using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Server.Scheduler;
 using ZipperAIQQ.Storage.Database;
@@ -45,8 +47,22 @@ public static class ServiceRegistration
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
+        // 配置本身也进容器：action / hosted service 需要读模型名、监听地址等
+        services.AddSingleton(options);
+
         // ── 事件总线（Agent 事件：漂移 / 降级；M2 客户端接 WS 后订阅同一批事件）──
         services.AddSingleton<IEventBus>(sp => new EventBus(sp.GetRequiredService<ILogger>()));
+
+        // ── M2-A：HTTP / WS 端点 ──
+        // HttpAccessPolicy 构造时校验：非 loopback 无 token 直接抛，拒绝启动
+        services.AddSingleton(_ => new HttpAccessPolicy(options.HttpAddress, options.HttpToken));
+        services.AddSingleton<IApiAction, PingAction>();
+        services.AddSingleton<IApiAction, GetStatusAction>();
+        services.AddSingleton<IApiAction, ListSessionsAction>();
+        services.AddSingleton<IApiAction, GetMessagesAction>();
+        services.AddSingleton<IApiAction, GetMetricsAction>();
+        services.AddSingleton<ActionDispatcher>();
+        services.AddSingleton<EventBroadcaster>();
 
         // ── 权限与工作区（M1-E / FR-6 / FR-7）──
         // PermissionGate 构造时就校验硬底线：越界配置直接拒绝启动（FR-6.6）

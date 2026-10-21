@@ -1,9 +1,13 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Serilog;
 using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Core.Events;
+using ZipperAIQQ.Server.Api;
 using ZipperAIQQ.Server.Composition;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Storage;
@@ -12,7 +16,10 @@ using ZipperAIQQ.Storage.Metrics;
 // 中文日志在 GBK 代码页的控制台里会乱码（文件日志是 UTF-8，不受影响）
 try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
+
+// 日志统一交给 Serilog：关掉 ASP.NET Core 默认的 Console 提供程序，避免双份日志
+builder.Logging.ClearProviders();
 builder.AddZipperLogging();
 
 ServerOptions options;
@@ -44,7 +51,7 @@ finally
     await Log.CloseAndFlushAsync();
 }
 
-static async Task<int> RunAsync(HostApplicationBuilder builder, ServerOptions options)
+static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions options)
 {
     // 建库必须在 DI 之前完成：仓储假定表已存在
     var databasePath = Path.GetFullPath(options.DatabasePath);
@@ -59,7 +66,16 @@ static async Task<int> RunAsync(HostApplicationBuilder builder, ServerOptions op
 
     builder.Services.AddZipperServices(options, connectionString);
 
+    // M2-A：Kestrel 只监听配置里的地址
+    builder.WebHost.UseUrls($"http://{options.HttpAddress}");
+
     var app = builder.Build();
+
+    // 强制解析鉴权策略：非 loopback 又没 token → 这里直接抛，拒绝启动（不裸奔）
+    _ = app.Services.GetRequiredService<HttpAccessPolicy>();
+
+    ApiEndpoint.Map(app);
+    EventEndpoint.Map(app);
 
     SubscribeAgentEvents(app.Services);
 
@@ -105,6 +121,8 @@ static async Task LogStartupSummaryAsync(
     Log.Information("权限：管理员 {Admins} 人 / 工具白名单 {Whitelist} 人；工作区={Workspace}；单文件上限 {Max} 字节",
         options.Admins.Count, options.ToolWhitelist.Count,
         Path.GetFullPath(options.WorkspacePath), options.FileMaxBytes);
+    Log.Information("HTTP 端点=http://{Addr}（{Auth}）", options.HttpAddress,
+        HttpAccessPolicy.IsLoopback(options.HttpAddress) ? "loopback 免验" : "非 loopback，token 强制");
     Log.Information("向量模型目录={Dir}", options.EmbeddingModelDirectory);
 
     // 历史指标：让「上次跑得快不快」一开机就能看见，而不用等客户端接上

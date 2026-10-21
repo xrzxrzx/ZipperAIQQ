@@ -46,4 +46,13 @@ public interface IMessageStore
 
     /// <summary>某会话的消息总数。</summary>
     Task<long> CountAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>会话概览（按最后消息时间倒序），供 M2 客户端列出"当前在接收的聊天"。</summary>
+    Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(int limit, CancellationToken ct = default);
 }
+
+/// <summary>一个会话的概览。</summary>
+public sealed record SessionSummary(
+    string SessionId,
+    int MessageCount,
+    DateTimeOffset LastMessageAt);
