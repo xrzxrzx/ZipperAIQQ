@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using Serilog;
 using ZipperAIQQ.Agent.Tools;
@@ -75,6 +76,10 @@ public sealed class ChatAgent : IChatAgent
 
     private async Task<AgentRunResult> RunCoreAsync(AgentRunRequest request, CancellationToken ct)
     {
+        using var activity = AgentTelemetry.Source.StartActivity("agent.run");
+        activity?.SetTag("session.id", SessionId);
+        activity?.SetTag("chat.type", request.Chat.Type.ToString());
+        activity?.SetTag("hot.window", _history.Count);
         var messages = new List<ChatMessage>
         {
             new(ChatRole.System, _options.SystemPrompt),
@@ -153,6 +158,9 @@ public sealed class ChatAgent : IChatAgent
         }
 
         TrimHistory();
+
+        activity?.SetTag("messages.sent", sent);
+        activity?.SetStatus(ActivityStatusCode.Ok);
 
         return new AgentRunResult(finalText, sent);
     }
