@@ -1,191 +1,79 @@
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using OpenTelemetry.Resources;
-using OpenTelemetry.Trace;
 using Serilog;
-using ZipperAIQQ.Agent;
-using ZipperAIQQ.Agent.Embedding;
 using ZipperAIQQ.Agent.Faces;
-using ZipperAIQQ.Agent.Llm;
-using ZipperAIQQ.Agent.Memory;
-using ZipperAIQQ.Channel;
-using ZipperAIQQ.Channel.Filtering;
-using ZipperAIQQ.Channel.NapCat;
-using ZipperAIQQ.Channel.Throttling;
-using ZipperAIQQ.Server.Orchestration;
+using ZipperAIQQ.Server.Composition;
+using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Storage;
-using ZipperAIQQ.Storage.Database;
-using ZipperAIQQ.Storage.Embeddings;
-using ZipperAIQQ.Storage.Messages;
-using ZipperAIQQ.Transport.Client;
 
+// 中文日志在 GBK 代码页的控制台里会乱码（文件日志是 UTF-8，不受影响）
 try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
 
-var logTemplate = "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] {Message:lj}{NewLine}{Exception}";
+var builder = Host.CreateApplicationBuilder(args);
+builder.AddZipperLogging();
 
-Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Information()
-    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
-    // 文件日志：UTF-8 **无 BOM**（有 BOM 会让 tail/less/编辑器把首行当成乱码）
-    // 不依赖控制台代码页 —— 这正是之前靠重定向看日志会乱码的原因
-    .WriteTo.File(
-        path: Path.Combine("logs", "zipper-.log"),
-        rollingInterval: RollingInterval.Day,
-        encoding: new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-        outputTemplate: logTemplate,
-        shared: true)
-    .CreateLogger();
-
-// ── 配置：全部来自环境变量，代码里不写死任何 URL / 模型名（FR-8.13）──
-string? Env(string name) => Environment.GetEnvironmentVariable(name);
-
-var missing = new List<string>();
-string Require(string name)
+ServerOptions options;
+try
 {
-    var v = Env(name);
-    if (string.IsNullOrWhiteSpace(v)) { missing.Add(name); return string.Empty; }
-    return v;
+    // 只解析一次：缺配置就在这里一次性说清，不带半个配置继续跑
+    options = ServerOptions.FromEnvironment();
 }
-
-var wsUrl       = Require("ZIPPER_NAPCAT_WS");
-var apiKey      = Require("ZIPPER_LLM_APIKEY");
-var baseUrl     = Require("ZIPPER_LLM_BASEURL");
-var model       = Require("ZIPPER_LLM_MODEL");
-var apiKindText = Env("ZIPPER_LLM_APIKIND");           // 可选：Responses | ChatCompletions
-var napcatToken = Env("ZIPPER_NAPCAT_TOKEN");          // 可选
-var dbPath      = Env("ZIPPER_DB") ?? "./data/zipperaiqq.db";
-var facesPath   = Env("ZIPPER_FACES") ?? "./config/faces.qq.json";
-// 全局最短发送间隔（毫秒）。风控看的是同一个 QQ 号的发信速率，所以必须全局共享。
-var sendIntervalMs = int.TryParse(Env("ZIPPER_SEND_INTERVAL_MS"), out var iv) ? iv : 300;
-// 连发上限与冷却：持续按最小间隔发，量级照样危险，所以还要有"发够 N 条就歇一会儿"
-var maxConsecutive = int.TryParse(Env("ZIPPER_MAX_CONSECUTIVE"), out var mc) ? mc : 10;
-var cooldownMs = int.TryParse(Env("ZIPPER_COOLDOWN_MS"), out var cd) ? cd : 10_000;
-var whitelist   = (Env("ZIPPER_WHITELIST") ?? string.Empty)
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-if (missing.Count > 0)
+catch (InvalidOperationException ex)
 {
-    Log.Fatal("缺少必需的环境变量：{Missing}", string.Join(", ", missing));
-    Log.Information("示例：ZIPPER_NAPCAT_WS / ZIPPER_LLM_APIKEY / ZIPPER_LLM_BASEURL / ZIPPER_LLM_MODEL");
+    Log.Fatal("启动失败：{Message}", ex.Message);
+    await Log.CloseAndFlushAsync();
     return 1;
 }
 
-var apiKind = string.IsNullOrWhiteSpace(apiKindText)
-    ? LlmApiKind.Responses
-    : Enum.Parse<LlmApiKind>(apiKindText, ignoreCase: true);
-
-// 白名单为空 → 用「黑名单 + 空」= 全放行，便于首次跑通；生产请显式配白名单
-var filterOptions = whitelist.Length > 0
-    ? new ChatFilterOptions { Mode = ChatListMode.Whitelist, Entries = whitelist }
-    : new ChatFilterOptions { Mode = ChatListMode.Blacklist, Entries = [] };
-
-var fullDbPath = Path.GetFullPath(dbPath);
-var dbDir = Path.GetDirectoryName(fullDbPath);
-if (!string.IsNullOrEmpty(dbDir)) { Directory.CreateDirectory(dbDir); }
-var connectionString = $"Data Source={fullDbPath}";
-
-await new DatabaseInitializer(connectionString, Log.Logger).InitializeAsync();
-
-// 表情目录：平台相关，放配置文件（接新平台换一份即可）
-var faceCatalog = FaceCatalog.Load(Path.GetFullPath(facesPath));
-
-var builder = Host.CreateApplicationBuilder(args);
-
-// 让 Host 接管 Serilog 的生命周期（停止时自动 flush），
-// 同时把 Serilog 注册进 Microsoft.Extensions.Logging —— 
-// 这样既可以用 Serilog.ILogger（业务代码），也可以用 ILogger<T>（框架/第三方库）。
-// 配置本身仍走 bootstrap 的 Log.Logger，但**组件一律通过构造参数注入**，不碰静态属性。
-builder.Services.AddSerilog(Log.Logger, dispose: false);
-builder.Services.AddSingleton<ISqliteDatabase>(_ => new SqliteDatabase(connectionString, Log.Logger));
-builder.Services.AddSingleton<IMessageStore, SqliteMessageStore>();
-builder.Services.AddSingleton<IChatFilter>(_ => new ChatFilter(filterOptions));
-
-// ── 长期记忆检索（M1-C）──
-// 模型文件不入库（AGENTS.md §七），由部署流程提供；路径用环境变量指定。
-var embeddingModelDir = Path.GetFullPath(Env("ZIPPER_EMBEDDING_MODEL") ?? "./temp/bge-small-zh-v1.5");
-var embedding = new OnnxEmbeddingService(embeddingModelDir);
-builder.Services.AddSingleton<IEmbeddingService>(embedding);
-builder.Services.AddSingleton<IEmbeddingStore, SqliteEmbeddingStore>();
-builder.Services.AddSingleton(sp => new MemoryRetriever(
-    sp.GetRequiredService<IEmbeddingService>(),
-    sp.GetRequiredService<IEmbeddingStore>(),
-    sp.GetRequiredService<IMessageStore>(),
-    Log.Logger));
-
-builder.Services.AddSingleton<IClientTransport>(_ => new ClientTransport(Log.Logger));
-builder.Services.AddSingleton<IMessageChannel>(sp =>
-{
-    var inner = new NapCatChannel(
-        sp.GetRequiredService<IClientTransport>(),
-        sp.GetRequiredService<IChatFilter>(),
-        new NapCatOptions { WebSocketUrl = wsUrl, AccessToken = napcatToken },
-        Log.Logger);
-
-    // 所有出站消息都过这里：全局最短间隔 + 连发冷却，跨会话共享
-    return new ThrottledMessageChannel(inner, sendIntervalMs, maxConsecutive, cooldownMs);
-});
-
-builder.Services.AddSingleton<IChatClient>(_ => ChatClientFactory.Create(
-    new LlmEndpoint("primary", baseUrl, model, apiKind), apiKey));
-
-var agentOptions = new ChatAgentOptions
-{
-    SystemPrompt =
-        "你是一个角色扮演助手，在聊天软件里和人对话。" +
-        "**你必须调用 send_message 工具来把话发出去** —— 直接输出文本对方是看不到的。" +
-        "可以一次发多条（像真人把一句话分几条发）。回复要简短自然。" +
-        "**发表情时**：先调用 list_faces 查询（不传关键词看常用，传关键词搜名称/标签），" +
-        "然后把 [表情:名字] 写进消息里。**单独一条只写 [表情:名字] 会作为大表情发送**（有特效）。",
-};
-
-builder.Services.AddSingleton<IChatAgentPool>(sp =>
-{
-    var client = sp.GetRequiredService<IChatClient>();
-    var channel = sp.GetRequiredService<IMessageChannel>();
-    return new ChatAgentPool(chat => new ChatAgent(
-        chat.SessionId, client, channel, sp.GetRequiredService<IMessageStore>(), faceCatalog,
-        sp.GetRequiredService<MemoryRetriever>(), agentOptions, Log.Logger));
-});
-
-builder.Services.AddHostedService<MessageRouter>();
-
-// ── 可观测性（FR-10）：追踪由 Agent 的 ActivitySource 提供，HTTP 调用自动追踪 ──
-// Console 导出默认关闭（会把控制台刷满），需要时设 ZIPPER_OTEL_CONSOLE=1。
-var otelConsole = Env("ZIPPER_OTEL_CONSOLE") == "1";
-builder.Services.AddOpenTelemetry()
-    // 没有它，接到 Grafana/Jaeger 后所有数据会显示成 unknown_service
-    .ConfigureResource(resource => resource.AddService("ZipperAIQQ.Server"))
-    .WithTracing(tracing =>
-    {
-        tracing.AddSource(AgentTelemetry.SourceName)
-               .AddHttpClientInstrumentation();
-        if (otelConsole)
-        {
-            tracing.AddConsoleExporter();
-        }
-    });
-
-var app = builder.Build();
-
-Log.Information("配置就绪：WS={Ws} 模型={Model} 库={Db}", wsUrl, model, fullDbPath);
-Log.Information("过滤：{Mode}（{Count} 条）", filterOptions.Mode, filterOptions.Entries.Count);
-Log.Information("表情目录：{Count} 个（{Path}）", faceCatalog.Count, facesPath);
-Log.Information("全局发送间隔：{Interval} ms；连发上限 {Max} 条后冷却 {Cooldown} ms",
-    sendIntervalMs, maxConsecutive, cooldownMs);
-Log.Information("向量模型：{Dim} 维（{Path}）", embedding.Dimension, embeddingModelDir);
+builder.AddZipperTelemetry(options);
 
 try
 {
-    await app.RunAsync();
+    return await RunAsync(builder, options);
 }
-catch (OperationCanceledException)
+catch (Exception ex)
 {
-    // 正常停止
+    Log.Fatal(ex, "启动失败");
+    return 1;
 }
 finally
 {
-    Log.CloseAndFlush();
+    await Log.CloseAndFlushAsync();
 }
 
-return 0;
+static async Task<int> RunAsync(HostApplicationBuilder builder, ServerOptions options)
+{
+    // 建库必须在 DI 之前完成：仓储假定表已存在
+    var databasePath = Path.GetFullPath(options.DatabasePath);
+    var directory = Path.GetDirectoryName(databasePath);
+    if (!string.IsNullOrEmpty(directory))
+    {
+        Directory.CreateDirectory(directory);
+    }
+
+    var connectionString = $"Data Source={databasePath}";
+    await new DatabaseInitializer(connectionString, Log.Logger).InitializeAsync();
+
+    builder.Services.AddZipperServices(options, connectionString);
+
+    var app = builder.Build();
+
+    LogStartupSummary(app.Services, options, databasePath);
+
+    await app.RunAsync();
+    return 0;
+}
+
+static void LogStartupSummary(IServiceProvider services, ServerOptions options, string databasePath)
+{
+    var faces = services.GetRequiredService<FaceCatalog>();
+    var mode = options.Whitelist.Count > 0 ? "Whitelist" : "Blacklist（空=全放行）";
+
+    Log.Information("通道={Ws} 模型={Model}", options.NapCatWebSocketUrl, options.LlmModel);
+    Log.Information("数据库={Db}", databasePath);
+    Log.Information("过滤={Mode}（{Count} 条）", mode, options.Whitelist.Count);
+    Log.Information("发送限速={Interval} ms，连发 {Max} 条后冷却 {Cooldown} ms",
+        options.SendIntervalMs, options.MaxConsecutive, options.CooldownMs);
+    Log.Information("表情目录={Count} 个（{Path}）", faces.Count, options.FacesPath);
+    Log.Information("向量模型目录={Dir}", options.EmbeddingModelDirectory);
+}
