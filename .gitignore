@@ -49,7 +49,7 @@ desktop.ini
 # ───── AI 模型文件（体积大，部署时单独拉取，绝不入库）─────
 *.onnx
 *.onnx.data
-models/
+/models/
 
 # ───── 本地启动脚本（含真实 token，永不入库）─────
 scripts/*.local.ps1
