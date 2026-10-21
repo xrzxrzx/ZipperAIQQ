@@ -43,14 +43,14 @@ public sealed class SqliteMessageStore : IMessageStore
         cmd.Parameters.AddWithValue("@sessionId", message.Chat.SessionId);
         cmd.Parameters.AddWithValue("@chatType", (int)message.Chat.Type);
         cmd.Parameters.AddWithValue("@chatId", message.Chat.Id);
-        cmd.Parameters.AddWithValue("@messageId", (object?)message.MessageId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@messageId", (object?)message.EventId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@senderUserId", message.Sender.UserId);
         cmd.Parameters.AddWithValue("@senderGroupCard", (object?)message.Sender.GroupCard ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@senderNickname", (object?)message.Sender.Nickname ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@senderIsFriend", message.Sender.IsFriend ? 1 : 0);
         cmd.Parameters.AddWithValue("@plainText", message.PlainText);
         cmd.Parameters.AddWithValue("@segmentsJson", JsonSerializer.Serialize(message.Segments, JsonOptions));
-        cmd.Parameters.AddWithValue("@sentAtMs", message.SentAt.ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("@sentAtMs", message.OccurredAt.ToUnixTimeMilliseconds());
         cmd.Parameters.AddWithValue("@receivedAtMs", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         cmd.Parameters.AddWithValue("@replyToMessageId", (object?)message.ReplyToMessageId ?? DBNull.Value);
 
@@ -126,8 +126,8 @@ public sealed class SqliteMessageStore : IMessageStore
             Chat = chat,
             Sender = sender,
             Segments = segments,
-            SentAt = DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(10)),
-            MessageId = reader.IsDBNull(4) ? null : reader.GetString(4),
+            OccurredAt = DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(10)),
+            EventId = reader.IsDBNull(4) ? null : reader.GetString(4),
             ReplyToMessageId = reader.IsDBNull(12) ? null : reader.GetString(12),
         };
 

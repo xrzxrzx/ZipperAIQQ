@@ -23,10 +23,14 @@ public interface IMessageChannel
     ChannelCapabilities Capabilities { get; }
 
     /// <summary>
-    /// 持续接收消息。实现方应在内部处理断线重连，
-    /// 正常取消时以 <see cref="OperationCanceledException"/> 结束。
+    /// 持续接收**入站事件**（消息与通知）。
     /// </summary>
-    IAsyncEnumerable<IncomingMessage> ReceiveAsync(CancellationToken ct);
+    /// <remarks>
+    /// 实现方应在内部处理断线重连；正常取消时以 <see cref="OperationCanceledException"/> 结束。
+    /// 返回基类 <see cref="InboundEvent"/> 而非 <see cref="IncomingMessage"/> ——
+    /// 通知与消息共用同一条管道（FR-18.1）。
+    /// </remarks>
+    IAsyncEnumerable<InboundEvent> ReceiveAsync(CancellationToken ct);
 
     /// <summary>
     /// 发送一条消息。
