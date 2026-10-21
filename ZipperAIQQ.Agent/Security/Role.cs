@@ -35,4 +35,12 @@ public enum ToolCapability
 
     /// <summary>删除 —— **没有 undo**，最危险。</summary>
     DeleteFile,
+
+    /// <summary>
+    /// 创建 / 取消定时任务（FR-14.6）。
+    /// </summary>
+    /// <remarks>
+    /// 普通成员若能建任务，等于给了他「定时刷屏」的能力 —— 群里到点就被 @ 一次。
+    /// </remarks>
+    Schedule,
 }

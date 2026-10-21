@@ -14,6 +14,7 @@ using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Metrics;
 using ZipperAIQQ.Storage.Personas;
+using ZipperAIQQ.Storage.Schedules;
 using ZipperAIQQ.Storage.Summaries;
 
 namespace ZipperAIQQ.Agent;
@@ -44,6 +45,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly IRoleResolver _roles;
     private readonly WorkspacePathResolver _workspace;
     private readonly int _fileMaxBytes;
+    private readonly IScheduleStore _schedules;
     private readonly ChatAgentOptions _options;
     private readonly ILogger _logger;
 
@@ -79,6 +81,7 @@ public sealed class ChatAgent : IChatAgent
         _roles = deps.Roles;
         _workspace = deps.Workspace;
         _fileMaxBytes = deps.FileMaxBytes;
+        _schedules = deps.Schedules;
         _options = deps.Options;
         _logger = deps.Logger;
     }
@@ -418,6 +421,7 @@ public sealed class ChatAgent : IChatAgent
         };
 
         tools.AddRange(FileTools.Create(context, _permissionGate, _workspace, _fileMaxBytes));
+        tools.AddRange(ScheduleTools.Create(context, _permissionGate, _schedules));
         return tools;
     }
 

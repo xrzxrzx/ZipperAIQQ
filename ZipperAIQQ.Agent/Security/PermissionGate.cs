@@ -18,6 +18,8 @@ public sealed class PermissionGate : IPermissionGate
             [ToolCapability.ReadFile] = Role.Normal,
             [ToolCapability.WriteFile] = Role.Whitelist,
             [ToolCapability.DeleteFile] = Role.Admin,
+            // 定时任务：默认仅管理员，但**允许**配置给白名单（需求 14.6 明确要求可显式开启）
+            [ToolCapability.Schedule] = Role.Whitelist,
         };
 
     /// <summary>默认最低角色（M1 的「预置默认允许集」，FR-6.7）。</summary>
@@ -28,6 +30,8 @@ public sealed class PermissionGate : IPermissionGate
             [ToolCapability.ReadFile] = Role.Whitelist,
             [ToolCapability.WriteFile] = Role.Whitelist,
             [ToolCapability.DeleteFile] = Role.Admin,
+            // 需求 14.6：默认仅管理员；白名单需要显式开启（这里改这一行即可）
+            [ToolCapability.Schedule] = Role.Admin,
         };
 
     private readonly IReadOnlyDictionary<ToolCapability, Role> _minRoles;
@@ -89,6 +93,7 @@ public sealed class PermissionGate : IPermissionGate
         ToolCapability.ReadFile => "读文件",
         ToolCapability.WriteFile => "写文件",
         ToolCapability.DeleteFile => "删除文件",
+        ToolCapability.Schedule => "定时任务",
         _ => capability.ToString(),
     };
 }
