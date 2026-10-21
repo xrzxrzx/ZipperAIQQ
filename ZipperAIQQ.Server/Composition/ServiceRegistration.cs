@@ -10,6 +10,7 @@ using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.NapCat;
 using ZipperAIQQ.Channel.Throttling;
+using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Storage.Database;
@@ -40,6 +41,9 @@ public static class ServiceRegistration
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+
+        // ── 事件总线（Agent 事件：漂移 / 降级；M2 客户端接 WS 后订阅同一批事件）──
+        services.AddSingleton<IEventBus>(sp => new EventBus(sp.GetRequiredService<ILogger>()));
 
         // ── 存储 ──
         services.AddSingleton<ISqliteDatabase>(sp =>
@@ -117,6 +121,7 @@ public static class ServiceRegistration
                 SummaryStore = sp.GetRequiredService<ISummaryStore>(),
                 Personas = sp.GetRequiredService<IPersonaStore>(),
                 Metrics = sp.GetRequiredService<IMetricsStore>(),
+                Events = sp.GetRequiredService<IEventBus>(),
                 Options = BuildAgentOptions(),
                 Logger = sp.GetRequiredService<ILogger>(),
             };

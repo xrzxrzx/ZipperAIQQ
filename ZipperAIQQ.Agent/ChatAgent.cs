@@ -1,12 +1,14 @@
 using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using Serilog;
+using ZipperAIQQ.Agent.Events;
+using ZipperAIQQ.Agent.Faces;
+using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
 using System.Text;
-using ZipperAIQQ.Agent.Faces;
-using ZipperAIQQ.Agent.Memory;
+using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Metrics;
@@ -36,6 +38,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly ISummaryStore _summaryStore;
     private readonly IPersonaStore _personas;
     private readonly IMetricsStore _metrics;
+    private readonly IEventBus _events;
     private readonly ChatAgentOptions _options;
     private readonly ILogger _logger;
 
@@ -66,6 +69,7 @@ public sealed class ChatAgent : IChatAgent
         _summaryStore = deps.SummaryStore;
         _personas = deps.Personas;
         _metrics = deps.Metrics;
+        _events = deps.Events;
         _options = deps.Options;
         _logger = deps.Logger;
     }
@@ -136,6 +140,11 @@ public sealed class ChatAgent : IChatAgent
         using var activity = AgentTelemetry.Source.StartActivity("agent.run");
         activity?.SetTag("session.id", SessionId);
         activity?.SetTag("chat.type", request.Chat.Type.ToString());
+
+        // 会话从库恢复（M1-C 遗留的补做）：实例存活期内只做一次。
+        // 放在打 hot.window 标签之前，否则标签永远显示 0。
+        await EnsureHistoryLoadedAsync(request, ct).ConfigureAwait(false);
+
         activity?.SetTag("hot.window", _history.Count);
 
         // 长期记忆检索：热窗只覆盖最近几条，很久前提过的事要靠这个找回来。
@@ -232,6 +241,7 @@ public sealed class ChatAgent : IChatAgent
         if (sent == 0 && !string.IsNullOrWhiteSpace(finalText))
         {
             activity?.SetTag("drift.detected", "no_tool_call");
+            PublishEvent(new DriftDetectedEvent(SessionId, BeijingTime.Now, "instruction", "no_tool_call"));
 
             messages.Add(new ChatMessage(ChatRole.User, DriftCorrectionPrompt));
             try
@@ -276,6 +286,7 @@ public sealed class ChatAgent : IChatAgent
             }
 
             activity?.SetTag("drift.degraded", "yes");
+            PublishEvent(new SendDegradedEvent(SessionId, BeijingTime.Now, sent));
             _logger.Warning(
                 "降级发送（会话 {SessionId}）：连续 2 次未调用工具，已代发 {Sent} 条",
                 SessionId, sent);
@@ -294,6 +305,89 @@ public sealed class ChatAgent : IChatAgent
         activity?.SetStatus(ActivityStatusCode.Ok);
 
         return new AgentRunResult(finalText, sent);
+    }
+
+    /// <summary>历史是否已经从库里加载过（实例存活期内只加载一次）。</summary>
+    private Task? _historyLoadTask;
+
+    /// <summary>
+    /// 从库里恢复热窗历史（**实例存活期内只做一次**）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 重启后 <c>_history</c> 是空的，只靠摘要 + 检索，模型会把「最开始说过什么」
+    /// 答成旧摘要。这就是「会话从库恢复」：照着最近 N 条把对话接上。
+    /// </para>
+    /// <para>
+    /// ⚠️ 本轮这批消息**已经落库**（路由是先存再调），必须按 <c>EventId</c> 排除，
+    /// 否则同一条消息会在「恢复的历史」和「本轮 userLine」里各出现一次。
+    /// </para>
+    /// </remarks>
+    private Task EnsureHistoryLoadedAsync(AgentRunRequest request, CancellationToken ct)
+    {
+        return _historyLoadTask ??= LoadHistoryAsync(request, ct);
+    }
+
+    private async Task LoadHistoryAsync(AgentRunRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var currentIds = request.Batch
+                .Select(m => m.EventId)
+                .Where(id => !string.IsNullOrEmpty(id))
+                .ToHashSet(StringComparer.Ordinal);
+
+            // 多取批内条数，保证排除掉本批之后仍能凑满热窗
+            var recent = await _store
+                .GetRecentAsync(SessionId, _options.HotWindowMessages + Math.Max(1, request.Batch.Count), ct)
+                .ConfigureAwait(false);
+
+            var added = 0;
+            foreach (var stored in recent)
+            {
+                if (stored.Message.EventId is { Length: > 0 } id && currentIds.Contains(id))
+                {
+                    continue;
+                }
+
+                _history.Add(ToHistoryMessage(stored));
+                added++;
+            }
+
+            TrimHistory();
+
+            if (added > 0)
+            {
+                _logger.Information("会话 {SessionId} 从库恢复历史 {Count} 条", SessionId, _history.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            // 恢复失败就当没有历史：不能因为读库失败把对话卡死
+            _logger.Warning(ex, "会话 {SessionId} 历史恢复失败，本轮从空历史开始", SessionId);
+        }
+    }
+
+    /// <summary>把入库消息还原成给模型看的历史条目（格式与实时消息保持一致）。</summary>
+    private static ChatMessage ToHistoryMessage(StoredMessage stored)
+    {
+        var text =
+            $"[{BeijingTime.Format(stored.Message.OccurredAt)}] {stored.Message.Sender.DisplayName}：{stored.Message.PlainText}";
+
+        return new ChatMessage(stored.IsOutgoing ? ChatRole.Assistant : ChatRole.User, text);
+    }
+
+    /// <summary>发 Agent 事件；订阅方抛异常不能反过来影响对话。</summary>
+    private void PublishEvent<T>(T evt) where T : AgentEvent
+    {
+        try
+        {
+            _events.Publish(evt);
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug(ex, "Agent 事件发布失败：{Event}", typeof(T).Name);
+        }
     }
 
     /// <summary>
