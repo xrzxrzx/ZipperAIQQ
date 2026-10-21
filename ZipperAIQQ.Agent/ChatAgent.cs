@@ -4,6 +4,7 @@ using Serilog;
 using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Memory;
+using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
@@ -39,6 +40,10 @@ public sealed class ChatAgent : IChatAgent
     private readonly IPersonaStore _personas;
     private readonly IMetricsStore _metrics;
     private readonly IEventBus _events;
+    private readonly IPermissionGate _permissionGate;
+    private readonly IRoleResolver _roles;
+    private readonly WorkspacePathResolver _workspace;
+    private readonly int _fileMaxBytes;
     private readonly ChatAgentOptions _options;
     private readonly ILogger _logger;
 
@@ -70,6 +75,10 @@ public sealed class ChatAgent : IChatAgent
         _personas = deps.Personas;
         _metrics = deps.Metrics;
         _events = deps.Events;
+        _permissionGate = deps.PermissionGate;
+        _roles = deps.Roles;
+        _workspace = deps.Workspace;
+        _fileMaxBytes = deps.FileMaxBytes;
         _options = deps.Options;
         _logger = deps.Logger;
     }
@@ -182,6 +191,15 @@ public sealed class ChatAgent : IChatAgent
             activity?.SetTag("memory.summary", "yes");
         }
 
+        // 能力声明：工具按角色隐藏时，模型会**幻觉**「我做了」——
+        // 实测：普通成员被要求写文件，它回了「test2.txt 建好了」，实际什么都没建。
+        // 所以必须**告诉它没有这个能力**，而不是让它自己猜（FR-6.4 的另一半）。
+        var capabilityNote = BuildCapabilityNote(_roles.Resolve(request.Sender.UserId));
+        if (capabilityNote.Length > 0)
+        {
+            reinject.AppendLine().AppendLine(capabilityNote);
+        }
+
         var messages = new List<ChatMessage>
         {
             // ① 锚点 system：永远第一条
@@ -215,7 +233,7 @@ public sealed class ChatAgent : IChatAgent
 
         var chatOptions = new ChatOptions
         {
-            Tools = [tool, ListFacesTool.Create(_faces)],
+            Tools = BuildTools(request, tool),
             // 温度之类先不调，保持端点默认
         };
 
@@ -375,6 +393,64 @@ public sealed class ChatAgent : IChatAgent
             $"[{BeijingTime.Format(stored.Message.OccurredAt)}] {stored.Message.Sender.DisplayName}：{stored.Message.PlainText}";
 
         return new ChatMessage(stored.IsOutgoing ? ChatRole.Assistant : ChatRole.User, text);
+    }
+
+    /// <summary>
+    /// 组装本次调用可用的工具：基础工具 + **按角色**可用的文件工具。
+    /// </summary>
+    /// <remarks>
+    /// 不可用的工具**连 schema 都不给模型** —— 比「看得见但调不动」更省 token，也少试探。
+    /// 但可见性**不是**唯一防线：每个文件工具执行前还会再过一次门禁。
+    /// </remarks>
+    private List<AITool> BuildTools(AgentRunRequest request, AIFunction sendMessage)
+    {
+        var context = new ToolCallContext
+        {
+            Chat = request.Chat,
+            Sender = request.Sender,
+            Role = _roles.Resolve(request.Sender.UserId),
+        };
+
+        var tools = new List<AITool>
+        {
+            sendMessage,
+            ListFacesTool.Create(_faces),
+        };
+
+        tools.AddRange(FileTools.Create(context, _permissionGate, _workspace, _fileMaxBytes));
+        return tools;
+    }
+
+    /// <summary>
+    /// 按角色生成「能力限制」说明，塞进重注入 system。
+    /// </summary>
+    /// <remarks>
+    /// 工具不可见时**必须显式告知**，否则模型会编造"已完成" ——
+    /// 这是实测抓到的：普通成员要求写文件，它回「test2.txt 建好了」，工作区空空如也。
+    /// </remarks>
+    private string BuildCapabilityNote(Role role)
+    {
+        var missing = new List<string>();
+
+        if (!_permissionGate.IsAllowed(ToolCapability.ReadFile, role))
+        {
+            missing.Add("读文件");
+        }
+
+        if (!_permissionGate.IsAllowed(ToolCapability.WriteFile, role))
+        {
+            missing.Add("写文件");
+        }
+
+        if (!_permissionGate.IsAllowed(ToolCapability.DeleteFile, role))
+        {
+            missing.Add("删除文件");
+        }
+
+        return missing.Count == 0
+            ? string.Empty
+            : $"【能力限制】你当前**没有**{string.Join("、", missing)}的能力（不是权限被拒，是这些工具根本没提供给你）。" +
+              "被要求做这些事时，**明确说做不到**，不要声称已经完成。";
     }
 
     /// <summary>发 Agent 事件；订阅方抛异常不能反过来影响对话。</summary>

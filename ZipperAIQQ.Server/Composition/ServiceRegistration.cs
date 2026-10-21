@@ -6,6 +6,7 @@ using ZipperAIQQ.Agent.Embedding;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
+using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.NapCat;
@@ -44,6 +45,12 @@ public static class ServiceRegistration
 
         // ── 事件总线（Agent 事件：漂移 / 降级；M2 客户端接 WS 后订阅同一批事件）──
         services.AddSingleton<IEventBus>(sp => new EventBus(sp.GetRequiredService<ILogger>()));
+
+        // ── 权限与工作区（M1-E / FR-6 / FR-7）──
+        // PermissionGate 构造时就校验硬底线：越界配置直接拒绝启动（FR-6.6）
+        services.AddSingleton<IPermissionGate>(_ => new PermissionGate());
+        services.AddSingleton<IRoleResolver>(_ => new ConfiguredRoleResolver(options.Admins, options.ToolWhitelist));
+        services.AddSingleton(_ => new WorkspacePathResolver(options.WorkspacePath));
 
         // ── 存储 ──
         services.AddSingleton<ISqliteDatabase>(sp =>
@@ -122,6 +129,10 @@ public static class ServiceRegistration
                 Personas = sp.GetRequiredService<IPersonaStore>(),
                 Metrics = sp.GetRequiredService<IMetricsStore>(),
                 Events = sp.GetRequiredService<IEventBus>(),
+                PermissionGate = sp.GetRequiredService<IPermissionGate>(),
+                Roles = sp.GetRequiredService<IRoleResolver>(),
+                Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
+                FileMaxBytes = options.FileMaxBytes,
                 Options = BuildAgentOptions(),
                 Logger = sp.GetRequiredService<ILogger>(),
             };
