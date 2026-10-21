@@ -32,6 +32,18 @@ public interface IMessageStore
     /// </summary>
     Task<IReadOnlyList<StoredMessage>> GetRecentAsync(string sessionId, int limit, CancellationToken ct = default);
 
+    /// <summary>
+    /// 按主键批量取消息（检索命中后用）。
+    /// </summary>
+    /// <remarks>
+    /// 不可以用「取最近 N 条再过滤」代替：命中的可能是很久以前的消息，
+    /// 早被挤出最近窗口了，那样会静默漏掉最该召回的内容。
+    /// </remarks>
+    Task<IReadOnlyList<StoredMessage>> GetByIdsAsync(
+        string sessionId,
+        IReadOnlyList<long> ids,
+        CancellationToken ct = default);
+
     /// <summary>某会话的消息总数。</summary>
     Task<long> CountAsync(string sessionId, CancellationToken ct = default);
 }

@@ -5,8 +5,10 @@ using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Serilog;
 using ZipperAIQQ.Agent;
+using ZipperAIQQ.Agent.Embedding;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
+using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.NapCat;
@@ -14,6 +16,7 @@ using ZipperAIQQ.Channel.Throttling;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Storage;
 using ZipperAIQQ.Storage.Database;
+using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Transport.Client;
 
@@ -55,6 +58,9 @@ var dbPath      = Env("ZIPPER_DB") ?? "./data/zipperaiqq.db";
 var facesPath   = Env("ZIPPER_FACES") ?? "./config/faces.qq.json";
 // 全局最短发送间隔（毫秒）。风控看的是同一个 QQ 号的发信速率，所以必须全局共享。
 var sendIntervalMs = int.TryParse(Env("ZIPPER_SEND_INTERVAL_MS"), out var iv) ? iv : 300;
+// 连发上限与冷却：持续按最小间隔发，量级照样危险，所以还要有"发够 N 条就歇一会儿"
+var maxConsecutive = int.TryParse(Env("ZIPPER_MAX_CONSECUTIVE"), out var mc) ? mc : 10;
+var cooldownMs = int.TryParse(Env("ZIPPER_COOLDOWN_MS"), out var cd) ? cd : 10_000;
 var whitelist   = (Env("ZIPPER_WHITELIST") ?? string.Empty)
                     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
@@ -95,6 +101,18 @@ builder.Services.AddSingleton<ISqliteDatabase>(_ => new SqliteDatabase(connectio
 builder.Services.AddSingleton<IMessageStore, SqliteMessageStore>();
 builder.Services.AddSingleton<IChatFilter>(_ => new ChatFilter(filterOptions));
 
+// ── 长期记忆检索（M1-C）──
+// 模型文件不入库（AGENTS.md §七），由部署流程提供；路径用环境变量指定。
+var embeddingModelDir = Path.GetFullPath(Env("ZIPPER_EMBEDDING_MODEL") ?? "./temp/bge-small-zh-v1.5");
+var embedding = new OnnxEmbeddingService(embeddingModelDir);
+builder.Services.AddSingleton<IEmbeddingService>(embedding);
+builder.Services.AddSingleton<IEmbeddingStore, SqliteEmbeddingStore>();
+builder.Services.AddSingleton(sp => new MemoryRetriever(
+    sp.GetRequiredService<IEmbeddingService>(),
+    sp.GetRequiredService<IEmbeddingStore>(),
+    sp.GetRequiredService<IMessageStore>(),
+    Log.Logger));
+
 builder.Services.AddSingleton<IClientTransport>(_ => new ClientTransport(Log.Logger));
 builder.Services.AddSingleton<IMessageChannel>(sp =>
 {
@@ -104,8 +122,8 @@ builder.Services.AddSingleton<IMessageChannel>(sp =>
         new NapCatOptions { WebSocketUrl = wsUrl, AccessToken = napcatToken },
         Log.Logger);
 
-    // 所有出站消息都过这里：全局最短间隔，跨会话共享
-    return new ThrottledMessageChannel(inner, sendIntervalMs);
+    // 所有出站消息都过这里：全局最短间隔 + 连发冷却，跨会话共享
+    return new ThrottledMessageChannel(inner, sendIntervalMs, maxConsecutive, cooldownMs);
 });
 
 builder.Services.AddSingleton<IChatClient>(_ => ChatClientFactory.Create(
@@ -126,7 +144,8 @@ builder.Services.AddSingleton<IChatAgentPool>(sp =>
     var client = sp.GetRequiredService<IChatClient>();
     var channel = sp.GetRequiredService<IMessageChannel>();
     return new ChatAgentPool(chat => new ChatAgent(
-        chat.SessionId, client, channel, sp.GetRequiredService<IMessageStore>(), faceCatalog, agentOptions, Log.Logger));
+        chat.SessionId, client, channel, sp.GetRequiredService<IMessageStore>(), faceCatalog,
+        sp.GetRequiredService<MemoryRetriever>(), agentOptions, Log.Logger));
 });
 
 builder.Services.AddHostedService<MessageRouter>();

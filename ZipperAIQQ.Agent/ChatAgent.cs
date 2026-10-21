@@ -6,6 +6,7 @@ using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
 using System.Text;
 using ZipperAIQQ.Agent.Faces;
+using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
 
@@ -27,6 +28,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly IMessageChannel _channel;
     private readonly IMessageStore _store;
     private readonly FaceCatalog _faces;
+    private readonly MemoryRetriever _retriever;
     private readonly ChatAgentOptions _options;
     private readonly ILogger _logger;
 
@@ -39,6 +41,7 @@ public sealed class ChatAgent : IChatAgent
         IMessageChannel channel,
         IMessageStore store,
         FaceCatalog faces,
+        MemoryRetriever retriever,
         ChatAgentOptions options,
         ILogger logger)
     {
@@ -47,6 +50,7 @@ public sealed class ChatAgent : IChatAgent
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(faces);
+        ArgumentNullException.ThrowIfNull(retriever);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -55,6 +59,7 @@ public sealed class ChatAgent : IChatAgent
         _channel = channel;
         _store = store;
         _faces = faces;
+        _retriever = retriever;
         _options = options;
         _logger = logger;
     }
@@ -85,6 +90,21 @@ public sealed class ChatAgent : IChatAgent
         activity?.SetTag("session.id", SessionId);
         activity?.SetTag("chat.type", request.Chat.Type.ToString());
         activity?.SetTag("hot.window", _history.Count);
+
+        // 长期记忆检索：热窗只覆盖最近几条，很久前提过的事要靠这个找回来。
+        // 检索失败不影响本轮回复 —— 少点记忆总比不回复强。
+        IReadOnlyList<Storage.Messages.StoredMessage> related = [];
+        try
+        {
+            related = await _retriever
+                .RetrieveAsync(SessionId, request.UserText, topK: 5, excludeRecentCount: _options.HotWindowMessages, ct: ct)
+                .ConfigureAwait(false);
+            activity?.SetTag("memory.retrieved", related.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "检索失败（会话 {SessionId}），本轮不带长期记忆", SessionId);
+        }
         var messages = new List<ChatMessage>
         {
             new(ChatRole.System, _options.SystemPrompt),
@@ -92,7 +112,8 @@ public sealed class ChatAgent : IChatAgent
         messages.AddRange(_history);
 
         // 时间注入（FR-15）：每条消息带时间，且每次都给发送者双名
-        var userLine = $"[{BeijingTime.Format(request.Now)}] {request.Sender.DisplayName}：{RenderContent(request)}";
+        var memoryBlock = BuildMemoryBlock(related);
+        var userLine = $"[{BeijingTime.Format(request.Now)}] {request.Sender.DisplayName}：{memoryBlock}{RenderContent(request)}";
         messages.Add(BuildUserMessage(request, userLine));
 
         // send_message 绑定当前会话（模型无法指定发给谁）
@@ -187,6 +208,33 @@ public sealed class ChatAgent : IChatAgent
             _history.RemoveRange(0, _history.Count - max);
         }
         }
+
+    /// <summary>
+    /// 把检索到的早期对话渲染成一段前置说明。
+    /// </summary>
+    /// <remarks>
+    /// 明确标成「可能相关」而不是直接混进对话：模型需要知道这些是**参考材料**，
+    /// 不一定都要回应，否则会把几天前的话当成本轮刚说的内容接上来。
+    /// </remarks>
+    private static string BuildMemoryBlock(IReadOnlyList<Storage.Messages.StoredMessage> related)
+    {
+        if (related.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("【可能相关的早期对话】（供参考，不一定要回应）");
+        foreach (var item in related)
+        {
+            sb.Append('[').Append(BeijingTime.Format(item.Message.OccurredAt)).Append("] ")
+              .Append(item.Message.Sender.DisplayName).Append('：')
+              .AppendLine(item.Message.PlainText);
+        }
+        sb.AppendLine();
+        sb.Append("【当前消息】");
+        return sb.ToString();
+    }
 
     /// <summary>
     /// 构建发给模型的当前消息。**有图片时走多模态**（deepseek-flash 支持视觉输入）。
