@@ -36,6 +36,31 @@ public sealed record ServerOptions
     /// <summary>全局人设文件（Markdown）。会话级人设可以在运行时覆盖它。</summary>
     public string PersonaPath { get; init; } = "./config/persona.md";
 
+    // ── 权限与工作区（M1-E，FR-6 / FR-7）──
+
+    /// <summary>
+    /// 管理员 QQ 列表：**全量文件权限**（全部会话目录）。
+    /// </summary>
+    /// <remarks>
+    /// 默认空 = 没有管理员 = 所有文件工具不可用（deny-by-default）。
+    /// </remarks>
+    public IReadOnlyList<string> Admins { get; init; } = [];
+
+    /// <summary>
+    /// 工具白名单：可读写**自己当前会话**的工作区。
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ 与 <see cref="Whitelist"/>（消息过滤：「它愿意理谁」）**不是一回事** ——
+    /// 这里是「谁能让它动手」。默认空。
+    /// </remarks>
+    public IReadOnlyList<string> ToolWhitelist { get; init; } = [];
+
+    /// <summary>工作区根目录（FR-7.1）：其下按平台 → g/p + 会话 ID 分目录。</summary>
+    public string WorkspacePath { get; init; } = "./workspace";
+
+    /// <summary>单次读写大小上限（字节，FR-7.7）：超限拒绝，不静默截断。</summary>
+    public int FileMaxBytes { get; init; } = 256 * 1024;
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;
@@ -73,6 +98,9 @@ public sealed record ServerOptions
         int IntOrDefault(string name, int fallback) =>
             int.TryParse(Optional(name), out var parsed) ? parsed : fallback;
 
+        static IReadOnlyList<string> SplitList(string? raw) =>
+            (raw ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
         var wsUrl = Require("ZIPPER_NAPCAT_WS");
         var apiKey = Require("ZIPPER_LLM_APIKEY");
         var baseUrl = Require("ZIPPER_LLM_BASEURL");
@@ -105,6 +133,11 @@ public sealed record ServerOptions
             FacesPath = Optional("ZIPPER_FACES") ?? "./config/faces.qq.json",
             EmbeddingModelDirectory = Optional("ZIPPER_EMBEDDING_MODEL") ?? "./temp/bge-small-zh-v1.5",
             PersonaPath = Optional("ZIPPER_PERSONA") ?? "./config/persona.md",
+
+            Admins = SplitList(Optional("ZIPPER_ADMINS")),
+            ToolWhitelist = SplitList(Optional("ZIPPER_TOOL_WHITELIST")),
+            WorkspacePath = Optional("ZIPPER_WORKSPACE") ?? "./workspace",
+            FileMaxBytes = IntOrDefault("ZIPPER_FILE_MAX_BYTES", 256 * 1024),
 
             SendIntervalMs = IntOrDefault("ZIPPER_SEND_INTERVAL_MS", 300),
             MaxConsecutive = IntOrDefault("ZIPPER_MAX_CONSECUTIVE", 10),

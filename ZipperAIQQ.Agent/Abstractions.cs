@@ -81,6 +81,18 @@ public sealed record ChatAgentDependencies
     /// </summary>
     public required Core.Events.IEventBus Events { get; init; }
 
+    /// <summary>权限门禁（接缝 C，FR-6）。</summary>
+    public required Security.IPermissionGate PermissionGate { get; init; }
+
+    /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
+    public required Security.IRoleResolver Roles { get; init; }
+
+    /// <summary>会话工作区（路径穿越拦截，FR-7）。</summary>
+    public required Security.WorkspacePathResolver Workspace { get; init; }
+
+    /// <summary>单次读写大小上限（字节，FR-7.7）。</summary>
+    public int FileMaxBytes { get; init; } = 256 * 1024;
+
     public required ChatAgentOptions Options { get; init; }
     public required Serilog.ILogger Logger { get; init; }
 }

@@ -102,6 +102,9 @@ static async Task LogStartupSummaryAsync(
         options.SendIntervalMs, options.MaxConsecutive, options.CooldownMs);
     Log.Information("表情目录={Count} 个（{Path}）", faces.Count, options.FacesPath);
     Log.Information("人设文件={Path}", Path.GetFullPath(options.PersonaPath));
+    Log.Information("权限：管理员 {Admins} 人 / 工具白名单 {Whitelist} 人；工作区={Workspace}；单文件上限 {Max} 字节",
+        options.Admins.Count, options.ToolWhitelist.Count,
+        Path.GetFullPath(options.WorkspacePath), options.FileMaxBytes);
     Log.Information("向量模型目录={Dir}", options.EmbeddingModelDirectory);
 
     // 历史指标：让「上次跑得快不快」一开机就能看见，而不用等客户端接上
