@@ -19,9 +19,19 @@ using ZipperAIQQ.Transport.Client;
 
 try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
 
+var logTemplate = "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] {Message:lj}{NewLine}{Exception}";
+
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+    // 文件日志：UTF-8 **无 BOM**（有 BOM 会让 tail/less/编辑器把首行当成乱码）
+    // 不依赖控制台代码页 —— 这正是之前靠重定向看日志会乱码的原因
+    .WriteTo.File(
+        path: Path.Combine("logs", "zipper-.log"),
+        rollingInterval: RollingInterval.Day,
+        encoding: new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+        outputTemplate: logTemplate,
+        shared: true)
     .CreateLogger();
 
 // ── 配置：全部来自环境变量，代码里不写死任何 URL / 模型名（FR-8.13）──
