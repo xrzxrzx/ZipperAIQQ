@@ -67,19 +67,42 @@ public sealed class DatabaseInitializer
             // 已迁移过
         }
 
-        // 版本行只写一次；已有则不动
-        await using (var cmd = conn.CreateCommand())
+        // 版本记录必须**与真实 schema 一致**：这里每次都核对，而不是"只写一次"。
+        //
+        // 旧写法 `INSERT ... WHERE NOT EXISTS` 只在空表时写 → 之后永远停在第一次的值，
+        // 而日志里的 v6 是从常量打印的 —— 表里写着 v1、日志说 v6，等于多了一份对不上的真相。
+        var recorded = await ReadSchemaVersionAsync(conn, ct).ConfigureAwait(false);
+
+        if (recorded is null)
         {
-            cmd.CommandText = """
-                INSERT INTO SchemaVersion (Version)
-                SELECT @version
-                WHERE NOT EXISTS (SELECT 1 FROM SchemaVersion);
-                """;
-            cmd.Parameters.AddWithValue("@version", CurrentSchemaVersion);
-            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            await using var insert = conn.CreateCommand();
+            insert.CommandText = "INSERT INTO SchemaVersion (Version) VALUES (@version);";
+            insert.Parameters.AddWithValue("@version", CurrentSchemaVersion);
+            await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            _logger.Information("schema 版本记录初始化：v{Version}", CurrentSchemaVersion);
+        }
+        else if (recorded.Value != CurrentSchemaVersion)
+        {
+            await using var update = conn.CreateCommand();
+            update.CommandText = "UPDATE SchemaVersion SET Version = @version;";
+            update.Parameters.AddWithValue("@version", CurrentSchemaVersion);
+            await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            _logger.Warning(
+                "schema 版本记录不一致：记录 v{Recorded} → 实际 v{Current}，已修正",
+                recorded.Value, CurrentSchemaVersion);
         }
 
         _logger.Information("数据库就绪（schema v{SchemaVersion}）", CurrentSchemaVersion);
+    }
+
+    /// <summary>读取表里记录的 schema 版本；没有记录时返回 <c>null</c>。</summary>
+    private static async Task<long?> ReadSchemaVersionAsync(SqliteConnection conn, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Version FROM SchemaVersion LIMIT 1;";
+        var value = await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false);
+
+        return value is null or DBNull ? null : Convert.ToInt64(value);
     }
 
     private static async Task ExecuteAsync(SqliteConnection conn, string sql, CancellationToken ct)

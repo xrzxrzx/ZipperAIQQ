@@ -2,7 +2,6 @@ using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
-using System.Text.RegularExpressions;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
@@ -70,7 +69,7 @@ public static class SendMessageTool
                     var outgoing = new OutgoingMessage
                     {
                         Chat = chat,
-                        Segments = ParseContent(text, faces),
+                        Segments = MessageContentParser.Parse(text, faces),
                     };
 
                     try
@@ -110,59 +109,5 @@ public static class SendMessageTool
                 "向**当前会话**发送消息。只有调用这个工具，你说的话才会真正发出去。" +
                 $"可以一次发送多条（最多 {cap} 条），用于模拟真人把一句话分几条发。" +
                 "不需要也不能指定发给谁 —— 会话是固定的。");
-    }
-/// <summary>
-    /// 匹配 [表情:名字] 或裸写的 [名字]（后者更自然，模型经常这么写）。
-    /// 裸写时**只有能查到表情表的名字才转换** —— 否则 [图片][链接] 这类普通方括号会被误伤。
-    /// </summary>
-    private static readonly Regex FaceToken = new(@"\[(?:表情:)?([^\]]+)\]", RegexOptions.Compiled);
-
-    /// <summary>
-    /// 把文本里的 [表情:名称] 或 [名称] 解析成真实消息段。
-    /// </summary>
-    /// <remarks>
-    /// 查不到的**原样保留为文本** —— 静默吞掉会让 AI 以为发出去了，实际对方什么都没看到。
-    /// </remarks>
-    private static List<MessageSegment> ParseContent(string text, FaceCatalog catalog)
-    {
-        var result = new List<MessageSegment>();
-        var pos = 0;
-
-        foreach (Match m in FaceToken.Matches(text))
-        {
-            if (m.Index > pos)
-            {
-                result.Add(new TextSegment(text[pos..m.Index]));
-            }
-
-            var name = m.Groups[1].Value.Trim();
-            var entry = catalog.GetByName(name);
-
-            if (entry is null)
-            {
-                result.Add(new TextSegment(m.Value));
-            }
-            else if (entry.Kind == "system" && !string.IsNullOrEmpty(entry.Id))
-            {
-                result.Add(new FaceSegment(entry.Id));
-            }
-            else if (!string.IsNullOrEmpty(entry.File))
-            {
-                result.Add(new ImageSegment(entry.File, null));
-            }
-            else
-            {
-                result.Add(new TextSegment(m.Value));
-            }
-
-            pos = m.Index + m.Length;
-        }
-
-        if (pos < text.Length)
-        {
-            result.Add(new TextSegment(text[pos..]));
-        }
-
-        return result.Count > 0 ? result : [new TextSegment(text)];
     }
 }

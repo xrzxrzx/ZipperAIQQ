@@ -212,24 +212,7 @@ public sealed class ChatAgent : IChatAgent
         ChatResponse response;
         try
         {
-            using var llmActivity = AgentTelemetry.Source.StartActivity("llm.call");
-            llmActivity?.SetTag("llm.message.count", messages.Count);
-            var llmSw = System.Diagnostics.Stopwatch.StartNew();
-            response = await _client.GetResponseAsync(messages, chatOptions, ct).ConfigureAwait(false);
-            llmSw.Stop();
-            llmActivity?.SetTag("llm.elapsed.ms", llmSw.ElapsedMilliseconds);
-            llmActivity?.SetStatus(ActivityStatusCode.Ok);
-
-            // token 用量与耗时落库 —— 客户端要能看「哪类调用最慢 / token 烧多快」
-            await _metrics.RecordAsync(new MetricEntry(
-                SessionId,
-                "llm.call",
-                llmSw.Elapsed.TotalMilliseconds,
-                response.Usage?.InputTokenCount,
-                response.Usage?.OutputTokenCount), ct).ConfigureAwait(false);
-
-            llmActivity?.SetTag("llm.input.tokens", response.Usage?.InputTokenCount);
-            llmActivity?.SetTag("llm.output.tokens", response.Usage?.OutputTokenCount);
+            response = await CallLlmAsync(messages, chatOptions, "llm.call", ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -239,35 +222,62 @@ public sealed class ChatAgent : IChatAgent
 
         var finalText = response.Text;
 
-        // ⭐ 兜底发送（FR-2.1）：模型没调工具、但产出了文本 → 直接发出去。
-        // 不这么做的话，模型一旦"忘记调工具"，群里就表现为"叫了不理人"。
+        // ══════ §8.3 指令遵循漂移：该调工具却没调 ══════
+        // 检测信号是"可判定的"：这一轮一条都没发出去（sent == 0），却产出了文本。
+        //
+        // 硬规矩：**只在没有副作用时才重试**。sent == 0 说明本轮什么都没发出去，
+        // 重跑整条链是安全的；一旦本轮已经发过消息，重跑就可能把同样的话再发一遍 ——
+        // 宁可这一轮答得不好，也不能让消息重复。
         if (sent == 0 && !string.IsNullOrWhiteSpace(finalText))
         {
+            activity?.SetTag("drift.detected", "no_tool_call");
+
+            messages.Add(new ChatMessage(ChatRole.User, DriftCorrectionPrompt));
             try
             {
-                var fallback = new OutgoingMessage
+                var retry = await CallLlmAsync(messages, chatOptions, "llm.retry", ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(retry.Text))
                 {
-                    Chat = request.Chat,
-                    Segments = [new TextSegment(finalText)],
-                };
-
-                await _channel.SendAsync(fallback, ct).ConfigureAwait(false);
-                sent = 1;
-
-                try
-                {
-                    await _store.AppendOutgoingAsync(fallback, BotUserId, request.Now, ct).ConfigureAwait(false);
+                    finalText = retry.Text;
                 }
-                catch
-                {
-                    // 已发出，落库失败不改变事实
-                }
-                _logger.Information("兜底发送生效（会话 {SessionId}）：模型未调用工具", SessionId);
+
+                activity?.SetTag("drift.retry.sent", sent);
+                _logger.Information(
+                    "指令遵循漂移：已回填具体原因并重试 1 次（会话 {SessionId}），重试后发出 {Sent} 条",
+                    SessionId, sent);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "兜底发送失败（会话 {SessionId}）", SessionId);
+                _logger.Warning(ex, "漂移纠正重试失败（会话 {SessionId}），转入降级发送", SessionId);
             }
+        }
+
+        // ══════ §8.3 降级：连续 2 次都没调工具 → 由我们代发 ══════
+        // 兜底不是"随便发发"：表情照样解析、按空行分条，与 send_message 工具**同一套解析**。
+        // （上一版这里直接拼 TextSegment，结果表情变字面量、几句话挤成一条 —— 实测抓到的 bug。）
+        if (sent == 0 && !string.IsNullOrWhiteSpace(finalText))
+        {
+            var parts = MessageContentParser.SplitByBlankLine(finalText, _options.MaxMessagesPerCall);
+            var interval = Math.Max(0, _options.MinSendIntervalMs);
+
+            foreach (var part in parts)
+            {
+                // 最小发送间隔（防风控）：第一条不等
+                if (sent > 0 && interval > 0)
+                {
+                    await Task.Delay(interval, ct).ConfigureAwait(false);
+                }
+
+                if (await TrySendAsync(request.Chat, MessageContentParser.Parse(part, _faces), ct).ConfigureAwait(false))
+                {
+                    sent++;
+                }
+            }
+
+            activity?.SetTag("drift.degraded", "yes");
+            _logger.Warning(
+                "降级发送（会话 {SessionId}）：连续 2 次未调用工具，已代发 {Sent} 条",
+                SessionId, sent);
         }
 
         // 更新历史
@@ -283,6 +293,88 @@ public sealed class ChatAgent : IChatAgent
         activity?.SetStatus(ActivityStatusCode.Ok);
 
         return new AgentRunResult(finalText, sent);
+    }
+
+    /// <summary>
+    /// §8.3 的纠正提示：必须说清**哪里不对** —— 只说「重新来」等于没说。
+    /// </summary>
+    private const string DriftCorrectionPrompt =
+        "（系统提示）你上一条只输出了文本，**没有调用 send_message 工具**，所以对方一个字都没收到。\n" +
+        "请调用 send_message 把你要说的话真正发出去；需要分几条说就分几条。";
+
+    /// <summary>
+    /// 一次模型调用 + 指标落库（耗时 / token）。
+    /// </summary>
+    /// <param name="metricKind">
+    /// 指标分类：正常调用记 <c>llm.call</c>，漂移纠正的重试记 <c>llm.retry</c> ——
+    /// 分开记才能看出「因为漂移多烧了多少次调用」。
+    /// </param>
+    private async Task<ChatResponse> CallLlmAsync(
+        List<ChatMessage> messages,
+        ChatOptions options,
+        string metricKind,
+        CancellationToken ct)
+    {
+        using var llmActivity = AgentTelemetry.Source.StartActivity("llm.call");
+        llmActivity?.SetTag("llm.message.count", messages.Count);
+        llmActivity?.SetTag("llm.kind", metricKind);
+
+        var sw = Stopwatch.StartNew();
+        var response = await _client.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
+        sw.Stop();
+
+        llmActivity?.SetTag("llm.elapsed.ms", sw.ElapsedMilliseconds);
+        llmActivity?.SetStatus(ActivityStatusCode.Ok);
+        llmActivity?.SetTag("llm.input.tokens", response.Usage?.InputTokenCount);
+        llmActivity?.SetTag("llm.output.tokens", response.Usage?.OutputTokenCount);
+
+        // token 用量与耗时落库 —— 客户端要能看「哪类调用最慢 / token 烧多快」
+        await _metrics.RecordAsync(new MetricEntry(
+            SessionId,
+            metricKind,
+            sw.Elapsed.TotalMilliseconds,
+            response.Usage?.InputTokenCount,
+            response.Usage?.OutputTokenCount), ct).ConfigureAwait(false);
+
+        return response;
+    }
+
+    /// <summary>
+    /// 发送一条消息并落库（降级路径用）。
+    /// </summary>
+    /// <returns>是否成功发出；落库失败只记日志，不改变「已经发出去」这个事实。</returns>
+    private async Task<bool> TrySendAsync(
+        ChatRef chat,
+        IReadOnlyList<MessageSegment> segments,
+        CancellationToken ct)
+    {
+        var outgoing = new OutgoingMessage
+        {
+            Chat = chat,
+            Segments = segments,
+        };
+
+        try
+        {
+            await _channel.SendAsync(outgoing, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "发送失败（会话 {SessionId}）", SessionId);
+            return false;
+        }
+
+        try
+        {
+            await _store.AppendOutgoingAsync(outgoing, BotUserId, BeijingTime.Now, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // 已发出，落库失败不改变事实
+            _logger.Warning(ex, "落库失败（会话 {SessionId}）", SessionId);
+        }
+
+        return true;
     }
 
     /// <summary>热窗裁剪（M1-C 会换成真正的三层策略）。</summary>
