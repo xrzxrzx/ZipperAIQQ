@@ -10,6 +10,7 @@ using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.NapCat;
+using ZipperAIQQ.Channel.Throttling;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Storage;
 using ZipperAIQQ.Storage.Database;
@@ -40,6 +41,8 @@ var apiKindText = Env("ZIPPER_LLM_APIKIND");           // 可选：Responses | C
 var napcatToken = Env("ZIPPER_NAPCAT_TOKEN");          // 可选
 var dbPath      = Env("ZIPPER_DB") ?? "./data/zipperaiqq.db";
 var facesPath   = Env("ZIPPER_FACES") ?? "./config/faces.qq.json";
+// 全局最短发送间隔（毫秒）。风控看的是同一个 QQ 号的发信速率，所以必须全局共享。
+var sendIntervalMs = int.TryParse(Env("ZIPPER_SEND_INTERVAL_MS"), out var iv) ? iv : 300;
 var whitelist   = (Env("ZIPPER_WHITELIST") ?? string.Empty)
                     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
@@ -77,11 +80,17 @@ builder.Services.AddSingleton<IMessageStore, SqliteMessageStore>();
 builder.Services.AddSingleton<IChatFilter>(_ => new ChatFilter(filterOptions));
 
 builder.Services.AddSingleton<IClientTransport>(_ => new ClientTransport(Log.Logger));
-builder.Services.AddSingleton<IMessageChannel>(sp => new NapCatChannel(
-    sp.GetRequiredService<IClientTransport>(),
-    sp.GetRequiredService<IChatFilter>(),
-    new NapCatOptions { WebSocketUrl = wsUrl, AccessToken = napcatToken },
-    Log.Logger));
+builder.Services.AddSingleton<IMessageChannel>(sp =>
+{
+    var inner = new NapCatChannel(
+        sp.GetRequiredService<IClientTransport>(),
+        sp.GetRequiredService<IChatFilter>(),
+        new NapCatOptions { WebSocketUrl = wsUrl, AccessToken = napcatToken },
+        Log.Logger);
+
+    // 所有出站消息都过这里：全局最短间隔，跨会话共享
+    return new ThrottledMessageChannel(inner, sendIntervalMs);
+});
 
 builder.Services.AddSingleton<IChatClient>(_ => ChatClientFactory.Create(
     new LlmEndpoint("primary", baseUrl, model, apiKind), apiKey));
@@ -127,6 +136,7 @@ var app = builder.Build();
 Log.Information("配置就绪：WS={Ws} 模型={Model} 库={Db}", wsUrl, model, fullDbPath);
 Log.Information("过滤：{Mode}（{Count} 条）", filterOptions.Mode, filterOptions.Entries.Count);
 Log.Information("表情目录：{Count} 个（{Path}）", faceCatalog.Count, facesPath);
+Log.Information("全局发送间隔：{Interval} ms", sendIntervalMs);
 
 try
 {

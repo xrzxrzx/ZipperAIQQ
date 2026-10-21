@@ -196,13 +196,27 @@ public sealed class ChatAgent : IChatAgent
     /// </remarks>
     private string RenderContent(AgentRunRequest request)
     {
-        if (request.Segments.Count == 0)
+        // 积压合并：把这一批里每条都渲染成一行，让模型看到完整上下文
+        if (request.Batch.Count > 1)
         {
-            return request.UserText;
+            var lines = request.Batch.Select(m =>
+                "[" + BeijingTime.Format(m.OccurredAt) + "] " + m.Sender.DisplayName + "：" +
+                RenderSegments(m.Segments, m.PlainText));
+            return string.Join("\n", lines);
+        }
+
+        return RenderSegments(request.Segments, request.UserText);
+    }
+
+    private string RenderSegments(IReadOnlyList<MessageSegment> segments, string fallback)
+    {
+        if (segments.Count == 0)
+        {
+            return fallback;
         }
 
         var sb = new StringBuilder();
-        foreach (var segment in request.Segments)
+        foreach (var segment in segments)
         {
             sb.Append(segment switch
             {
@@ -216,7 +230,7 @@ public sealed class ChatAgent : IChatAgent
         }
 
         var rendered = sb.ToString().Trim();
-        return rendered.Length > 0 ? rendered : request.UserText;
+        return rendered.Length > 0 ? rendered : fallback;
     }
 
     private string RenderFace(FaceSegment face)

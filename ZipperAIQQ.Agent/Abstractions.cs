@@ -16,6 +16,15 @@ public sealed record AgentRunRequest
     /// UserText 只是纯文本，**看不到表情**；渲染上下文时要看这个。
     /// </remarks>
     public IReadOnlyList<MessageSegment> Segments { get; init; } = [];
+
+    /// <summary>
+    /// 同一批合并进来的多条消息（数量 &gt; 1 表示短时间内积压）。
+    /// </summary>
+    /// <remarks>
+    /// 逐条触发会让 10 条消息变成 10 次模型调用；合并成一批只调一次，
+    /// 而且更符合真人的反应（看到连发几条，一起回）。
+    /// </remarks>
+    public IReadOnlyList<IncomingMessage> Batch { get; init; } = [];
     public required DateTimeOffset Now { get; init; }
 }
 
