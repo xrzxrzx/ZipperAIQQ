@@ -79,6 +79,7 @@ public static class ServiceRegistration
             sp.GetRequiredService<IEmbeddingService>(),
             sp.GetRequiredService<IEmbeddingStore>(),
             sp.GetRequiredService<IMessageStore>(),
+            sp.GetRequiredService<IMetricsStore>(),
             sp.GetRequiredService<ILogger>()));
 
         // ── 表情目录 ──
@@ -99,6 +100,7 @@ public static class ServiceRegistration
             sp.GetRequiredService<IChatClient>(),
             sp.GetRequiredService<IMessageStore>(),
             sp.GetRequiredService<ISummaryStore>(),
+            sp.GetRequiredService<IMetricsStore>(),
             sp.GetRequiredService<ILogger>()));
 
         // ── Agent 池：一个聊天一个实例（D9）──

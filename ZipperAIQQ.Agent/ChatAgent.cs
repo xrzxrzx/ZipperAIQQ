@@ -201,6 +201,7 @@ public sealed class ChatAgent : IChatAgent
             _options.MaxMessagesPerCall,
             _options.MinSendIntervalMs,
             _faces,
+            _metrics,
             n => sent += n);
 
         var chatOptions = new ChatOptions
