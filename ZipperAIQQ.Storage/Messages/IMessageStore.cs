@@ -11,8 +11,21 @@ namespace ZipperAIQQ.Storage.Messages;
 /// </remarks>
 public interface IMessageStore
 {
-    /// <summary>追加一条消息，返回入库主键。</summary>
+    /// <summary>追加一条**收到的**消息，返回入库主键。</summary>
     Task<long> AppendAsync(IncomingMessage message, CancellationToken ct = default);
+
+    /// <summary>
+    /// 追加一条**发出的**消息（Direction=1），返回入库主键。
+    /// </summary>
+    /// <remarks>
+    /// 为什么 AI 发的也要存：客户端要能看「含 AI 发出的」聊天记录（FR-20.3），
+    /// 只存收到的会让人误判「它到底回没回」。
+    /// </remarks>
+    Task<long> AppendOutgoingAsync(
+        OutgoingMessage message,
+        string senderUserId,
+        DateTimeOffset sentAt,
+        CancellationToken ct = default);
 
     /// <summary>
     /// 取某会话最近 <paramref name="limit"/> 条消息，**按时间正序**返回。
