@@ -207,7 +207,7 @@ jobs:
           PY
 
   # ───────────────────────────────────────────────────────────────────
-  # ② 构建与测试 —— 仓库里出现 .NET 项目后【自动开始生效】，无需改本文件
+  # ② 构建与测试 —— 仓库已有 .NET 项目，本作业正在真正干活
   # ───────────────────────────────────────────────────────────────────
   build-and-test:
     name: 构建与测试
@@ -215,8 +215,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # 现在还没有代码，硬跑 dotnet 只会红一片。
-      # 所以先探测，没有项目就【如实跳过并打 notice】，而不是假装成功。
+      # 探测逻辑保留：万一仓库被清空，不至于红一片。
+      # 没有项目时【如实跳过并打 notice】，而不是假装成功。
       - name: 探测是否存在 .NET 项目
         id: probe
         run: |
@@ -233,7 +233,7 @@ jobs:
           fi
           echo "found=$found" >> "$GITHUB_OUTPUT"
           if [ "$found" = false ]; then
-            echo "::notice::仓库里还没有 .NET 项目，跳过构建与测试。出现第一个 .csproj 后本作业会自动开始生效。"
+            echo "::notice::仓库里暂时没有 .NET 项目，跳过构建与测试（探测逻辑保留，出现 .csproj 后自动恢复）。"
           fi
 
       - name: 安装 .NET SDK
@@ -259,4 +259,17 @@ jobs:
 
       - name: 测试
         if: steps.probe.outputs.found == 'true'
-        run: dotnet test --no-build --configuration Release --verbosity normal
+        run: |
+          # 探测是否存在测试项目。
+          # 原因：没有测试项目时，dotnet test 会「成功退出但一个测试都没跑」，
+          # 那看起来像"测试通过"，其实是误导 —— 本项目定过一条原则：如实跳过，不假装成功。
+          shopt -s nullglob
+          has_tests=false
+          for f in tests/*.csproj ZipperAIQQ.*/*.Tests.csproj ZipperAIQQ.*/*Test*/*.csproj; do
+            if [ -f "$f" ]; then has_tests=true; fi
+          done
+          if [ "$has_tests" = false ]; then
+            echo "::notice::仓库里还没有测试项目 —— 本次「测试」步骤实际未验证任何东西（0 个测试）。这【不等于】测试通过。"
+            exit 0
+          fi
+          dotnet test --no-build --configuration Release --verbosity normal
