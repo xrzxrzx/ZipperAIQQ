@@ -66,7 +66,7 @@ public interface IChatAgentPool
 /// </remarks>
 public sealed record ChatAgentDependencies
 {
-    public required Microsoft.Extensions.AI.IChatClient Client { get; init; }
+    public required Llm.IChatClientProvider Client { get; init; }
     public required IMessageChannel Channel { get; init; }
     public required Storage.Messages.IMessageStore Store { get; init; }
     public required Faces.FaceCatalog Faces { get; init; }

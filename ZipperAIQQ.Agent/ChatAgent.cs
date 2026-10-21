@@ -3,6 +3,7 @@ using Microsoft.Extensions.AI;
 using Serilog;
 using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
+using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Agent.Tools;
@@ -31,7 +32,7 @@ namespace ZipperAIQQ.Agent;
 /// </remarks>
 public sealed class ChatAgent : IChatAgent
 {
-    private readonly IChatClient _client;
+    private readonly IChatClientProvider _clients;
     private readonly IMessageChannel _channel;
     private readonly IMessageStore _store;
     private readonly FaceCatalog _faces;
@@ -67,7 +68,7 @@ public sealed class ChatAgent : IChatAgent
         ArgumentNullException.ThrowIfNull(deps);
 
         SessionId = sessionId;
-        _client = deps.Client;
+        _clients = deps.Client;
         _channel = deps.Channel;
         _store = deps.Store;
         _faces = deps.Faces;
@@ -495,7 +496,7 @@ public sealed class ChatAgent : IChatAgent
         llmActivity?.SetTag("llm.kind", metricKind);
 
         var sw = Stopwatch.StartNew();
-        var response = await _client.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
+        var response = await _clients.Current.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
         sw.Stop();
 
         llmActivity?.SetTag("llm.elapsed.ms", sw.ElapsedMilliseconds);

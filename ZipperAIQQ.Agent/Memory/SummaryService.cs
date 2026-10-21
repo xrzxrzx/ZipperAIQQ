@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.AI;
 using Serilog;
+using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Metrics;
@@ -44,26 +45,26 @@ public sealed class SummaryService
         - **只输出摘要正文**，不要任何前缀或解释
         """;
 
-    private readonly IChatClient _client;
+    private readonly IChatClientProvider _clients;
     private readonly IMessageStore _messages;
     private readonly ISummaryStore _summaries;
     private readonly IMetricsStore _metrics;
     private readonly ILogger _logger;
 
     public SummaryService(
-        IChatClient client,
+        IChatClientProvider clients,
         IMessageStore messages,
         ISummaryStore summaries,
         IMetricsStore metrics,
         ILogger logger)
     {
-        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(clients);
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(summaries);
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(logger);
 
-        _client = client;
+        _clients = clients;
         _messages = messages;
         _summaries = summaries;
         _metrics = metrics;
@@ -153,7 +154,7 @@ public sealed class SummaryService
         var sw = Stopwatch.StartNew();
         try
         {
-            var response = await _client.GetResponseAsync(request, cancellationToken: ct).ConfigureAwait(false);
+            var response = await _clients.Current.GetResponseAsync(request, cancellationToken: ct).ConfigureAwait(false);
             sw.Stop();
 
             // 摘要也烧 token，而且它跑在后台 —— 不记就完全隐形

@@ -71,6 +71,15 @@ public sealed record ServerOptions
     /// </summary>
     public string? HttpToken { get; init; }
 
+    /// <summary>
+    /// Data Protection 密钥环目录（**主密钥**，FR-8.8）。
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ 它一丢，库里所有 LLM key 都解不开 —— **必须备份**。
+    /// 只走引导层（环境变量 / 本地目录），绝不入库。
+    /// </remarks>
+    public string DataProtectionKeysPath { get; init; } = "./data/keys";
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;
@@ -151,6 +160,7 @@ public sealed record ServerOptions
 
             HttpAddress = Optional("ZIPPER_HTTP_ADDR") ?? "127.0.0.1:5180",
             HttpToken = Optional("ZIPPER_HTTP_TOKEN"),
+            DataProtectionKeysPath = Optional("ZIPPER_DP_KEYS") ?? "./data/keys",
 
             SendIntervalMs = IntOrDefault("ZIPPER_SEND_INTERVAL_MS", 300),
             MaxConsecutive = IntOrDefault("ZIPPER_MAX_CONSECUTIVE", 10),

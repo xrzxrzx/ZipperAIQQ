@@ -15,8 +15,10 @@ using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Api;
 using ZipperAIQQ.Server.Api.Handlers;
+using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Server.Scheduler;
+using ZipperAIQQ.Storage.Config;
 using ZipperAIQQ.Storage.Database;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
@@ -61,6 +63,14 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, ListSessionsAction>();
         services.AddSingleton<IApiAction, GetMessagesAction>();
         services.AddSingleton<IApiAction, GetMetricsAction>();
+        // ── M2-B：运行配置（端点 + 角色映射 + 审计），key 加密在 Server 层完成 ──
+        services.AddSingleton<IConfigStore, SqliteConfigStore>();
+        services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
+        services.AddSingleton<IChatClientProvider, ChatClientProvider>();
+        services.AddSingleton<RuntimeConfigService>();
+        services.AddSingleton<IApiAction, GetConfigAction>();
+        services.AddSingleton<IApiAction, SetConfigAction>();
+        services.AddSingleton<IApiAction, GetAuditAction>();
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
 
@@ -120,14 +130,13 @@ public static class ServiceRegistration
         services.AddSingleton<IPersonaStore>(sp => new DefaultPersonaStore(
             sp.GetRequiredService<ISqliteDatabase>(), globalPersona));
 
-        // ── 模型 ──
-        services.AddSingleton<IChatClient>(_ => ChatClientFactory.Create(
-            new LlmEndpoint("primary", options.LlmBaseUrl, options.LlmModel, options.LlmApiKind),
-            options.LlmApiKey));
+        // ── 模型：由运行配置驱动，可热替换（FR-8.4）──
+        // 具体客户端由 IChatClientProvider 按库里的配置创建（ChatClientProvider），
+        // 这里不再直接注册 IChatClient —— 那是个不可变单例，换端点只能重启。
 
         // ── 摘要（温层）：在后台把滑出热窗的旧对话压成一段话 ──
         services.AddSingleton(sp => new SummaryService(
-            sp.GetRequiredService<IChatClient>(),
+            sp.GetRequiredService<IChatClientProvider>(),
             sp.GetRequiredService<IMessageStore>(),
             sp.GetRequiredService<ISummaryStore>(),
             sp.GetRequiredService<IMetricsStore>(),
@@ -138,7 +147,7 @@ public static class ServiceRegistration
         {
             var deps = new ChatAgentDependencies
             {
-                Client = sp.GetRequiredService<IChatClient>(),
+                Client = sp.GetRequiredService<IChatClientProvider>(),
                 Channel = sp.GetRequiredService<IMessageChannel>(),
                 Store = sp.GetRequiredService<IMessageStore>(),
                 Faces = sp.GetRequiredService<FaceCatalog>(),
