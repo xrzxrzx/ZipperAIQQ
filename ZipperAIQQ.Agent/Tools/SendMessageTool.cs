@@ -111,10 +111,14 @@ public static class SendMessageTool
                 $"可以一次发送多条（最多 {cap} 条），用于模拟真人把一句话分几条发。" +
                 "不需要也不能指定发给谁 —— 会话是固定的。");
     }
-private static readonly Regex FaceToken = new(@"\[表情:([^\]]+)\]", RegexOptions.Compiled);
+/// <summary>
+    /// 匹配 [表情:名字] 或裸写的 [名字]（后者更自然，模型经常这么写）。
+    /// 裸写时**只有能查到表情表的名字才转换** —— 否则 [图片][链接] 这类普通方括号会被误伤。
+    /// </summary>
+    private static readonly Regex FaceToken = new(@"\[(?:表情:)?([^\]]+)\]", RegexOptions.Compiled);
 
     /// <summary>
-    /// 把文本里的 [表情:名称] 解析成真实消息段。
+    /// 把文本里的 [表情:名称] 或 [名称] 解析成真实消息段。
     /// </summary>
     /// <remarks>
     /// 查不到的**原样保留为文本** —— 静默吞掉会让 AI 以为发出去了，实际对方什么都没看到。
