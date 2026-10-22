@@ -25,6 +25,7 @@ public sealed class MessageRouter : BackgroundService
     private readonly Commands.CommandRouter _commands;
     private readonly Agent.Security.IRoleResolver _roles;
     private readonly Agent.IReplyModeDecider _replyModes;
+    private readonly Notices.NoticeResponder _noticeResponder;
     private readonly Configuration.ServerOptions _options;
     private readonly ILogger _logger;
 
@@ -36,6 +37,7 @@ public sealed class MessageRouter : BackgroundService
         Commands.CommandRouter commands,
         Agent.Security.IRoleResolver roles,
         Agent.IReplyModeDecider replyModes,
+        Notices.NoticeResponder noticeResponder,
         Configuration.ServerOptions options,
         ILogger logger)
     {
@@ -46,6 +48,7 @@ public sealed class MessageRouter : BackgroundService
         ArgumentNullException.ThrowIfNull(commands);
         ArgumentNullException.ThrowIfNull(roles);
         ArgumentNullException.ThrowIfNull(replyModes);
+        ArgumentNullException.ThrowIfNull(noticeResponder);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -56,6 +59,7 @@ public sealed class MessageRouter : BackgroundService
         _commands = commands;
         _roles = roles;
         _replyModes = replyModes;
+        _noticeResponder = noticeResponder;
         _options = options;
         _logger = logger;
     }
@@ -76,9 +80,8 @@ public sealed class MessageRouter : BackgroundService
                         break;
 
                     case IncomingNotice notice:
-                        // M1-B 只记录，不响应（响应策略在 M1-C 之后）
-                        _logger.Information("通知 {Type}（{RawType}）会话 {Session}",
-                            notice.Type, notice.RawType, notice.Chat.SessionId);
+                        // M2-E：落库 + 按配置决定是否响应（默认只记录，FR-18.3）
+                        await _noticeResponder.HandleAsync(notice, stoppingToken).ConfigureAwait(false);
                         break;
                 }
             }

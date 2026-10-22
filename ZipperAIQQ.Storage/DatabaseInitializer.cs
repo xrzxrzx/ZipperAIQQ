@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 10;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -55,6 +55,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, ScheduleTasksTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, ConfigTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, RuntimeSettingsTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, NoticesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -363,5 +364,33 @@ public sealed class DatabaseInitializer
             Key   TEXT PRIMARY KEY,
             Value TEXT NOT NULL
         );
+        """;
+
+    /// <summary>
+    /// 通知落库（M2-E / FR-18）：**与消息分表**，避免污染检索。
+    /// </summary>
+    /// <remarks>
+    /// 操作者（Actor）与被操作者（Target）**分开两列**（FR-18.4）：
+    /// 「A 戳 B」只记一件事的话，AI 没法判断该对谁说话。
+    /// </remarks>
+    private const string NoticesTable = """
+        CREATE TABLE IF NOT EXISTS Notices (
+            Id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            SessionId        TEXT    NOT NULL,
+            Platform         TEXT    NOT NULL,
+            ChatType         INTEGER NOT NULL,
+            ChatId           TEXT    NOT NULL,
+            NoticeType       INTEGER NOT NULL,
+            RawType          TEXT    NOT NULL,
+            ActorUserId      TEXT,
+            ActorName        TEXT,
+            TargetUserId     TEXT,
+            TargetName       TEXT,
+            RelatedMessageId TEXT,
+            OccurredAtMs     INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_Notices_Session
+            ON Notices (SessionId, OccurredAtMs);
         """;
 }

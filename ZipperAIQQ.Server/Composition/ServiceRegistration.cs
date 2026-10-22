@@ -17,6 +17,7 @@ using ZipperAIQQ.Server.Api;
 using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
+using ZipperAIQQ.Server.Notices;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Server.Reply;
 using ZipperAIQQ.Server.Scheduler;
@@ -25,6 +26,7 @@ using ZipperAIQQ.Storage.Settings;
 using ZipperAIQQ.Storage.Database;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Notices;
 using ZipperAIQQ.Storage.Metrics;
 using ZipperAIQQ.Storage.Personas;
 using ZipperAIQQ.Storage.Schedules;
@@ -81,6 +83,10 @@ public static class ServiceRegistration
         services.AddSingleton<IRuntimeSettingsStore, SqliteRuntimeSettingsStore>();
         services.AddSingleton<IReplyModeDecider, ReplyModeDecider>();
 
+        // ── M2-E：通知落库 + 可配置响应（FR-18，默认只记录）──
+        services.AddSingleton<INoticeStore, SqliteNoticeStore>();
+        services.AddSingleton<NoticeResponder>();
+
         // ── M2-C：命令系统（新增命令 = 新增一个类 + 这里加一行）──
         services.AddSingleton<ICommand, HelpCommand>();
         services.AddSingleton<ICommand, StatusCommand>();
@@ -93,6 +99,7 @@ public static class ServiceRegistration
         services.AddSingleton<ICommand, ExportCommand>();
         services.AddSingleton<ICommand, PurgeCommand>();
         services.AddSingleton<ICommand, ModeCommand>();
+        services.AddSingleton<ICommand, NoticeCommand>();
         services.AddSingleton<CommandRouter>();
 
         // ── 权限与工作区（M1-E / FR-6 / FR-7）──

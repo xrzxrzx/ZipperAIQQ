@@ -51,6 +51,16 @@ public interface IChatAgent
     /// 清完还要把"已从库恢复"的标记置上 —— 否则下一次对话会重新把历史捞回来，等于没清。
     /// </remarks>
     void ResetHistory();
+
+    /// <summary>
+    /// 把一次命令交互记进上下文（**不触发模型调用**）。
+    /// </summary>
+    /// <remarks>
+    /// 命令不走 <see cref="RunAsync"/>，不补进来的话，下一轮对话时模型完全不知道
+    /// 「刚才用户问过 /status、系统答了什么」，会把上下文接歪。
+    /// 命令响应按 <b>user 侧</b>记（<c>[命令结果]</c>），与从库恢复时的口径一致（FR-9.4）。
+    /// </remarks>
+    void RememberCommand(string userMessage, string commandResponse);
 }
 
 /// <summary>按会话取/建 agent 实例。</summary>

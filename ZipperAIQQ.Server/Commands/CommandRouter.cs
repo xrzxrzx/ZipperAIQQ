@@ -1,4 +1,5 @@
 using Serilog;
+using ZipperAIQQ.Agent;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
@@ -27,18 +28,26 @@ public sealed class CommandRouter
     private readonly IReadOnlyDictionary<string, ICommand> _commands;
     private readonly IMessageChannel _channel;
     private readonly IMessageStore _store;
+    private readonly IChatAgentPool _agents;
     private readonly ILogger _logger;
 
-    public CommandRouter(IEnumerable<ICommand> commands, IMessageChannel channel, IMessageStore store, ILogger logger)
+    public CommandRouter(
+        IEnumerable<ICommand> commands,
+        IMessageChannel channel,
+        IMessageStore store,
+        IChatAgentPool agents,
+        ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(commands);
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(agents);
         ArgumentNullException.ThrowIfNull(logger);
 
         _commands = commands.ToDictionary(c => c.Name.ToLowerInvariant(), StringComparer.OrdinalIgnoreCase);
         _channel = channel;
         _store = store;
+        _agents = agents;
         _logger = logger;
     }
 
@@ -109,6 +118,18 @@ public sealed class CommandRouter
         }
 
         await ReplyAsync(message.Chat, response, ct).ConfigureAwait(false);
+
+        // 命令交互补进**实时上下文**：否则模型要到重启后从库恢复时才"想起来"，
+        // 当前会话里问"刚才那个结果是什么意思"必然会接歪。
+        try
+        {
+            _agents.GetOrCreate(message.Chat).RememberCommand(message.PlainText, response);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "命令交互写入上下文失败（会话 {SessionId}）", message.Chat.SessionId);
+        }
+
         _logger.Information("命令 /{Name} 已处理（会话 {SessionId}，角色 {Role}）",
             command.Name, message.Chat.SessionId, role);
 

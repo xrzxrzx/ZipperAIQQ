@@ -118,6 +118,38 @@ public sealed class ChatAgent : IChatAgent
         _logger.Information("会话 {SessionId} 上下文已重置", SessionId);
     }
 
+    /// <summary>
+    /// 把一次命令交互补进上下文：命令原话（user）+ 命令结果（user 侧，标 <c>[命令结果]</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 不这么做的话，命令交互只在**重启后从库恢复**时才可见；
+    /// 当前会话里模型对"刚问过 /status"一无所知，下一轮容易接歪。
+    /// </remarks>
+    public void RememberCommand(string userMessage, string commandResponse)
+    {
+        if (string.IsNullOrWhiteSpace(commandResponse))
+        {
+            return;
+        }
+
+        if (!_lock.Wait(TimeSpan.FromSeconds(5)))
+        {
+            _logger.Warning("记录命令交互超时（会话 {SessionId}），跳过", SessionId);
+            return;
+        }
+
+        try
+        {
+            _history.Add(new ChatMessage(ChatRole.User, $"[{BeijingTime.Format(BeijingTime.Now)}] {userMessage}"));
+            _history.Add(new ChatMessage(ChatRole.User, $"[命令结果] {commandResponse}"));
+            TrimHistory();
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     public async Task<AgentRunResult> RunAsync(AgentRunRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);

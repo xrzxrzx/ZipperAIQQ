@@ -155,6 +155,14 @@ public sealed class MemoryRetriever
         var recentIds = recent.Select(r => r.Id).ToHashSet();
 
         var picked = hits.Where(h => !recentIds.Contains(h.MessageId)).Take(topK).ToList();
+
+        // 命中率要能算（FR-10.3）：retrieval 记次数、retrieval.hit 记命中条数
+        // （命中条数放在 InputTokens 字段里 —— 指标表不为它单独加列）
+        if (picked.Count > 0)
+        {
+            await RecordHitAsync(sessionId, picked.Count, ct).ConfigureAwait(false);
+        }
+
         if (picked.Count == 0)
         {
             return [];
@@ -203,6 +211,21 @@ public sealed class MemoryRetriever
         catch (Exception ex)
         {
             _logger.Debug(ex, "指标记录失败：{Kind}", kind);
+        }
+    }
+
+    /// <summary>记一次检索命中（命中条数放 InputTokens 列，用于算命中率）。</summary>
+    private async Task RecordHitAsync(string sessionId, int hits, CancellationToken ct)
+    {
+        try
+        {
+            await _metrics
+                .RecordAsync(new MetricEntry(sessionId, "retrieval.hit", ElapsedMs: 0, InputTokens: hits), ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug(ex, "指标记录失败：retrieval.hit");
         }
     }
 }
