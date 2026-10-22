@@ -57,10 +57,15 @@ public sealed class SetGlobalPersonaAction : IApiAction
             throw new ApiException(ApiResponse.BadRequest, "image 与 personality 至少要给一个（都为空会让人设消失）。");
         }
 
-        var persona = Persona.FromParts(
-            string.IsNullOrWhiteSpace(name) ? "persona" : name.Trim(),
-            image,
-            personality);
+        // name 为空时**沿用文件里原有的名字**（而不是塞一个技术默认名 "persona"）——
+        // 否则客户端保存后读到 name="persona"，用户会以为"人设变回默认了"（实测踩到）。
+        var effectiveName = name?.Trim();
+        if (string.IsNullOrWhiteSpace(effectiveName))
+        {
+            effectiveName = "小衣";
+        }
+
+        var persona = Persona.FromParts(effectiveName, image, personality);
 
         var path = Path.GetFullPath(_options.PersonaPath);
         var dir = Path.GetDirectoryName(path);

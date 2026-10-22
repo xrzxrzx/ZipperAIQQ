@@ -84,6 +84,7 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, GetPersonaAction>();
         services.AddSingleton<IApiAction, SetPersonaAction>();
         services.AddSingleton<IApiAction, SetGlobalPersonaAction>();
+        services.AddSingleton<IApiAction, ClearPersonaAction>();
         services.AddSingleton<IApiAction, GetOwnerAction>();
         services.AddSingleton<IApiAction, SetOwnerAction>();
         services.AddSingleton<IApiAction, ProbeNapcatAction>();
@@ -219,7 +220,8 @@ public static class ServiceRegistration
             };
 
             var configs = sp.GetRequiredService<Storage.Config.IConfigStore>();
-            return new ChatAgentPool(chat => new ChatAgent(chat.SessionId, deps, configs));
+            var settings = sp.GetRequiredService<Storage.Settings.IRuntimeSettingsStore>();
+            return new ChatAgentPool(chat => new ChatAgent(chat.SessionId, deps, configs, settings));
         });
 
         // ── 定时任务轮询（FR-14：数据库即队列，1 分钟精度，启动时补执行）──
