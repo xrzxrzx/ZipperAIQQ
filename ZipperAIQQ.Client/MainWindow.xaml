@@ -47,15 +47,18 @@
             <!-- 中间留空：可拖动区域（SetDragRectangles 在代码里设置） -->
         </Grid>
 
-        <!-- 内容区：NavigationView 导航（透明底，让渐变透出来） -->
+        <!-- 内容区：NavigationView 导航（透明底，让渐变透出来）
+             PaneDisplayMode=LeftCompact：收起=图标条、展开=完整面板
+             （Left 是强制展开模式，折叠无效 —— 实测踩过） -->
         <NavigationView x:Name="NavView"
                         Grid.Row="1"
                         Background="Transparent"
                         IsBackButtonVisible="Collapsed"
                         IsSettingsVisible="False"
-                        IsPaneOpen="True"
-                        PaneDisplayMode="Left"
+                        PaneDisplayMode="LeftCompact"
                         OpenPaneLength="220"
+                        CompactPaneLength="52"
+                        ExpandedModeThresholdWidth="2400"
                         SelectionChanged="NavView_SelectionChanged">
             <!-- 让 NavigationView 自身和内容区都透明，渐变背景才能连贯（否则会看到一块色差） -->
             <NavigationView.Resources>

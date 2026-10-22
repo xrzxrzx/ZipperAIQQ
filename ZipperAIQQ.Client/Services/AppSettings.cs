@@ -21,6 +21,12 @@ public sealed class AppSettings
 
     public string Token { get; set; } = string.Empty;
 
+    /// <summary>侧栏是否展开（记住上次关闭应用时的状态）。</summary>
+    public bool IsPaneOpen { get; set; } = true;
+
+    /// <summary>上次选中的导航项 Tag（可选，默认打开「状态」）。</summary>
+    public string SelectedNavTag { get; set; } = "status";
+
     public static AppSettings Load()
     {
         try

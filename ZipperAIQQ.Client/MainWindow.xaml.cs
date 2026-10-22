@@ -13,6 +13,13 @@ public sealed partial class MainWindow : Window
 {
     private readonly AppWindow _appWindow;
 
+    /// <summary>
+    /// 恢复期标志：初始化时 NavView 会自己触发一次 PaneOpened/PaneClosed，
+    /// 那会把刚从文件读出来的状态又覆盖掉（实测：重启后又被写回 true）。
+    /// 恢复期间的这类事件一律忽略。
+    /// </summary>
+    private bool _restoringPane = true;
+
     public MainWindow(MainViewModel vm)
     {
         ArgumentNullException.ThrowIfNull(vm);
@@ -43,6 +50,19 @@ public sealed partial class MainWindow : Window
             work.Y + ((work.Height - height) / 2)));
 
         NavView.SelectedItem = NavView.MenuItems[0];
+
+        // 恢复上次的侧栏展开状态与选中项（关应用时记着，下次打开就还原）
+        NavView.IsPaneOpen = Vm.IsPaneOpen;
+        var restored = NavView.MenuItems
+            .OfType<NavigationViewItem>()
+            .FirstOrDefault(i => string.Equals(i.Tag as string, Vm.SelectedNavTag, StringComparison.Ordinal));
+        if (restored is not null)
+        {
+            NavView.SelectedItem = restored;
+        }
+
+        _restoringPane = false;
+
         ContentFrame.Navigate(typeof(StatusPage));
 
         // 0.5s 自动刷新（用户要求：数据要实时更新）
@@ -51,8 +71,12 @@ public sealed partial class MainWindow : Window
         // 启动即尝试连接（地址有默认值；连不上就在状态条上提示，不影响界面）
         _ = Vm.ConnectCommand.ExecuteAsync(null);
 
-        // 窗口关掉就停掉定时器，别让已关闭窗口还在拉接口
-        Closed += (_, _) => Vm.StopAutoRefresh();
+        // 窗口关掉：记录侧栏状态（初始化期间的事件不可靠，这里才准）+ 停掉定时器
+        Closed += (_, _) =>
+        {
+            Vm.IsPaneOpen = NavView.IsPaneOpen;
+            Vm.StopAutoRefresh();
+        };
     }
 
     public MainViewModel Vm { get; }
@@ -111,6 +135,13 @@ public sealed partial class MainWindow : Window
         {
             return;
         }
+
+        if (_restoringPane)
+        {
+            return;
+        }
+
+        Vm.SelectedNavTag = tag;
 
         var page = tag switch
         {

@@ -31,6 +31,28 @@ public partial class MainViewModel : ObservableObject
 
         ServerUrl = settings.ServerUrl;
         Token = settings.Token;
+        IsPaneOpen = settings.IsPaneOpen;
+        SelectedNavTag = settings.SelectedNavTag;
+    }
+
+    /// <summary>侧栏展开状态（改动即落盘，下次启动恢复）。</summary>
+    [ObservableProperty]
+    public partial bool IsPaneOpen { get; set; } = true;
+
+    /// <summary>当前导航项 Tag（同样落盘）。</summary>
+    [ObservableProperty]
+    public partial string SelectedNavTag { get; set; } = "status";
+
+    partial void OnIsPaneOpenChanged(bool value)
+    {
+        _settings.IsPaneOpen = value;
+        _settings.Save();
+    }
+
+    partial void OnSelectedNavTagChanged(string value)
+    {
+        _settings.SelectedNavTag = value;
+        _settings.Save();
     }
 
     // ── 连接 ──
