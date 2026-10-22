@@ -216,6 +216,10 @@
                 <StackPanel Spacing="12">
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <TextBlock Text="人设" Style="{StaticResource SectionHeaderStyle}" VerticalAlignment="Center" />
+                        <ComboBox ItemsSource="{x:Bind Vm.PersonaSessionOptions}"
+                                  SelectedItem="{x:Bind Vm.PersonaSessionId, Mode=TwoWay}"
+                                  MinWidth="260"
+                                  PlaceholderText="选会话（不选 = 用全局人设）" />
                         <Button Content="读取" Style="{StaticResource JpButtonStyle}"
                                 Command="{x:Bind Vm.LoadPersonaCommand}" />
                         <TextBlock Text="{x:Bind Vm.PersonaHint, Mode=OneWay}"

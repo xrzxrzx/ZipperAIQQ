@@ -44,6 +44,14 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string SelectedNavTag { get; set; } = "status";
 
+    partial void OnPersonaSessionIdChanged(string value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            _ = LoadPersonaCommand.ExecuteAsync(null);
+        }
+    }
+
     partial void OnSelectedSessionChanged(SessionDto? value)
     {
         // 记住上次选的会话：重进客户端时人设、消息都还能读出来
@@ -173,8 +181,15 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string PersonaPersonality { get; set; } = string.Empty;
 
+    /// <summary>人设编辑的目标会话（可在配置页直接选，不必回会话页）。</summary>
     [ObservableProperty]
-    public partial string PersonaHint { get; set; } = "在「会话」页选一个会话后，这里编辑它的人设";
+    public partial string PersonaSessionId { get; set; } = string.Empty;
+
+    /// <summary>可选会话列表（来自 listSessions）。</summary>
+    public ObservableCollection<string> PersonaSessionOptions { get; } = [];
+
+    [ObservableProperty]
+    public partial string PersonaHint { get; set; } = "选一个会话，编辑它的人设（留空则用全局人设）";
 
     // ── 人员与名单（管理员 / 主人 / 黑白名单）──
 
@@ -244,6 +259,17 @@ public partial class MainViewModel : ObservableObject
         if (!string.IsNullOrWhiteSpace(_settings.SelectedSessionId))
         {
             SelectedSession = Sessions.FirstOrDefault(s => s.SessionId == _settings.SelectedSessionId);
+        }
+
+        PersonaSessionOptions.Clear();
+        foreach (var s in Sessions)
+        {
+            PersonaSessionOptions.Add(s.SessionId);
+        }
+
+        if (string.IsNullOrWhiteSpace(PersonaSessionId) && SelectedSession is not null)
+        {
+            PersonaSessionId = SelectedSession.SessionId;
         }
 
         SessionStatus = $"共 {Sessions.Count} 个会话";
@@ -401,13 +427,10 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private Task LoadPersonaAsync() => GuardAsync("读取人设", async () =>
     {
-        if (SelectedSession is null)
-        {
-            throw new InvalidOperationException("先在「会话」页选一个会话。");
-        }
+        var target = ResolvePersonaTarget();
 
         var dto = await _api
-            .CallAsync<PersonaDto>("getPersona", new { sessionId = SelectedSession.SessionId })
+            .CallAsync<PersonaDto>("getPersona", new { sessionId = target })
             .ConfigureAwait(true);
 
         if (dto is null)
@@ -429,10 +452,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private Task SavePersonaAsync() => GuardAsync("保存人设", async () =>
     {
-        if (SelectedSession is null)
-        {
-            throw new InvalidOperationException("先在「会话」页选一个会话。");
-        }
+        var target = ResolvePersonaTarget();
 
         if (string.IsNullOrWhiteSpace(PersonaImage) && string.IsNullOrWhiteSpace(PersonaPersonality))
         {
@@ -441,13 +461,13 @@ public partial class MainViewModel : ObservableObject
 
         await _api.CallAsync<object>("setPersona", new
         {
-            sessionId = SelectedSession.SessionId,
+            sessionId = target,
             name = PersonaName,
             image = PersonaImage,
             personality = PersonaPersonality,
         }).ConfigureAwait(true);
 
-        StatusLine = $"人设已保存（{SelectedSession.SessionId}）";
+        StatusLine = $"人设已保存（{target}）";
     });
 
     /// <summary>读取人员与名单（管理员 / 主人 / 黑白名单）。</summary>
@@ -735,6 +755,22 @@ public partial class MainViewModel : ObservableObject
     }
 
     // ── 内部 ──
+
+    /// <summary>人设目标会话：优先配置页选的那个，其次会话页选中的。</summary>
+    private string ResolvePersonaTarget()
+    {
+        if (!string.IsNullOrWhiteSpace(PersonaSessionId))
+        {
+            return PersonaSessionId;
+        }
+
+        if (SelectedSession is not null)
+        {
+            return SelectedSession.SessionId;
+        }
+
+        throw new InvalidOperationException("先在「会话」页选一个会话，或在人设卡片顶部选一个。");
+    }
 
     private async Task LoadStatusCoreAsync()
     {
