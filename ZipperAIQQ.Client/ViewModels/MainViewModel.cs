@@ -881,8 +881,8 @@ public partial class MainViewModel : ObservableObject
             ["name"] = JudgeEndpointName.Trim(),
             ["baseUrl"] = JudgeEndpointBaseUrl.Trim(),
             ["model"] = JudgeEndpointModel.Trim(),
-            // OpenRouter 走 Chat 兼容接口（不是 Responses）
-            ["apiKind"] = "Chat",
+            // OpenRouter 走 Chat Completions 兼容接口（枚举名是 ChatCompletions，不是 Chat）
+            ["apiKind"] = "ChatCompletions",
         };
 
         // key 留空 = 不修改（服务端保留旧密文）

@@ -147,10 +147,19 @@ public sealed class RuntimeConfigService
         var apiKind = existing?.ApiKind ?? (int)LlmApiKind.ChatCompletions;
         if (!string.IsNullOrWhiteSpace(input.ApiKind))
         {
-            if (!Enum.TryParse<LlmApiKind>(input.ApiKind, ignoreCase: true, out var parsed))
+            // 宽容解析：客户端/文档里都习惯写 "Chat"，而枚举叫 ChatCompletions
+            var raw = input.ApiKind.Trim();
+            if (raw.Equals("Chat", StringComparison.OrdinalIgnoreCase) ||
+                raw.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
+                raw.Equals("ChatCompletion", StringComparison.OrdinalIgnoreCase))
+            {
+                raw = nameof(LlmApiKind.ChatCompletions);
+            }
+
+            if (!Enum.TryParse<LlmApiKind>(raw, ignoreCase: true, out var parsed))
             {
                 throw new ApiException(ApiResponse.BadRequest,
-                    $"endpoint.apiKind 只能是 {nameof(LlmApiKind.Responses)} 或 {nameof(LlmApiKind.ChatCompletions)}。");
+                    $"endpoint.apiKind 只能是 {nameof(LlmApiKind.Responses)} 或 {nameof(LlmApiKind.ChatCompletions)}（也接受 Chat 作为别名）。");
             }
 
             apiKind = (int)parsed;
