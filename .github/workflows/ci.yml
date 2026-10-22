@@ -249,13 +249,30 @@ jobs:
           cache: false
 
       # 跨平台硬约束：除 Client（WinUI3）外都必须能在 Linux 构建
-      - name: 还原
+      #
+      # ⚠️ 2026-10-22 修正：这里**不能**直接 `dotnet restore` / `dotnet build`
+      #    —— 不带参数时会自动选中 ZipperAIQQ.slnx，而其中包含 WinUI3 客户端
+      #    （net10.0-windows + WindowsAppSDK），在 Linux 上必然失败。
+      #    所以显式列出「必须跨平台」的项目；Client 交给下面的 windows 作业。
+      - name: 还原（跨平台项目）
         if: steps.probe.outputs.found == 'true'
-        run: dotnet restore
+        run: |
+          for p in ZipperAIQQ.Core ZipperAIQQ.Storage ZipperAIQQ.Transport ZipperAIQQ.Channel ZipperAIQQ.Agent ZipperAIQQ.Server; do
+            if [ -f "$p/$p.csproj" ]; then
+              echo "→ restore $p"
+              dotnet restore "$p/$p.csproj"
+            fi
+          done
 
       - name: 构建（Release，警告视为错误）
         if: steps.probe.outputs.found == 'true'
-        run: dotnet build --no-restore --configuration Release -warnaserror
+        run: |
+          for p in ZipperAIQQ.Core ZipperAIQQ.Storage ZipperAIQQ.Transport ZipperAIQQ.Channel ZipperAIQQ.Agent ZipperAIQQ.Server; do
+            if [ -f "$p/$p.csproj" ]; then
+              echo "→ build $p"
+              dotnet build "$p/$p.csproj" --no-restore --configuration Release -warnaserror
+            fi
+          done
 
       - name: 测试
         if: steps.probe.outputs.found == 'true'
@@ -273,3 +290,40 @@ jobs:
             exit 0
           fi
           dotnet test --no-build --configuration Release --verbosity normal
+
+  # ───────────────────────────────────────────────────────────────────
+  # ③ WinUI3 客户端 —— 只能跑在 Windows
+  #    由来（2026-10-22）：客户端是 net10.0-windows + WindowsAppSDK，
+  #    Linux runner 上还原就会失败。单独一个作业，别让它拖垮服务端的跨平台验证。
+  # ───────────────────────────────────────────────────────────────────
+  build-client:
+    name: 构建客户端（Windows）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 探测客户端项目
+        id: probe
+        shell: pwsh
+        run: |
+          if (Test-Path 'ZipperAIQQ.Client/ZipperAIQQ.Client.csproj') {
+            "found=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "found=false" >> $env:GITHUB_OUTPUT
+            Write-Host "::notice::没有客户端项目，跳过。"
+          }
+
+      - name: 安装 .NET SDK
+        if: steps.probe.outputs.found == 'true'
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+          cache: false
+
+      - name: 还原
+        if: steps.probe.outputs.found == 'true'
+        run: dotnet restore ZipperAIQQ.Client/ZipperAIQQ.Client.csproj -p:Platform=x64
+
+      - name: 构建（Release，警告视为错误）
+        if: steps.probe.outputs.found == 'true'
+        run: dotnet build ZipperAIQQ.Client/ZipperAIQQ.Client.csproj --no-restore -c Release -warnaserror -p:Platform=x64
