@@ -65,6 +65,9 @@ public sealed class ChatAgent : IChatAgent
     /// </remarks>
     private string? _anchorPersona;
 
+    /// <summary>上次锁定锚点用的人设内容（用于检测"人设被改过"）。</summary>
+    private string? _anchorPersonaSource;
+
     public ChatAgent(string sessionId, ChatAgentDependencies deps)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
@@ -241,7 +244,23 @@ public sealed class ChatAgent : IChatAgent
             .ConfigureAwait(false);
 
         // 锚点：首次锁定后**永不改动**，保证「最初设定」一直在最前方
-        _anchorPersona ??= persona.Content;
+        // 锚点 = **首次的人设**，之后固定在最前方，防止长对话把人设冲淡。
+
+        // 但人设**被改过**时必须跟着更新 —— 否则锚点还是旧的，
+
+        // 重注入里是新的人设，两条 system 互相打架，模型通常听第一条（实测：改了人设像没生效）。
+
+        if (_anchorPersona is null || !string.Equals(_anchorPersonaSource, persona.Content, StringComparison.Ordinal))
+
+        {
+
+            _anchorPersona = persona.Content;
+
+            _anchorPersonaSource = persona.Content;
+
+            _logger.Information("人设已刷新（会话 {SessionId}）：{Name}", SessionId, persona.Name);
+
+        }
 
         // 重注入内容 = 人设 + 摘要。
         // 摘要并进这里而不是单独占一条 system —— D4 要求人设 system 恰好两条，
