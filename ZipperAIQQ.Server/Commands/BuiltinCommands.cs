@@ -453,8 +453,13 @@ public sealed class PurgeCommand : ICommand
     }
 
     public string Name => "purge";
-    public string Description => "删除本会话全部记录（**不可恢复**，管理员）";
-    public Role MinRole => Role.Admin;
+    public string Description => "删除本会话全部记录（**不可恢复**，仅主人）";
+
+    /// <summary>
+    /// 提到 <see cref="Role.Owner"/>：这是**不可恢复**的批量删除，
+    /// 管理员可能有多个（协作者），但"清空一个人的聊天记录"该只归主人。
+    /// </summary>
+    public Role MinRole => Role.Owner;
 
     public async Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default)
     {
