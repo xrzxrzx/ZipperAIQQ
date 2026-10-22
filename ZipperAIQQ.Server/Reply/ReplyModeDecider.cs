@@ -117,7 +117,11 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         {
             ReplyMode.Every => true,
             ReplyMode.Mention => IsMentioned(message, selfId),
-            ReplyMode.Jev => await JudgeAsync(message, selfId, ct).ConfigureAwait(false),
+            // JEV 模式语义（用户明确要求）：
+            //   · 群里**被 @** → 必回，不消耗一次判断
+            //   · 其余情况（私聊 / 群里没 @）→ 交给 JEV 判断「该不该插话」
+            ReplyMode.Jev => (message.Chat.Type != ChatType.Private && IsMentioned(message, selfId))
+                             || await JudgeAsync(message, selfId, ct).ConfigureAwait(false),
             _ => true,
         };
     }
@@ -126,10 +130,18 @@ public sealed class ReplyModeDecider : IReplyModeDecider
 
     public bool IsMentioned(IncomingMessage message, string selfId)
     {
+        // 私聊**永远**算「对我说」——私聊里根本没有 @ 这个概念。
+        // ⚠️ 这里曾经写成「配了 selfId 就一律要求 @」，导致配了 ZIPPER_SELF_ID 之后
+        //    私聊完全不回复（mention 模式与 jev 降级都走这条路）——实测踩到过。
+        if (message.Chat.Type == ChatType.Private)
+        {
+            return true;
+        }
+
         if (string.IsNullOrWhiteSpace(selfId))
         {
-            // 没配 self_id：群聊里没法判断 @ 的是不是自己 → 只回私聊（保守）
-            return message.Chat.Type == ChatType.Private;
+            // 群聊 + 没配 selfId：判断不了 @ 的是不是自己 → 保守视为「没 @ 到」
+            return false;
         }
 
         return message.Segments
