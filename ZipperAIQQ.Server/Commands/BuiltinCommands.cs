@@ -79,8 +79,8 @@ public sealed class StatusCommand : ICommand
         var metrics = await _metrics.GetSummaryAsync(24, ct).ConfigureAwait(false);
 
         var sb = new StringBuilder();
-        sb.AppendLine($"模型：{_options.LlmModel}");
-        sb.AppendLine($"本会话消息数：{count}");
+        sb.AppendLine($"**状态** · 模型 `{_options.LlmModel}` · 本会话 {count} 条消息");
+        sb.AppendLine();
 
         if (metrics.Count == 0)
         {
@@ -88,10 +88,36 @@ public sealed class StatusCommand : ICommand
             return sb.ToString();
         }
 
-        sb.AppendLine("近 24 小时调用：");
+        var llm = metrics.FirstOrDefault(m => m.Kind == "llm.call");
+        var retrieval = metrics.FirstOrDefault(m => m.Kind == "retrieval");
+        var hit = metrics.FirstOrDefault(m => m.Kind == "retrieval.hit");
+        var jev = metrics.FirstOrDefault(m => m.Kind == "jev.judge");
+        var degrade = metrics.FirstOrDefault(m => m.Kind == "jev.degrade");
+        var summary = metrics.FirstOrDefault(m => m.Kind == "summary");
+
+        // 汇总表：一眼看清"花了多少、命中多少、该不该回"
+        var hitRate = retrieval is { Count: > 0 }
+            ? $"{(hit?.Count ?? 0) * 100.0 / retrieval.Count:F0}%（{retrieval.Count} 次检索 / {hit?.Count ?? 0} 次命中）"
+            : "—";
+
+        var jevText = jev is { Count: > 0 }
+            ? $"{jev.Count} 次（回 {jev.TotalInputTokens} / 不回 {jev.Count - jev.TotalInputTokens}，降级 {degrade?.Count ?? 0}）"
+            : "未启用";
+
+        sb.AppendLine("| 指标 | 近 24 小时 |");
+        sb.AppendLine("|---|---|");
+        sb.AppendLine($"| LLM 调用 | {llm?.Count ?? 0} 次（平均 {llm?.AvgMs ?? 0:F0}ms） |");
+        sb.AppendLine($"| Token | 输入 {llm?.TotalInputTokens ?? 0:N0} / 输出 {llm?.TotalOutputTokens ?? 0:N0} |");
+        sb.AppendLine($"| 检索命中率 | {hitRate} |");
+        sb.AppendLine($"| JEV 判断 | {jevText} |");
+        sb.AppendLine($"| 上下文压缩 | {summary?.Count ?? 0} 次 |");
+        sb.AppendLine();
+
+        sb.AppendLine("| 调用类别 | 次数 | 平均耗时 |");
+        sb.AppendLine("|---|---|---|");
         foreach (var m in metrics)
         {
-            sb.AppendLine($"- {m.Kind}：{m.Count} 次，平均 {m.AvgMs:F0}ms，token {m.TotalInputTokens}/{m.TotalOutputTokens}");
+            sb.AppendLine($"| {m.Kind} | {m.Count} | {m.AvgMs:F0} ms |");
         }
 
         return sb.ToString().TrimEnd();
