@@ -163,3 +163,41 @@ public static class ClientJson
 {
     public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
 }
+
+/// <summary>一条数值型运行参数（<c>getSettings</c>）。</summary>
+public sealed class SettingDto
+{
+    [JsonPropertyName("key")]
+    public string Key { get; set; } = string.Empty;
+
+    [JsonPropertyName("label")]
+    public string Label { get; set; } = string.Empty;
+
+    [JsonPropertyName("min")]
+    public double Min { get; set; }
+
+    [JsonPropertyName("max")]
+    public double Max { get; set; }
+
+    [JsonPropertyName("default")]
+    public double Default { get; set; }
+
+    [JsonPropertyName("unit")]
+    public string Unit { get; set; } = string.Empty;
+
+    [JsonPropertyName("value")]
+    public double Value { get; set; }
+
+    [JsonPropertyName("stored")]
+    public bool Stored { get; set; }
+}
+
+/// <summary>保存运行参数的结果（<c>setSettings</c>）。</summary>
+public sealed class SetSettingsResultDto
+{
+    [JsonPropertyName("updated")]
+    public int Updated { get; set; }
+
+    [JsonPropertyName("keys")]
+    public List<string> Keys { get; set; } = [];
+}

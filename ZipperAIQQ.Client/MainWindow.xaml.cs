@@ -24,6 +24,13 @@ public sealed partial class MainWindow : Window
         _appWindow = AppWindow;
         InitializeTitleBar();
 
+        // 任务栏/Alt+Tab 图标也用头像（unpackaged 下用输出目录里的文件）
+        var avatar = Path.Combine(AppContext.BaseDirectory, "Assets", "avatar.png");
+        if (File.Exists(avatar))
+        {
+            _appWindow.SetIcon(avatar);
+        }
+
         // 默认给一个舒服的窗口大小，并选中第一项
         _appWindow.Resize(new SizeInt32(1200, 820));
         NavView.SelectedItem = NavView.MenuItems[0];

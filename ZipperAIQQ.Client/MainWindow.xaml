@@ -8,8 +8,8 @@
     mc:Ignorable="d"
     Title="ZipperAIQQ">
 
-    <!-- 日系主题：默认走浅色（粉白渐变是主视觉）；深色资源也在，切换 RequestedTheme 即可 -->
-    <Grid Background="{ThemeResource JpBackgroundBrush}" RequestedTheme="Light">
+    <!-- 日系主题：默认**暗色**（夜紫底 + 樱粉），浅色资源也在，改 RequestedTheme 即切 -->
+    <Grid Background="{ThemeResource JpBackgroundBrush}" RequestedTheme="Dark">
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />
             <RowDefinition Height="*" />
@@ -29,12 +29,13 @@
                 <ColumnDefinition x:Name="RightPaddingColumn" Width="0" />
             </Grid.ColumnDefinitions>
 
-            <FontIcon Grid.Column="1"
-                      Glyph="&#xE99A;"
-                      FontSize="16"
-                      Foreground="{ThemeResource JpAccentBrush}"
-                      Margin="16,0,10,0"
-                      VerticalAlignment="Center" />
+            <!-- 头像图标：PersonPicture 自带圆形裁切（Border 的圆角不会裁 Image） -->
+            <PersonPicture Grid.Column="1"
+                           Width="24"
+                           Height="24"
+                           Margin="16,0,10,0"
+                           VerticalAlignment="Center"
+                           ProfilePicture="ms-appx:///Assets/avatar.png" />
             <TextBlock Grid.Column="2"
                        Text="ZipperAIQQ"
                        FontSize="13"

@@ -9,11 +9,11 @@ using ZipperAIQQ.Client.Services;
 namespace ZipperAIQQ.Client.ViewModels;
 
 /// <summary>
-/// 主窗口的全部交互（M2-D）。
+/// 主窗口的全部交互（M2-D / M2-E）。
 /// </summary>
 /// <remarks>
-/// 只有一个 VM：四个 Tab 的字段都在这里。
-/// 页面一多就拆 —— 但 M2-D 的四块（状态 / 会话 / 配置 / 审计）共用同一个连接，拆开反而要传一堆参数。
+/// 只有一个 VM：四个页面的字段都在这里。
+/// 页面一多就拆 —— 但四块（状态 / 会话 / 配置 / 审计）共用同一个连接，拆开反而要传一堆参数。
 /// </remarks>
 public partial class MainViewModel : ObservableObject
 {
@@ -81,6 +81,9 @@ public partial class MainViewModel : ObservableObject
     /// <summary>key 输入框：留空 = 不修改（服务端会保留旧密文）。</summary>
     [ObservableProperty]
     public partial string ConfigKey { get; set; } = string.Empty;
+
+    /// <summary>数值型运行参数（发送间隔 / 连发上限 / 冷却 / 文件上限 / 热窗）。</summary>
+    public ObservableCollection<SettingItem> Settings { get; } = [];
 
     // ── 审计页 ──
 
@@ -222,6 +225,55 @@ public partial class MainViewModel : ObservableObject
         ConfigText = config?.Summary ?? "已保存。";
         ConfigKey = string.Empty;
         StatusLine = "配置已保存（服务端已热更新）";
+    });
+
+    /// <summary>读取数值参数（schema 由服务端给，含范围）。</summary>
+    [RelayCommand]
+    private Task LoadSettingsAsync() => GuardAsync("读取运行参数", async () =>
+    {
+        var list = await _api.CallAsync<List<SettingDto>>("getSettings").ConfigureAwait(true);
+
+        Settings.Clear();
+        foreach (var item in list ?? [])
+        {
+            Settings.Add(new SettingItem
+            {
+                Key = item.Key,
+                Label = item.Label,
+                Min = item.Min,
+                Max = item.Max,
+                Unit = item.Unit,
+                Stored = item.Stored,
+                Value = item.Value,
+            });
+        }
+
+        StatusLine = $"运行参数 {Settings.Count} 项已读取";
+    });
+
+    /// <summary>保存数值参数：客户端先预检，服务端再按 schema 校验。</summary>
+    [RelayCommand]
+    private Task SaveSettingsAsync() => GuardAsync("保存运行参数", async () =>
+    {
+        if (Settings.Count == 0)
+        {
+            throw new InvalidOperationException("先读取一次运行参数。");
+        }
+
+        var bad = Settings.FirstOrDefault(s => s.IsOutOfRange);
+        if (bad is not null)
+        {
+            throw new InvalidOperationException(
+                $"{bad.Label} 必须在 {bad.Min:F0} ~ {bad.Max:F0} {bad.Unit} 之间（当前 {bad.Value:F0}）");
+        }
+
+        var payload = new
+        {
+            settings = Settings.ToDictionary(s => s.Key, s => s.Value),
+        };
+
+        var result = await _api.CallAsync<SetSettingsResultDto>("setSettings", payload).ConfigureAwait(true);
+        StatusLine = $"已保存 {result?.Updated ?? 0} 项运行参数（服务端已记录审计）";
     });
 
     [RelayCommand]
