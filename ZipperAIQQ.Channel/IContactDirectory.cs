@@ -58,5 +58,5 @@ public interface IContactDirectory
     /// ⚠️ 这是**受控逃生门**：只有白名单里的 action 允许通过（见实现里的 ActionAllowlist），
     /// 不能让它变成一个"什么都能调"的口子。
     /// </remarks>
-    Task<JsonObject?> InvokeApiAsync(string action, JsonObject? parameters, CancellationToken ct = default);
+    Task<JsonNode?> InvokeApiAsync(string action, JsonObject? parameters, CancellationToken ct = default);
 }

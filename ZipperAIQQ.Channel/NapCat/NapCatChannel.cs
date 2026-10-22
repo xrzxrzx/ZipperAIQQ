@@ -151,7 +151,7 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
             .ToList();
     }
 
-    public Task<JsonObject?> InvokeApiAsync(string action, JsonObject? parameters, CancellationToken ct = default)
+    public Task<JsonNode?> InvokeApiAsync(string action, JsonObject? parameters, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(action);
 
@@ -161,9 +161,7 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
                 $"action「{action}」不在可自主调用的白名单里（只允许只读查询）。");
         }
 
-        return CallApiNodeAsync(action, parameters, ct).ContinueWith(
-            t => t.Result as JsonObject,
-            TaskContinuationOptions.ExecuteSynchronously);
+        return CallApiNodeAsync(action, parameters, ct);
     }
 
     /// <summary>调一个 OneBot API 并返回 <c>data</c>（失败返回 null，不抛）。</summary>

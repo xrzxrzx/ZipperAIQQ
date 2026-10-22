@@ -143,7 +143,7 @@ public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory
         string groupId, CancellationToken ct = default) =>
         Directory.GetGroupMembersAsync(groupId, ct);
 
-    public Task<System.Text.Json.Nodes.JsonObject?> InvokeApiAsync(
+    public Task<System.Text.Json.Nodes.JsonNode?> InvokeApiAsync(
         string action, System.Text.Json.Nodes.JsonObject? parameters, CancellationToken ct = default) =>
         Directory.InvokeApiAsync(action, parameters, ct);
 }
