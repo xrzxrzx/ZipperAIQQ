@@ -188,6 +188,20 @@
                             </StackPanel>
                             <TextBlock Text="配合回复模式选 jev 使用；没配判断模型时 jev 会降级为 mention"
                                        Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                            <!-- 判断灵敏度：只在 decisions 模型（Jev）下生效 -->
+                            <TextBlock Text="判断灵敏度（越大越少开口）" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Slider Minimum="0.30" Maximum="0.80" StepFrequency="0.05"
+                                        Value="{x:Bind Vm.JudgeThreshold, Mode=TwoWay}"
+                                        Width="220" VerticalAlignment="Center" />
+                                <TextBlock Text="{x:Bind Vm.JudgeThresholdText, Mode=OneWay}"
+                                           VerticalAlignment="Center" Style="{StaticResource CaptionStyle}" />
+                                <Button Content="保存" Style="{StaticResource JpButtonStyle}"
+                                        Command="{x:Bind Vm.SaveJudgeThresholdCommand}" />
+                            </StackPanel>
+                            <TextBlock Text="只在 judge 端点用 decisions 模型（如 typesafe/jev）时生效；私聊与被 @ 永远必回"
+                                       Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
                         </StackPanel>
 
                         <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Spacing="2" Margin="0,12,0,0">

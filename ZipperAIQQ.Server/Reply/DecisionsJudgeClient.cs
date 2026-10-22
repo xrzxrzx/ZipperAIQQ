@@ -50,13 +50,6 @@ public sealed class DecisionsJudgeClient
         _logger = logger;
     }
 
-    /// <summary>判定为「该回」的概率阈值。</summary>
-    /// <remarks>
-    /// 0.5 是中性；调低 → 更愿意插话（漏回代价高时用），调高 → 更少出声（误回代价高时用）。
-    /// 群里闲聊被误回比漏回更烦人，所以默认略偏保守。
-    /// </remarks>
-    public double Threshold { get; init; } = 0.55;
-
     /// <summary>
     /// 发一次 noul 判断，返回 (是否该回, 概率)。
     /// </summary>
@@ -65,12 +58,17 @@ public sealed class DecisionsJudgeClient
     /// <param name="persona">人设（让判断知道「这是个什么角色」）。</param>
     /// <param name="recent">最近的对话（一行一条，已裁剪）。</param>
     /// <param name="latest">当前这条消息。</param>
+    /// <param name="threshold">
+    /// 判定为「该回」的概率阈值（可运行时配置）。
+    /// 0.5 是中性；调低 → 更愿意插话（漏回代价高时用），调高 → 更少出声（误回代价高时用）。
+    /// </param>
     public async Task<(bool ShouldReply, double Probability)> JudgeAsync(
         LlmEndpoint endpoint,
         string apiKey,
         string? persona,
         IReadOnlyList<string> recent,
         string latest,
+        double threshold,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
@@ -119,11 +117,11 @@ public sealed class DecisionsJudgeClient
         }
 
         var probability = ParseNoul(text);
-        var shouldReply = probability >= Threshold;
+        var shouldReply = probability >= threshold;
 
         _logger.Debug(
             "Decisions 判断：概率 {P:F3}（阈值 {T:F2}）→ {R}",
-            probability, Threshold, shouldReply ? "回" : "不回");
+            probability, threshold, shouldReply ? "回" : "不回");
 
         return (shouldReply, probability);
     }

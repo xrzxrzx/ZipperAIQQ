@@ -121,10 +121,12 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         {
             ReplyMode.Every => true,
             ReplyMode.Mention => IsMentioned(message, selfId),
-            // JEV 模式语义（用户明确要求）：
+            // JEV 模式语义：
+            //   · **私聊** → 必回（对方就是在专门跟我说话，判断"该不该"没有意义）
             //   · 群里**被 @** → 必回，不消耗一次判断
-            //   · 其余情况（私聊 / 群里没 @）→ 交给 JEV 判断「该不该插话」
-            ReplyMode.Jev => (message.Chat.Type != ChatType.Private && IsMentioned(message, selfId))
+            //   · 群里没 @ → 交给 JEV 判断「该不该插话」
+            ReplyMode.Jev => message.Chat.Type == ChatType.Private
+                             || IsMentioned(message, selfId)
                              || await JudgeAsync(message, selfId, ct).ConfigureAwait(false),
             _ => true,
         };
@@ -359,8 +361,10 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         {
             var (personaText, recent) = await BuildDecisionsContextAsync(message, ct).ConfigureAwait(false);
 
+            var threshold = await GetJudgeThresholdAsync(ct).ConfigureAwait(false);
+
             var (shouldReply, probability) = await _decisions
-                .JudgeAsync(judge.Endpoint, judge.ApiKey, personaText, recent, message.PlainText, cts.Token)
+                .JudgeAsync(judge.Endpoint, judge.ApiKey, personaText, recent, message.PlainText, threshold, cts.Token)
                 .ConfigureAwait(false);
 
             sw.Stop();
@@ -378,6 +382,27 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             await RecordDegradeAsync(message.Chat.SessionId, ct).ConfigureAwait(false);
             return IsMentioned(message, string.Empty);
         }
+    }
+
+    /// <summary>判断灵敏度：运行时配置项 <c>jev.threshold</c>，默认 0.55。</summary>
+    /// <remarks>调低更爱插话（漏回代价高时用），调高更少出声（误回代价高时用）。</remarks>
+    private async Task<double> GetJudgeThresholdAsync(CancellationToken ct)
+    {
+        try
+        {
+            var raw = await _settings.GetAsync("jev.threshold", ct).ConfigureAwait(false);
+            if (double.TryParse(raw, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var v))
+            {
+                return Math.Clamp(v, 0.05, 0.95);
+            }
+        }
+        catch
+        {
+            // 读不到就用默认
+        }
+
+        return 0.55;
     }
 
     /// <summary>decisions 用的上下文：人设 + 最近几条对话。</summary>

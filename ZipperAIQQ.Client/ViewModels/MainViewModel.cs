@@ -18,6 +18,9 @@ namespace ZipperAIQQ.Client.ViewModels;
 /// </remarks>
 public partial class MainViewModel : ObservableObject
 {
+    /// <summary>人设下拉里代表「全局人设」的特殊值。</summary>
+    public const string GlobalPersonaTag = "【全局】";
+
     private readonly ServerApiClient _api;
     private readonly AppSettings _settings;
 
@@ -43,6 +46,17 @@ public partial class MainViewModel : ObservableObject
     /// <summary>当前导航项 Tag（同样落盘）。</summary>
     [ObservableProperty]
     public partial string SelectedNavTag { get; set; } = "status";
+
+    partial void OnJudgeThresholdChanged(double value)
+    {
+        JudgeThresholdText = value switch
+        {
+            < 0.45 => $"{value:F2}（很爱插话）",
+            < 0.55 => $"{value:F2}（偏主动）",
+            < 0.65 => $"{value:F2}（默认，平衡）",
+            _ => $"{value:F2}（很少开口）",
+        };
+    }
 
     partial void OnPersonaSessionIdChanged(string value)
     {
@@ -166,6 +180,13 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string JudgeEndpointKey { get; set; } = string.Empty;
 
+    /// <summary>JEV 判断灵敏度（0.3~0.8，越大越少开口）。</summary>
+    [ObservableProperty]
+    public partial double JudgeThreshold { get; set; } = 0.55;
+
+    [ObservableProperty]
+    public partial string JudgeThresholdText { get; set; } = "0.55（默认）";
+
     [ObservableProperty]
     public partial string JudgeEndpointHint { get; set; } =
         "JEV 端点：默认 OpenRouter（baseUrl=https://openrouter.ai/api/v1，模型填 provider/model）";
@@ -235,6 +256,18 @@ public partial class MainViewModel : ObservableObject
         }
 
         await LoadStatusCoreAsync().ConfigureAwait(true);
+
+        // 顺手拉一次会话列表：人设卡片要靠它出下拉候选，
+        // 不然用户不点「刷新会话」就拿不到 target，保存人设会直接失败（实测）
+        try
+        {
+            await LoadSessionsAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            // 会话列表拉不到不影响连接
+        }
+
         StatusLine = $"已连接（服务端版本 {data.ServerVersion}）";
     });
 
@@ -262,6 +295,7 @@ public partial class MainViewModel : ObservableObject
         }
 
         PersonaSessionOptions.Clear();
+        PersonaSessionOptions.Add(GlobalPersonaTag);   // 第一项永远是「全局」
         foreach (var s in Sessions)
         {
             PersonaSessionOptions.Add(s.SessionId);
@@ -429,8 +463,10 @@ public partial class MainViewModel : ObservableObject
     {
         var target = ResolvePersonaTarget();
 
+        var apiSessionId = string.Equals(target, GlobalPersonaTag, StringComparison.Ordinal) ? "global" : target;
+
         var dto = await _api
-            .CallAsync<PersonaDto>("getPersona", new { sessionId = target })
+            .CallAsync<PersonaDto>("getPersona", new { sessionId = apiSessionId })
             .ConfigureAwait(true);
 
         if (dto is null)
@@ -452,11 +488,31 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private Task SavePersonaAsync() => GuardAsync("保存人设", async () =>
     {
+        // 兜底：没选会话时先把列表拉回来（否则只会报"先选一个会话"，用户会误以为是保存失败）
+        if (string.IsNullOrWhiteSpace(PersonaSessionId) && SelectedSession is null && Sessions.Count == 0)
+        {
+            await LoadSessionsAsync().ConfigureAwait(true);
+        }
+
         var target = ResolvePersonaTarget();
 
         if (string.IsNullOrWhiteSpace(PersonaImage) && string.IsNullOrWhiteSpace(PersonaPersonality))
         {
             throw new InvalidOperationException("形象与性格至少要填一个（都空会让人设消失）。");
+        }
+
+        if (string.Equals(target, GlobalPersonaTag, StringComparison.Ordinal))
+        {
+            // 全局人设：写服务端的 config/persona.md
+            await _api.CallAsync<object>("setGlobalPersona", new
+            {
+                name = PersonaName,
+                image = PersonaImage,
+                personality = PersonaPersonality,
+            }).ConfigureAwait(true);
+
+            StatusLine = "全局人设已保存（写入服务端 config/persona.md）";
+            return;
         }
 
         await _api.CallAsync<object>("setPersona", new
@@ -759,6 +815,17 @@ public partial class MainViewModel : ObservableObject
     /// <summary>人设目标会话：优先配置页选的那个，其次会话页选中的。</summary>
     private string ResolvePersonaTarget()
     {
+        // 没显式选就用「全局」——这样"改全局人设"不需要先选会话
+        if (string.IsNullOrWhiteSpace(PersonaSessionId))
+        {
+            return GlobalPersonaTag;
+        }
+
+        return PersonaSessionId;
+    }
+
+    private string ResolvePersonaTargetLegacy()
+    {
         if (!string.IsNullOrWhiteSpace(PersonaSessionId))
         {
             return PersonaSessionId;
@@ -769,7 +836,7 @@ public partial class MainViewModel : ObservableObject
             return SelectedSession.SessionId;
         }
 
-        throw new InvalidOperationException("先在「会话」页选一个会话，或在人设卡片顶部选一个。");
+        throw new InvalidOperationException("还没选要编辑哪个会话：请在人设卡片顶部的下拉里选一个（下拉为空就先点「刷新会话」）。");
     }
 
     private async Task LoadStatusCoreAsync()
@@ -911,5 +978,17 @@ public partial class MainViewModel : ObservableObject
         }
 
         StatusLine = $"JEV 端点已保存：{JudgeEndpointName}（judge 角色已指向它）";
+    });
+
+    /// <summary>保存 JEV 判断灵敏度（写运行时设置 jev.threshold）。</summary>
+    [RelayCommand]
+    private Task SaveJudgeThresholdAsync() => GuardAsync("保存判断灵敏度", async () =>
+    {
+        await _api.CallAsync<object>("setSettings", new
+        {
+            settings = new Dictionary<string, double> { ["jev.threshold"] = JudgeThreshold },
+        }).ConfigureAwait(true);
+
+        StatusLine = $"判断灵敏度已设为 {JudgeThreshold:F2}";
     });
 }
