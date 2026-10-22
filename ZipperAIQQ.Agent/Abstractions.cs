@@ -43,6 +43,24 @@ public interface IChatAgent
     string SessionId { get; }
 
     Task<AgentRunResult> RunAsync(AgentRunRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// 清空内存里的上下文历史（<c>/reset</c>）。**日志不动**。
+    /// </summary>
+    /// <remarks>
+    /// 清完还要把"已从库恢复"的标记置上 —— 否则下一次对话会重新把历史捞回来，等于没清。
+    /// </remarks>
+    void ResetHistory();
+
+    /// <summary>
+    /// 把一次命令交互记进上下文（**不触发模型调用**）。
+    /// </summary>
+    /// <remarks>
+    /// 命令不走 <see cref="RunAsync"/>，不补进来的话，下一轮对话时模型完全不知道
+    /// 「刚才用户问过 /status、系统答了什么」，会把上下文接歪。
+    /// 命令响应按 <b>user 侧</b>记（<c>[命令结果]</c>），与从库恢复时的口径一致（FR-9.4）。
+    /// </remarks>
+    void RememberCommand(string userMessage, string commandResponse);
 }
 
 /// <summary>按会话取/建 agent 实例。</summary>
@@ -66,7 +84,7 @@ public interface IChatAgentPool
 /// </remarks>
 public sealed record ChatAgentDependencies
 {
-    public required Microsoft.Extensions.AI.IChatClient Client { get; init; }
+    public required Llm.IChatClientProvider Client { get; init; }
     public required IMessageChannel Channel { get; init; }
     public required Storage.Messages.IMessageStore Store { get; init; }
     public required Faces.FaceCatalog Faces { get; init; }

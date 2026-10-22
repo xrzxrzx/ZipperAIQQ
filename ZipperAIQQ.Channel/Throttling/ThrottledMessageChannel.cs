@@ -25,7 +25,7 @@ namespace ZipperAIQQ.Channel.Throttling;
 /// 保证严格串行、严格间隔 —— 并发发送会让间隔失效。
 /// </para>
 /// </remarks>
-public sealed class ThrottledMessageChannel : IMessageChannel
+public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory
 {
     private readonly IMessageChannel _inner;
     private readonly int _minIntervalMs;
@@ -125,4 +125,33 @@ public sealed class ThrottledMessageChannel : IMessageChannel
             _gate.Release();
         }
     }
+
+    // ── IContactDirectory：纯粹转发给内层（节流只管发消息，和查询无关）──
+    // 这样上层从 IMessageChannel 拿到的对象同时也具备查询能力，不必额外注入一个依赖。
+
+    private IContactDirectory Directory =>
+        _inner as IContactDirectory
+        ?? throw new InvalidOperationException($"内层通道 {_inner.GetType().Name} 不支持平台查询。");
+
+    /// <summary>改签名：纯转发（限速只管"发消息"，写操作不排队）。</summary>
+    public Task SetSignatureAsync(string text, CancellationToken ct = default) =>
+        Directory.SetSignatureAsync(text, ct);
+
+    /// <summary>戳一戳：纯转发。</summary>
+    public Task SendPokeAsync(string userId, string? groupId, CancellationToken ct = default) =>
+        Directory.SendPokeAsync(userId, groupId, ct);
+
+    public Task<IReadOnlyList<ContactInfo>> GetFriendsAsync(CancellationToken ct = default) =>
+        Directory.GetFriendsAsync(ct);
+
+    public Task<GroupInfo?> GetGroupAsync(string groupId, CancellationToken ct = default) =>
+        Directory.GetGroupAsync(groupId, ct);
+
+    public Task<IReadOnlyList<GroupMemberInfo>> GetGroupMembersAsync(
+        string groupId, CancellationToken ct = default) =>
+        Directory.GetGroupMembersAsync(groupId, ct);
+
+    public Task<System.Text.Json.Nodes.JsonNode?> InvokeApiAsync(
+        string action, System.Text.Json.Nodes.JsonObject? parameters, CancellationToken ct = default) =>
+        Directory.InvokeApiAsync(action, parameters, ct);
 }

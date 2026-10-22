@@ -22,6 +22,11 @@ public sealed class MessageRouter : BackgroundService
     private readonly IMessageStore _store;
     private readonly IChatAgentPool _agents;
     private readonly MemoryRetriever _retriever;
+    private readonly Commands.CommandRouter _commands;
+    private readonly Agent.Security.IRoleResolver _roles;
+    private readonly Agent.IReplyModeDecider _replyModes;
+    private readonly Notices.NoticeResponder _noticeResponder;
+    private readonly Configuration.ServerOptions _options;
     private readonly ILogger _logger;
 
     public MessageRouter(
@@ -29,18 +34,33 @@ public sealed class MessageRouter : BackgroundService
         IMessageStore store,
         IChatAgentPool agents,
         MemoryRetriever retriever,
+        Commands.CommandRouter commands,
+        Agent.Security.IRoleResolver roles,
+        Agent.IReplyModeDecider replyModes,
+        Notices.NoticeResponder noticeResponder,
+        Configuration.ServerOptions options,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(agents);
         ArgumentNullException.ThrowIfNull(retriever);
+        ArgumentNullException.ThrowIfNull(commands);
+        ArgumentNullException.ThrowIfNull(roles);
+        ArgumentNullException.ThrowIfNull(replyModes);
+        ArgumentNullException.ThrowIfNull(noticeResponder);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
         _store = store;
         _agents = agents;
         _retriever = retriever;
+        _commands = commands;
+        _roles = roles;
+        _replyModes = replyModes;
+        _noticeResponder = noticeResponder;
+        _options = options;
         _logger = logger;
     }
 
@@ -60,9 +80,8 @@ public sealed class MessageRouter : BackgroundService
                         break;
 
                     case IncomingNotice notice:
-                        // M1-B 只记录，不响应（响应策略在 M1-C 之后）
-                        _logger.Information("通知 {Type}（{RawType}）会话 {Session}",
-                            notice.Type, notice.RawType, notice.Chat.SessionId);
+                        // M2-E：落库 + 按配置决定是否响应（默认只记录，FR-18.3）
+                        await _noticeResponder.HandleAsync(notice, stoppingToken).ConfigureAwait(false);
                         break;
                 }
             }
@@ -94,6 +113,24 @@ public sealed class MessageRouter : BackgroundService
         // ① 先落库（无论是否回复，历史都要留）
         var id = await _store.AppendAsync(msg, ct).ConfigureAwait(false);
 
+        // ② 命令优先（FR-9.1）：命中就执行并回复，**不进 agent**
+        //    没命中（比如 "/foo" 这种普通文本）继续走原流程，用户无感知（9.2）
+        //
+        //    ⚠️ 群聊里必须 **@ 机器人** 才执行命令：
+        //    否则群里任何人随手打一句 /help 都会触发，等于把机器人变成群里的公共命令台。
+        var role = _roles.Resolve(msg.Sender.UserId);
+        var selfId = _options.SelfId ?? string.Empty;
+        var commandAllowed = msg.Chat.Type == ChatType.Private || _replyModes.IsMentioned(msg, selfId);
+
+        if (!commandAllowed)
+        {
+            _logger.Debug("群聊未 @ 机器人，命令不触发（会话 {Session}）", msg.Chat.SessionId);
+        }
+        else if (await _commands.TryExecuteAsync(msg, role, ct).ConfigureAwait(false))
+        {
+            return;
+        }
+
         // ② 补算向量（M1-C 检索的前提）。
         //    失败不影响本轮回复 —— 顶多是这条以后检索不到，不能因为向量化失败就不回话。
         try
@@ -111,10 +148,16 @@ public sealed class MessageRouter : BackgroundService
             return;
         }
 
-        // ② M1-B 只响应私聊
-        if (msg.Chat.Type != ChatType.Private)
+        // ③ 回复触发模式（FR-11）：every / mention / jev
+        //    ⚠️ 群聊不再硬性跳过 —— 由模式决定（mention 只在被 @ 时回）。
+        //    jev 判断失败会**降级为 mention**，不会阻塞、不会丢消息。
+        var mode = await _replyModes
+            .GetModeAsync(msg.Chat.SessionId, ct)
+            .ConfigureAwait(false);
+
+        if (!await _replyModes.ShouldReplyAsync(msg, _options.SelfId ?? string.Empty, ct).ConfigureAwait(false))
         {
-            _logger.Debug("群聊消息 #{Id} 已落库（M1-B 暂不回复群聊）", id);
+            _logger.Debug("回复模式 {Mode}：跳过 #{Id}（会话 {Session}）", mode, id, msg.Chat.SessionId);
             return;
         }
 

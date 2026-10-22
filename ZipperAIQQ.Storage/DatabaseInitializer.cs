@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 10;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -53,6 +53,9 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, PersonasTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, CallMetricsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, ScheduleTasksTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, ConfigTables, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, RuntimeSettingsTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, NoticesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -307,5 +310,87 @@ public sealed class DatabaseInitializer
 
         CREATE INDEX IF NOT EXISTS IX_ScheduleTasks_Session
             ON ScheduleTasks (SessionId);
+        """;
+
+    /// <summary>
+    /// 运行配置（M2-B / FR-8）：具名端点 + 角色映射 + 审计。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>配置与引导分离</b>：监听地址 / token / 密钥环路径仍在环境变量（<c>ServerOptions</c>）；
+    /// 这里只存"客户端能改的部分"。
+    /// </para>
+    /// <para>
+    /// <c>KeyCipher</c> 是 **Data Protection 加密后**的密文 —— 明文永不入库（FR-8.6）。
+    /// </para>
+    /// <para>
+    /// <c>AuditLog</c> 只记"谁在何时对什么做了什么"，<b>不记内容</b>（FR-8.9）。
+    /// </para>
+    /// </remarks>
+    private const string ConfigTables = """
+        CREATE TABLE IF NOT EXISTS ModelEndpoints (
+            Name        TEXT    PRIMARY KEY,
+            BaseUrl     TEXT    NOT NULL,
+            Model       TEXT    NOT NULL,
+            ApiKind     INTEGER NOT NULL,
+            KeyCipher   TEXT,
+            UpdatedAtMs INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS RoleBindings (
+            Role         TEXT PRIMARY KEY,
+            EndpointName TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS AuditLog (
+            Id     INTEGER PRIMARY KEY AUTOINCREMENT,
+            Action TEXT    NOT NULL,
+            Actor  TEXT    NOT NULL,
+            Target TEXT,
+            AtMs   INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_AuditLog_At ON AuditLog (AtMs);
+        """;
+
+    /// <summary>
+    /// 运行期设置（M2-E）：回复模式这类"改完要立即生效"的小配置。
+    /// </summary>
+    /// <remarks>
+    /// 键约定：<c>replymode.default</c>（全局）、<c>replymode:{sessionId}</c>（每聊天覆盖）。
+    /// </remarks>
+    private const string RuntimeSettingsTable = """
+        CREATE TABLE IF NOT EXISTS RuntimeSettings (
+            Key   TEXT PRIMARY KEY,
+            Value TEXT NOT NULL
+        );
+        """;
+
+    /// <summary>
+    /// 通知落库（M2-E / FR-18）：**与消息分表**，避免污染检索。
+    /// </summary>
+    /// <remarks>
+    /// 操作者（Actor）与被操作者（Target）**分开两列**（FR-18.4）：
+    /// 「A 戳 B」只记一件事的话，AI 没法判断该对谁说话。
+    /// </remarks>
+    private const string NoticesTable = """
+        CREATE TABLE IF NOT EXISTS Notices (
+            Id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            SessionId        TEXT    NOT NULL,
+            Platform         TEXT    NOT NULL,
+            ChatType         INTEGER NOT NULL,
+            ChatId           TEXT    NOT NULL,
+            NoticeType       INTEGER NOT NULL,
+            RawType          TEXT    NOT NULL,
+            ActorUserId      TEXT,
+            ActorName        TEXT,
+            TargetUserId     TEXT,
+            TargetName       TEXT,
+            RelatedMessageId TEXT,
+            OccurredAtMs     INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_Notices_Session
+            ON Notices (SessionId, OccurredAtMs);
         """;
 }

@@ -61,6 +61,33 @@ public sealed record ServerOptions
     /// <summary>单次读写大小上限（字节，FR-7.7）：超限拒绝，不静默截断。</summary>
     public int FileMaxBytes { get; init; } = 256 * 1024;
 
+    // ── HTTP / WS 端点（M2-A）──
+
+    /// <summary>监听地址（<c>host:port</c>）。默认只绑 loopback。</summary>
+    public string HttpAddress { get; init; } = "127.0.0.1:5180";
+
+    /// <summary>
+    /// 鉴权 token：**非 loopback 监听时必须配**，否则拒绝启动（架构 §3.5）。
+    /// </summary>
+    public string? HttpToken { get; init; }
+
+    /// <summary>
+    /// Data Protection 密钥环目录（**主密钥**，FR-8.8）。
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ 它一丢，库里所有 LLM key 都解不开 —— **必须备份**。
+    /// 只走引导层（环境变量 / 本地目录），绝不入库。
+    /// </remarks>
+    public string DataProtectionKeysPath { get; init; } = "./data/keys";
+
+    /// <summary>
+    /// 机器人自身账号（mention 模式判断"@ 的是不是自己"）。
+    /// </summary>
+    /// <remarks>
+    /// 留空时：mention 模式只回私聊（群聊里没法判断 @ 指向谁，宁可保守）。
+    /// </remarks>
+    public string? SelfId { get; init; }
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;
@@ -70,6 +97,9 @@ public sealed record ServerOptions
 
     /// <summary>冷却时长（毫秒）。</summary>
     public int CooldownMs { get; init; } = 10_000;
+
+    /// <summary>上下文热窗保留多少条历史（可被运行参数覆盖）。</summary>
+    public int HotWindowMessages { get; init; } = 20;
 
     // ── 可观测 ──
     public bool OtelConsole { get; init; }
@@ -138,6 +168,11 @@ public sealed record ServerOptions
             ToolWhitelist = SplitList(Optional("ZIPPER_TOOL_WHITELIST")),
             WorkspacePath = Optional("ZIPPER_WORKSPACE") ?? "./workspace",
             FileMaxBytes = IntOrDefault("ZIPPER_FILE_MAX_BYTES", 256 * 1024),
+
+            HttpAddress = Optional("ZIPPER_HTTP_ADDR") ?? "127.0.0.1:5180",
+            HttpToken = Optional("ZIPPER_HTTP_TOKEN"),
+            DataProtectionKeysPath = Optional("ZIPPER_DP_KEYS") ?? "./data/keys",
+            SelfId = Optional("ZIPPER_SELF_ID"),
 
             SendIntervalMs = IntOrDefault("ZIPPER_SEND_INTERVAL_MS", 300),
             MaxConsecutive = IntOrDefault("ZIPPER_MAX_CONSECUTIVE", 10),

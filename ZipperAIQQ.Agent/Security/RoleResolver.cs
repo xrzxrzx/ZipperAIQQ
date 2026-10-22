@@ -17,8 +17,14 @@ public interface IRoleResolver
 /// </remarks>
 public sealed class ConfiguredRoleResolver : IRoleResolver
 {
-    private readonly HashSet<string> _admins;
+    private readonly HashSet<string> _admins;   // 注意：启动后可被 SetAdmins 整体替换（见下）
     private readonly HashSet<string> _toolWhitelist;
+
+    /// <summary>主人（第 17 项）：启动时读库、运行时由 API 改写。</summary>
+    private volatile string? _owner;
+
+    /// <summary>运行时更新的管理员集合（null 表示仍用启动时的那份）。</summary>
+    private volatile HashSet<string>? _adminsOverride;
 
     public ConfiguredRoleResolver(IEnumerable<string> admins, IEnumerable<string> toolWhitelist)
     {
@@ -29,6 +35,25 @@ public sealed class ConfiguredRoleResolver : IRoleResolver
         _toolWhitelist = toolWhitelist.Where(id => !string.IsNullOrWhiteSpace(id)).ToHashSet(StringComparer.Ordinal);
     }
 
+    /// <summary>设置主人（<c>null</c> 表示没设）。</summary>
+    public void SetOwner(string? userId) =>
+        _owner = string.IsNullOrWhiteSpace(userId) ? null : userId.Trim();
+
+    /// <summary>当前主人（没设为 <c>null</c>）。</summary>
+    public string? Owner => _owner;
+
+    /// <summary>运行时替换管理员名单（客户端改配置后立即生效）。</summary>
+    public void SetAdmins(IEnumerable<string> admins)
+    {
+        ArgumentNullException.ThrowIfNull(admins);
+        _adminsOverride = admins
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    /// <summary>当前管理员（含启动时的）。</summary>
+    public IReadOnlyCollection<string> Admins => _adminsOverride ?? _admins;
+
     public Role Resolve(string? userId)
     {
         if (string.IsNullOrWhiteSpace(userId))
@@ -36,7 +61,13 @@ public sealed class ConfiguredRoleResolver : IRoleResolver
             return Role.Normal;
         }
 
-        if (_admins.Contains(userId))
+        // 主人优先于一切（含管理员名单）
+        if (_owner is { Length: > 0 } owner && string.Equals(userId, owner, StringComparison.Ordinal))
+        {
+            return Role.Owner;
+        }
+
+        if ((_adminsOverride ?? _admins).Contains(userId))
         {
             return Role.Admin;
         }

@@ -28,6 +28,19 @@ public interface IMessageStore
         CancellationToken ct = default);
 
     /// <summary>
+    /// 追加一条**命令响应**（<c>Direction=2</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 与 AI 发言分开存（FR-9.4）：命令结果不能伪装成"AI 自己说的话"，
+    /// 否则后续对话里模型会误以为那是它说的。
+    /// </remarks>
+    Task<long> AppendCommandAsync(
+        OutgoingMessage message,
+        string senderUserId,
+        DateTimeOffset sentAt,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// 取某会话最近 <paramref name="limit"/> 条消息，**按时间正序**返回。
     /// </summary>
     Task<IReadOnlyList<StoredMessage>> GetRecentAsync(string sessionId, int limit, CancellationToken ct = default);
@@ -46,4 +59,54 @@ public interface IMessageStore
 
     /// <summary>某会话的消息总数。</summary>
     Task<long> CountAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// 按关键词搜本会话历史（LIKE），按时间正序返回。
+    /// </summary>
+    /// <remarks>
+    /// 给 agent 的 <c>search_history</c> 工具用：热窗之外的旧消息模型看不到，
+    /// 没有这个工具它只能靠上下文瞎编（实测被用户抓到）。
+    /// </remarks>
+    Task<IReadOnlyList<StoredMessage>> SearchAsync(
+        string sessionId,
+        string keyword,
+        int limit,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// 按关键词搜**所有会话**的历史（跨会话）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 给 <c>search_other_sessions</c> 工具用：让 AI 能回答「谁跟你说过什么」，
+    /// 从而更像一个跨聊天的实体，而不是只活在某一个会话里。
+    /// </para>
+    /// <para>
+    /// ⚠️ 这是**跨会话**读别人的对话 —— 权限门禁默认只给管理员/主人，
+    /// 并且实现上必须能排除当前会话（避免和自己重复）。
+    /// </para>
+    /// </remarks>
+    /// <param name="keyword">关键词（LIKE 模糊匹配）。</param>
+    /// <param name="limit">最多几条。</param>
+    /// <param name="excludeSessionId">要排除的会话（通常是当前会话），可为 null。</param>
+    Task<IReadOnlyList<StoredMessage>> SearchAcrossSessionsAsync(
+        string keyword,
+        int limit,
+        string? excludeSessionId = null,
+        CancellationToken ct = default);
+
+    /// <summary>会话概览（按最后消息时间倒序），供 M2 客户端列出"当前在接收的聊天"。</summary>
+    Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(int limit, CancellationToken ct = default);
+
+    /// <summary>
+    /// 删除某会话的全部消息（<c>/purge</c>，**不可恢复**）。
+    /// </summary>
+    /// <returns>删除的条数。</returns>
+    Task<int> PurgeAsync(string sessionId, CancellationToken ct = default);
 }
+
+/// <summary>一个会话的概览。</summary>
+public sealed record SessionSummary(
+    string SessionId,
+    int MessageCount,
+    DateTimeOffset LastMessageAt);

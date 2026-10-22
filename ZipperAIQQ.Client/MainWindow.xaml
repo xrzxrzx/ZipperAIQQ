@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="ZipperAIQQ.Client.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="ZipperAIQQ">
+
+    <!-- 日系主题：默认**暗色**（夜紫底 + 樱粉），浅色资源也在，改 RequestedTheme 即切 -->
+    <Grid Background="{ThemeResource JpBackgroundBrush}" RequestedTheme="Dark">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 自定义标题栏：左侧图标 + 应用名，右上角保留系统窗口按钮 -->
+        <Grid x:Name="AppTitleBar"
+              Grid.Row="0"
+              Background="{ThemeResource JpChromeBrush}"
+              Loaded="AppTitleBar_Loaded"
+              SizeChanged="AppTitleBar_SizeChanged">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="LeftPaddingColumn" Width="0" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition x:Name="RightPaddingColumn" Width="0" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 头像图标：PersonPicture 自带圆形裁切（Border 的圆角不会裁 Image） -->
+            <PersonPicture Grid.Column="1"
+                           Width="24"
+                           Height="24"
+                           Margin="16,0,10,0"
+                           VerticalAlignment="Center"
+                           ProfilePicture="ms-appx:///Assets/avatar.png" />
+            <TextBlock Grid.Column="2"
+                       Text="ZipperAIQQ"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       CharacterSpacing="20"
+                       Foreground="{ThemeResource JpTextBrush}"
+                       VerticalAlignment="Center" />
+
+            <!-- 中间留空：可拖动区域（SetDragRectangles 在代码里设置） -->
+        </Grid>
+
+        <!-- 内容区：NavigationView 导航（透明底，让渐变透出来）
+             PaneDisplayMode=LeftCompact：收起=图标条、展开=完整面板
+             （Left 是强制展开模式，折叠无效 —— 实测踩过） -->
+        <NavigationView x:Name="NavView"
+                        Grid.Row="1"
+                        Background="Transparent"
+                        IsBackButtonVisible="Collapsed"
+                        IsSettingsVisible="False"
+                        PaneDisplayMode="LeftCompact"
+                        OpenPaneLength="220"
+                        CompactPaneLength="52"
+                        ExpandedModeThresholdWidth="2400"
+                        SelectionChanged="NavView_SelectionChanged">
+            <!-- 让 NavigationView 自身和内容区都透明，渐变背景才能连贯（否则会看到一块色差） -->
+            <NavigationView.Resources>
+                <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+
+                <!-- 侧栏：深色实心（半透明白会在暗底上变成"白罩子"，实测被否掉）；
+                     与内容区的边界靠 NavigationViewContentGridBorderBrush 那条线 -->
+                <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#1E1018" />
+                <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="#40FF8FBE" />
+
+                <!-- 选中态改成樱粉（默认是系统蓝，和日系主题不搭） -->
+                <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="#40FF8FBE" />
+                <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedPointerOver" Color="#4DFF8FBE" />
+                <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedPressed" Color="#5AFF8FBE" />
+
+                <!-- 文字对比度：原来是浅色主题的深灰 #3D3D4E，在暗底上几乎看不见 -->
+                <SolidColorBrush x:Key="NavigationViewItemForeground" Color="#F2E2EA" />
+                <SolidColorBrush x:Key="NavigationViewItemForegroundPointerOver" Color="#FFFFFF" />
+                <SolidColorBrush x:Key="NavigationViewItemForegroundSelected" Color="#FFB3D2" />
+                <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#FF8FBE" />
+                <SolidColorBrush x:Key="NavigationViewItemForegroundSelectedPointerOver" Color="#FFC6DE" />
+            </NavigationView.Resources>
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="状态" Tag="status">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE9D9;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="会话" Tag="sessions">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8CB;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="数据" Tag="data">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE9D2;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="配置" Tag="config">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="审计" Tag="audit">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE81C;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+
+            <!-- Frame **必须直接作为** NavigationView 的内容：
+                 包一层 Border 会破坏 NavigationView 的内容区宽度计算（实测：页面整体靠右） -->
+            <Frame x:Name="ContentFrame" Background="Transparent" />
+        </NavigationView>
+    </Grid>
+</Window>

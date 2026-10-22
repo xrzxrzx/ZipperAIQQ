@@ -56,6 +56,25 @@ public sealed class SqliteMessageStore : IMessageStore
         return AppendCoreAsync(asInbound, direction: 1, ct);
     }
 
+    public Task<long> AppendCommandAsync(
+        OutgoingMessage message, string senderUserId, DateTimeOffset sentAt, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentException.ThrowIfNullOrWhiteSpace(senderUserId);
+
+        // Direction=2：命令响应。和 AI 发言分开（FR-9.4），恢复历史时不会当成"它说过的话"
+        var asInbound = new IncomingMessage
+        {
+            Chat = message.Chat,
+            Sender = new SenderInfo { UserId = "system", Nickname = "系统" },
+            Segments = message.Segments,
+            OccurredAt = sentAt,
+            ReplyToMessageId = message.ReplyToMessageId,
+        };
+
+        return AppendCoreAsync(asInbound, direction: 2, ct);
+    }
+
     private Task<long> AppendCoreAsync(IncomingMessage message, int direction, CancellationToken ct)
     {
         return _db.WriteAsync(async (conn, token) =>
@@ -166,6 +185,49 @@ public sealed class SqliteMessageStore : IMessageStore
         }, ct);
     }
 
+    public Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(int limit, CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        return _db.ReadAsync<IReadOnlyList<SessionSummary>>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT SessionId, COUNT(*), MAX(SentAtMs)
+                FROM Messages
+                GROUP BY SessionId
+                ORDER BY MAX(SentAtMs) DESC
+                LIMIT @limit;
+                """;
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            var list = new List<SessionSummary>();
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                list.Add(new SessionSummary(
+                    reader.GetString(0),
+                    reader.GetInt32(1),
+                    DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(2))));
+            }
+
+            return list;
+        }, ct);
+    }
+
+    public Task<int> PurgeAsync(string sessionId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+
+        return _db.WriteAsync(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM Messages WHERE SessionId = @sessionId;";
+            cmd.Parameters.AddWithValue("@sessionId", sessionId);
+            return await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        }, ct);
+    }
+
     private static StoredMessage ReadRow(SqliteDataReader reader)
     {
         var segmentsJson = reader.GetString(11);
@@ -200,7 +262,8 @@ public sealed class SqliteMessageStore : IMessageStore
             Id: reader.GetInt64(0),
             Message: message,
             ReceivedAt: DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(9)),
-            IsOutgoing: reader.GetInt32(13) != 0);
+            IsOutgoing: reader.GetInt32(13) == 1,
+            IsCommand: reader.GetInt32(13) == 2);
     }
 
     private const string InsertSql = """
@@ -220,6 +283,84 @@ public sealed class SqliteMessageStore : IMessageStore
         Id, Platform, ChatType, ChatId, MessageId,
         SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
         ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction
+        """;
+
+    /// <summary>关键词搜索（LIKE）；参数化，绝不拼字符串。</summary>
+    public Task<IReadOnlyList<StoredMessage>> SearchAsync(
+        string sessionId, string keyword, int limit, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyword);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        return _db.ReadAsync<IReadOnlyList<StoredMessage>>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = SelectSearchSql;
+            cmd.Parameters.AddWithValue("@sessionId", sessionId);
+            cmd.Parameters.AddWithValue("@pattern", "%" + keyword + "%");
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            var buffer = new List<StoredMessage>(capacity: Math.Min(limit, 128));
+
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                buffer.Add(ReadRow(reader));
+            }
+
+            buffer.Reverse();
+            return buffer;
+        }, ct);
+    }
+
+    /// <summary>跨会话关键词搜索；参数化，绝不拼字符串。</summary>
+    public Task<IReadOnlyList<StoredMessage>> SearchAcrossSessionsAsync(
+        string keyword, int limit, string? excludeSessionId = null, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyword);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        return _db.ReadAsync<IReadOnlyList<StoredMessage>>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = SelectCrossSessionSearchSql;
+            cmd.Parameters.AddWithValue("@pattern", "%" + keyword + "%");
+            cmd.Parameters.AddWithValue("@exclude", excludeSessionId ?? string.Empty);
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            var buffer = new List<StoredMessage>(capacity: Math.Min(limit, 128));
+
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                buffer.Add(ReadRow(reader));
+            }
+
+            buffer.Reverse();
+            return buffer;
+        }, ct);
+    }
+
+    private const string SelectCrossSessionSearchSql = """
+        SELECT Id, Platform, ChatType, ChatId, MessageId,
+               SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
+               ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction
+        FROM Messages
+        WHERE PlainText LIKE @pattern
+          AND (@exclude = '' OR SessionId <> @exclude)
+        ORDER BY SentAtMs DESC, Id DESC
+        LIMIT @limit;
+        """;
+
+    private const string SelectSearchSql = """
+        SELECT Id, Platform, ChatType, ChatId, MessageId,
+               SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
+               ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction
+        FROM Messages
+        WHERE SessionId = @sessionId AND PlainText LIKE @pattern
+        ORDER BY SentAtMs DESC, Id DESC
+        LIMIT @limit;
         """;
 
     private const string SelectRecentSql = """

@@ -27,7 +27,7 @@ public static class SendMessageTool
         string botUserId,
         ChatRef chat,
         int maxMessages,
-        int minIntervalMs,
+        Func<CancellationToken, Task> waitInterval,
         FaceCatalog faces,
         IMetricsStore metrics,
         Action<int> onSent)
@@ -35,11 +35,11 @@ public static class SendMessageTool
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(chat);
+        ArgumentNullException.ThrowIfNull(waitInterval);
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(onSent);
 
         var cap = Math.Max(1, maxMessages);
-        var interval = Math.Max(0, minIntervalMs);
 
         return AIFunctionFactory.Create(
             async (string[] messages, CancellationToken ct) =>
@@ -59,17 +59,15 @@ public static class SendMessageTool
 
                 using var toolActivity = AgentTelemetry.Source.StartActivity("tool.send_message");
                 toolActivity?.SetTag("message.count", toSend.Length);
-                toolActivity?.SetTag("min.interval.ms", interval);
+                toolActivity?.SetTag("throttle.scope", "session");
 
                 var sw = Stopwatch.StartNew();
 
                 foreach (var text in toSend)
                 {
-                    // 最小发送间隔（防风控）：第一条不等
-                    if (sent > 0 && interval > 0)
-                    {
-                        await Task.Delay(interval, ct).ConfigureAwait(false);
-                    }
+                    // 会话级最小间隔：**每次真正发送前**都排一次队。
+                    // （以前是 `if (sent > 0)` —— 单条发送、跨轮次完全不等，等于没限速）
+                    await waitInterval(ct).ConfigureAwait(false);
 
                     var outgoing = new OutgoingMessage
                     {

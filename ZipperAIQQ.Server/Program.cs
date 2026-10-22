@@ -1,10 +1,17 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Serilog;
 using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
+using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Core.Events;
+using ZipperAIQQ.Server.Api;
 using ZipperAIQQ.Server.Composition;
+using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Storage;
 using ZipperAIQQ.Storage.Metrics;
@@ -12,14 +19,17 @@ using ZipperAIQQ.Storage.Metrics;
 // 中文日志在 GBK 代码页的控制台里会乱码（文件日志是 UTF-8，不受影响）
 try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
+
+// 日志统一交给 Serilog：关掉 ASP.NET Core 默认的 Console 提供程序，避免双份日志
+builder.Logging.ClearProviders();
 builder.AddZipperLogging();
 
 ServerOptions options;
 try
 {
     // 只解析一次：缺配置就在这里一次性说清，不带半个配置继续跑
-    options = ServerOptions.FromEnvironment();
+    options = ServerConfigLoader.Load(logger: Log.Logger);
 }
 catch (InvalidOperationException ex)
 {
@@ -44,7 +54,7 @@ finally
     await Log.CloseAndFlushAsync();
 }
 
-static async Task<int> RunAsync(HostApplicationBuilder builder, ServerOptions options)
+static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions options)
 {
     // 建库必须在 DI 之前完成：仓储假定表已存在
     var databasePath = Path.GetFullPath(options.DatabasePath);
@@ -57,9 +67,50 @@ static async Task<int> RunAsync(HostApplicationBuilder builder, ServerOptions op
     var connectionString = $"Data Source={databasePath}";
     await new DatabaseInitializer(connectionString, Log.Logger).InitializeAsync();
 
+    // M2-E：库里的数值参数覆盖引导配置（发送限速 / 热窗 / 文件上限），改完重启生效
+    options = await RuntimeSettingsOverrides.ApplyAsync(options, connectionString, Log.Logger);
+
     builder.Services.AddZipperServices(options, connectionString);
 
+    // M2-B：Data Protection —— 主密钥（密钥环）只走引导层，不入库（FR-8.8）
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(Path.GetFullPath(options.DataProtectionKeysPath)))
+        .SetApplicationName("ZipperAIQQ");
+
+    // M2-A：Kestrel 只监听配置里的地址
+    builder.WebHost.UseUrls($"http://{options.HttpAddress}");
+
     var app = builder.Build();
+
+    // 第 17 项：把库里记的主人灌进权限解析器（否则重启后主人身份丢失）
+    try
+    {
+        var settingsStore = app.Services.GetRequiredService<ZipperAIQQ.Storage.Settings.IRuntimeSettingsStore>();
+        var ownerId = await settingsStore.GetAsync(ZipperAIQQ.Server.Api.Handlers.GetOwnerAction.OwnerKey);
+        if (!string.IsNullOrWhiteSpace(ownerId) &&
+            app.Services.GetRequiredService<ZipperAIQQ.Agent.Security.IRoleResolver>() is ZipperAIQQ.Agent.Security.ConfiguredRoleResolver resolver)
+        {
+            resolver.SetOwner(ownerId);
+            Log.Logger.Information("主人已加载：{Owner}", ownerId);
+        }
+    }
+    catch (Exception ex)
+    {
+        Log.Logger.Warning(ex, "加载主人失败（不影响启动）");
+    }
+
+    // 强制解析鉴权策略：非 loopback 又没 token → 这里直接抛，拒绝启动（不裸奔）
+    _ = app.Services.GetRequiredService<HttpAccessPolicy>();
+
+    // M2-B：首次启动把环境变量种子写进运行配置；之后只认库
+    var runtimeConfig = app.Services.GetRequiredService<RuntimeConfigService>();
+    await runtimeConfig.SeedFromEnvironmentAsync(options);
+
+    // 按运行配置建（或重建）LLM 客户端；配置写错只会保留旧客户端，不会起不来
+    await app.Services.GetRequiredService<IChatClientProvider>().ReloadAsync();
+
+    ApiEndpoint.Map(app);
+    EventEndpoint.Map(app);
 
     SubscribeAgentEvents(app.Services);
 
@@ -105,6 +156,10 @@ static async Task LogStartupSummaryAsync(
     Log.Information("权限：管理员 {Admins} 人 / 工具白名单 {Whitelist} 人；工作区={Workspace}；单文件上限 {Max} 字节",
         options.Admins.Count, options.ToolWhitelist.Count,
         Path.GetFullPath(options.WorkspacePath), options.FileMaxBytes);
+    Log.Information("HTTP 端点=http://{Addr}（{Auth}）", options.HttpAddress,
+        HttpAccessPolicy.IsLoopback(options.HttpAddress) ? "loopback 免验" : "非 loopback，token 强制");
+    Log.Information("密钥环={Path}（**必须备份**：丢了则已存的 LLM key 全部解不开）",
+        Path.GetFullPath(options.DataProtectionKeysPath));
     Log.Information("向量模型目录={Dir}", options.EmbeddingModelDirectory);
 
     // 历史指标：让「上次跑得快不快」一开机就能看见，而不用等客户端接上

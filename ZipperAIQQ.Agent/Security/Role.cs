@@ -16,6 +16,15 @@ public enum Role
 
     /// <summary>管理员：全部会话目录、全部文件能力。</summary>
     Admin = 2,
+
+    /// <summary>
+    /// 主人（第 17 项）：在客户端指定的**唯一**一个人，权限高于管理员。
+    /// </summary>
+    /// <remarks>
+    /// 为什么需要它：管理员可能有好几个（协作者），但「改主人 / 改全局配置」这种事
+    /// 应该只归一个人 —— 否则谁都能把别人踢下台。
+    /// </remarks>
+    Owner = 3,
 }
 
 /// <summary>
@@ -43,4 +52,32 @@ public enum ToolCapability
     /// 普通成员若能建任务，等于给了他「定时刷屏」的能力 —— 群里到点就被 @ 一次。
     /// </remarks>
     Schedule,
+
+    /// <summary>
+    /// 跨会话读别人的历史（<c>search_other_sessions</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 这是「读别人的私聊」—— 比读文件更该收紧：文件按角色分目录，
+    /// 而跨会话读是**穿透会话隔离**看所有聊天的内容。硬底线管理员，默认也只给管理员。
+    /// </remarks>
+    CrossSessionHistory,
+
+    /// <summary>改自己的资料（个性签名等）。</summary>
+    /// <remarks>写的是**自己的账号**，对外可见，但影响面限于"我这个人看起来什么样"。</remarks>
+    WriteProfile,
+
+    /// <summary>戳一戳别人。</summary>
+    /// <remarks>
+    /// 影响**别人**：会在他那边弹提示。滥用就是骚扰，所以比改签名更严（同样硬底线管理员）。
+    /// </remarks>
+    SendPoke,
+
+    /// <summary>
+    /// 主动给**别的会话**发消息（不只是当前会话）。
+    /// </summary>
+    /// <remarks>
+    /// 这是**代账号对外发话**里最重的一个：可以在没人要求的情况下主动发。
+    /// 硬底线管理员，且实现里还有两道附加限制（必须有历史、每次留审计）。
+    /// </remarks>
+    SendToOtherSession,
 }

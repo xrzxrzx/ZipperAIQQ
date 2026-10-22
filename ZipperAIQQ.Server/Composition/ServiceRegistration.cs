@@ -13,11 +13,20 @@ using ZipperAIQQ.Channel.NapCat;
 using ZipperAIQQ.Channel.Throttling;
 using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Configuration;
+using ZipperAIQQ.Server.Api;
+using ZipperAIQQ.Server.Api.Handlers;
+using ZipperAIQQ.Server.Commands;
+using ZipperAIQQ.Server.Config;
+using ZipperAIQQ.Server.Notices;
 using ZipperAIQQ.Server.Orchestration;
+using ZipperAIQQ.Server.Reply;
 using ZipperAIQQ.Server.Scheduler;
+using ZipperAIQQ.Storage.Config;
+using ZipperAIQQ.Storage.Settings;
 using ZipperAIQQ.Storage.Database;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Notices;
 using ZipperAIQQ.Storage.Metrics;
 using ZipperAIQQ.Storage.Personas;
 using ZipperAIQQ.Storage.Schedules;
@@ -45,8 +54,73 @@ public static class ServiceRegistration
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
 
+        // 配置本身也进容器：action / hosted service 需要读模型名、监听地址等
+        services.AddSingleton(options);
+
         // ── 事件总线（Agent 事件：漂移 / 降级；M2 客户端接 WS 后订阅同一批事件）──
         services.AddSingleton<IEventBus>(sp => new EventBus(sp.GetRequiredService<ILogger>()));
+
+        // ── M2-A：HTTP / WS 端点 ──
+        // HttpAccessPolicy 构造时校验：非 loopback 无 token 直接抛，拒绝启动
+        services.AddSingleton(_ => new HttpAccessPolicy(options.HttpAddress, options.HttpToken));
+        services.AddSingleton<IApiAction, PingAction>();
+        services.AddSingleton<IApiAction, GetStatusAction>();
+        services.AddSingleton<IApiAction, ListSessionsAction>();
+        services.AddSingleton<IApiAction, GetMessagesAction>();
+        services.AddSingleton<IApiAction, GetMetricsAction>();
+        // ── M2-B：运行配置（端点 + 角色映射 + 审计），key 加密在 Server 层完成 ──
+        services.AddSingleton<IConfigStore, SqliteConfigStore>();
+        services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
+        services.AddSingleton<IChatClientProvider, ChatClientProvider>();
+        services.AddSingleton<RuntimeConfigService>();
+        services.AddSingleton<IApiAction, GetConfigAction>();
+        services.AddSingleton<IApiAction, SetConfigAction>();
+        services.AddSingleton<IApiAction, GetAuditAction>();
+        services.AddSingleton<IApiAction, GetSettingsAction>();
+        services.AddSingleton<IApiAction, SetSettingsAction>();
+        services.AddSingleton<IApiAction, GetStatsAction>();
+        services.AddSingleton<IApiAction, GetBehaviorAction>();
+        services.AddSingleton<IApiAction, SetBehaviorAction>();
+        services.AddSingleton<IApiAction, GetPersonaAction>();
+        services.AddSingleton<IApiAction, SetPersonaAction>();
+        services.AddSingleton<IApiAction, SetGlobalPersonaAction>();
+        services.AddSingleton<IApiAction, ClearPersonaAction>();
+        services.AddSingleton<IApiAction, GetOwnerAction>();
+        services.AddSingleton<IApiAction, SetOwnerAction>();
+        services.AddSingleton<IApiAction, ProbeNapcatAction>();
+        services.AddSingleton<IApiAction, GetAccessAction>();
+        services.AddSingleton<IApiAction, SetAccessAction>();
+        services.AddSingleton<ActionDispatcher>();
+        services.AddSingleton<EventBroadcaster>();
+
+        // ── M2-E：回复触发模式（FR-11）：every / mention / jev（判断失败降级 mention）──
+        services.AddSingleton<IRuntimeSettingsStore, SqliteRuntimeSettingsStore>();
+        // decisions 模型（Jev）判断客户端：OpenRouter /api/alpha/decisions
+        services.AddHttpClient();
+        services.AddSingleton(sp => new DecisionsJudgeClient(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(DecisionsJudgeClient)),
+            sp.GetRequiredService<Serilog.ILogger>()));
+        services.AddSingleton<IReplyModeDecider, ReplyModeDecider>();
+
+        // ── M2-E：通知落库 + 可配置响应（FR-18，默认只记录）──
+        services.AddSingleton<INoticeStore, SqliteNoticeStore>();
+        services.AddSingleton<NoticeResponder>();
+
+        // ── M2-C：命令系统（新增命令 = 新增一个类 + 这里加一行）──
+        services.AddSingleton<ICommand, HelpCommand>();
+        services.AddSingleton<ICommand, OwnerCommand>();
+        services.AddSingleton<ICommand, StatusCommand>();
+        services.AddSingleton<ICommand, PersonaCommand>();
+        services.AddSingleton<ICommand, RememberCommand>();
+        services.AddSingleton<ICommand, SearchCommand>();
+        services.AddSingleton<ICommand, CompactCommand>();
+        services.AddSingleton<ICommand, ResetCommand>();
+        services.AddSingleton<ICommand, ForgetCommand>();
+        services.AddSingleton<ICommand, ExportCommand>();
+        services.AddSingleton<ICommand, PurgeCommand>();
+        services.AddSingleton<ICommand, ModeCommand>();
+        services.AddSingleton<ICommand, NoticeCommand>();
+        services.AddSingleton<CommandRouter>();
 
         // ── 权限与工作区（M1-E / FR-6 / FR-7）──
         // PermissionGate 构造时就校验硬底线：越界配置直接拒绝启动（FR-6.6）
@@ -69,22 +143,27 @@ public static class ServiceRegistration
         // ── 通道（内层 NapCat + 外层节流）──
         services.AddSingleton<IClientTransport>(sp =>
             new ClientTransport(sp.GetRequiredService<ILogger>()));
-        services.AddSingleton<IMessageChannel>(sp =>
-        {
-            var inner = new NapCatChannel(
-                sp.GetRequiredService<IClientTransport>(),
-                sp.GetRequiredService<IChatFilter>(),
-                new NapCatOptions
-                {
-                    WebSocketUrl = options.NapCatWebSocketUrl,
-                    AccessToken = options.NapCatAccessToken,
-                },
-                sp.GetRequiredService<ILogger>());
+        // 内层通道单独注册：IContactDirectory（好友/群/群成员查询）需要它，
+        // 而消息发送要过外层节流 —— 两者拿的不是同一个对象。
+        services.AddSingleton<NapCatChannel>(sp => new NapCatChannel(
+            sp.GetRequiredService<IClientTransport>(),
+            sp.GetRequiredService<IChatFilter>(),
+            new NapCatOptions
+            {
+                WebSocketUrl = options.NapCatWebSocketUrl,
+                AccessToken = options.NapCatAccessToken,
+            },
+            sp.GetRequiredService<ILogger>()));
 
+        services.AddSingleton<IContactDirectory>(sp => sp.GetRequiredService<NapCatChannel>());
+
+        services.AddSingleton<IMessageChannel>(sp =>
             // 所有出站消息都过这里：全局最短间隔 + 连发冷却，跨会话共享
-            return new ThrottledMessageChannel(
-                inner, options.SendIntervalMs, options.MaxConsecutive, options.CooldownMs);
-        });
+            new ThrottledMessageChannel(
+                sp.GetRequiredService<NapCatChannel>(),
+                options.SendIntervalMs,
+                options.MaxConsecutive,
+                options.CooldownMs));
 
         // ── 向量与长期记忆 ──
         services.AddSingleton<IEmbeddingService>(_ =>
@@ -104,14 +183,13 @@ public static class ServiceRegistration
         services.AddSingleton<IPersonaStore>(sp => new DefaultPersonaStore(
             sp.GetRequiredService<ISqliteDatabase>(), globalPersona));
 
-        // ── 模型 ──
-        services.AddSingleton<IChatClient>(_ => ChatClientFactory.Create(
-            new LlmEndpoint("primary", options.LlmBaseUrl, options.LlmModel, options.LlmApiKind),
-            options.LlmApiKey));
+        // ── 模型：由运行配置驱动，可热替换（FR-8.4）──
+        // 具体客户端由 IChatClientProvider 按库里的配置创建（ChatClientProvider），
+        // 这里不再直接注册 IChatClient —— 那是个不可变单例，换端点只能重启。
 
         // ── 摘要（温层）：在后台把滑出热窗的旧对话压成一段话 ──
         services.AddSingleton(sp => new SummaryService(
-            sp.GetRequiredService<IChatClient>(),
+            sp.GetRequiredService<IChatClientProvider>(),
             sp.GetRequiredService<IMessageStore>(),
             sp.GetRequiredService<ISummaryStore>(),
             sp.GetRequiredService<IMetricsStore>(),
@@ -122,7 +200,7 @@ public static class ServiceRegistration
         {
             var deps = new ChatAgentDependencies
             {
-                Client = sp.GetRequiredService<IChatClient>(),
+                Client = sp.GetRequiredService<IChatClientProvider>(),
                 Channel = sp.GetRequiredService<IMessageChannel>(),
                 Store = sp.GetRequiredService<IMessageStore>(),
                 Faces = sp.GetRequiredService<FaceCatalog>(),
@@ -137,11 +215,13 @@ public static class ServiceRegistration
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
                 FileMaxBytes = options.FileMaxBytes,
                 Schedules = sp.GetRequiredService<IScheduleStore>(),
-                Options = BuildAgentOptions(),
+                Options = BuildAgentOptions(options),
                 Logger = sp.GetRequiredService<ILogger>(),
             };
 
-            return new ChatAgentPool(chat => new ChatAgent(chat.SessionId, deps));
+            var configs = sp.GetRequiredService<Storage.Config.IConfigStore>();
+            var settings = sp.GetRequiredService<Storage.Settings.IRuntimeSettingsStore>();
+            return new ChatAgentPool(chat => new ChatAgent(chat.SessionId, deps, configs, settings));
         });
 
         // ── 定时任务轮询（FR-14：数据库即队列，1 分钟精度，启动时补执行）──
@@ -160,11 +240,16 @@ public static class ServiceRegistration
             // 没配：黑名单 + 空 = 全放行（首次跑通方便；生产请显式配白名单）
             : new ChatFilterOptions { Mode = ChatListMode.Blacklist, Entries = [] };
 
-    private static ChatAgentOptions BuildAgentOptions() => new()
+    private static ChatAgentOptions BuildAgentOptions(ServerOptions options) => new()
     {
         // 人设由 IPersonaStore 提供；这里只是「连人设文件都读不到」时的兜底，
         // 保证永远有一条 system，不会出现没有角色的空壳对话。
         FallbackSystemPrompt = "你是一个聊天助手，用简短自然的中文回复。",
+
+        // 这三个以前**没接**（用了 ChatAgentOptions 的默认 0 / 20）：
+        // 也就是说「发送限速=300ms」只打印在启动日志里，实际根本没生效。
+        MinSendIntervalMs = options.SendIntervalMs,
+        HotWindowMessages = options.HotWindowMessages,
     };
 
     /// <summary>读取全局人设文件；读不到就用兜底文案。</summary>

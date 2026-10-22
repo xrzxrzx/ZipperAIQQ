@@ -29,6 +29,10 @@ public interface IEmbeddingStore
         string modelVersion,
         CancellationToken ct = default);
 
+    /// <summary>删除一条消息的向量（<c>/forget</c>：让它从语义检索里消失）。</summary>
+    /// <returns>是否真的删掉了一条。</returns>
+    Task<bool> DeleteAsync(long messageId, CancellationToken ct = default);
+
     /// <summary>
     /// 按相似度检索该会话内的消息。
     /// </summary>

@@ -69,4 +69,7 @@ public interface IScheduleStore
 
     /// <summary>把周期任务推到下一次执行时间。</summary>
     Task RescheduleAsync(long id, DateTimeOffset nextRunAt, CancellationToken ct = default);
+
+    /// <summary>待执行任务总数（供状态查询展示）。</summary>
+    Task<int> CountPendingAsync(CancellationToken ct = default);
 }

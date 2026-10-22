@@ -1,0 +1,37 @@
+<Page
+    x:Class="ZipperAIQQ.Client.Views.AuditPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:dto="using:ZipperAIQQ.Client.Dto"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="mc">
+
+    <Grid Padding="32" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="审计" Style="{StaticResource PageTitleStyle}" />
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+            <Button Content="刷新审计" Style="{StaticResource JpButtonStyle}" Command="{x:Bind Vm.LoadAuditCommand}" />
+            <TextBlock Text="{x:Bind Vm.StatusLine, Mode=OneWay}"
+                       VerticalAlignment="Center" Style="{StaticResource CaptionStyle}" />
+        </StackPanel>
+
+        <Border Grid.Row="2" Style="{StaticResource CardStyle}" Padding="8">
+            <ListView ItemsSource="{x:Bind Vm.Audits}" SelectionMode="None">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="dto:AuditDto">
+                        <TextBlock Text="{x:Bind Display}"
+                                   Padding="4,3"
+                                   TextWrapping="Wrap"
+                                   IsTextSelectionEnabled="True" />
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Border>
+    </Grid>
+</Page>

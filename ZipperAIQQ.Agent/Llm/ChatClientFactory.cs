@@ -12,6 +12,16 @@ public enum LlmApiKind
 
     /// <summary>OpenAI Chat Completions（OpenRouter 等）。</summary>
     ChatCompletions,
+
+    /// <summary>
+    /// OpenRouter **Decisions API**（Jev 这类「判断模型」用的，不是 chat 模型）。
+    /// </summary>
+    /// <remarks>
+    /// 端点 <c>POST {origin}/api/alpha/decisions</c>，返回的是**带概率的类型化答案**（noul/choice/score），
+    /// 不是生成的文本。实测 <c>typesafe/jev-1.13</c> 用它自己的话拒绝 chat/completions：
+    /// "is a decisions model and cannot be used with the chat/completions endpoint"。
+    /// </remarks>
+    Decisions,
 }
 
 /// <summary>一个具名模型端点。**代码里不写死任何 URL 或模型名**（FR-8.13）。</summary>

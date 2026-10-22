@@ -33,6 +33,50 @@ public static class MessageContentParser
     private static readonly Regex BlankLine = new(@"\r?\n\s*\r?\n", RegexOptions.Compiled);
 
     /// <summary>
+    /// 口语化表情名 → 表情表里的正式名。
+    /// </summary>
+    /// <remarks>
+    /// 模型很自然地会写「摊手」「扶额」，但 QQ 官方系统表情里没有这些名字（表里只有 116 个），
+    /// 查不到就会把 `[表情:摊手]` 原样发出去 —— 看起来就像"表情没解析"。
+    /// 这里给最常见的几个兜个近似项：宁可发一个接近的表情，也别发一串方括号。
+    /// </remarks>
+    private static readonly Dictionary<string, string> FaceAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // 无语类 → 捂脸(264) / 无奈(174)
+        ["摊手"] = "捂脸",
+        ["扶额"] = "捂脸",
+        ["无语"] = "捂脸",
+        ["尴尬"] = "尴尬",
+        ["汗"] = "流汗",
+        ["冒汗"] = "流汗",
+        ["冷汗"] = "冷汗",
+        ["擦汗"] = "擦汗",
+
+        // 情绪类（**目标名必须是表情表里真实存在的**，否则等于没映射）
+        ["好笑"] = "坏笑",
+        ["气"] = "生气",
+        ["愤怒"] = "生气",
+        ["火大"] = "生气",
+        ["委屈"] = "委屈",
+        ["呜呜"] = "流泪",
+        ["想哭"] = "泪奔",
+        ["开心"] = "憨笑",
+        ["高兴"] = "憨笑",
+        ["开心死了"] = "笑哭",
+        ["害羞"] = "可爱",
+        ["点头"] = "OK",
+        ["摇头"] = "NO",
+        ["赞"] = "赞",
+        ["大拇指"] = "赞",
+        ["打哈欠"] = "哈欠",
+        ["困"] = "困",
+        ["睡觉"] = "睡",
+        ["疑问"] = "疑问",
+        ["问号"] = "问号脸",
+        ["思考"] = "仔细分析",
+    };
+
+    /// <summary>
     /// 把文本解析成真实消息段。
     /// </summary>
     /// <remarks>
@@ -61,9 +105,22 @@ public static class MessageContentParser
             var name = m.Groups[1].Value.Trim();
             var entry = catalog.GetByName(name);
 
+            if (entry is null && FaceAliases.TryGetValue(name, out var alias))
+            {
+                // 模型爱写口语化的表情名（"摊手""扶额"），而 QQ 系统表情没有这些名字。
+                // 直接查表查不到 → 以前会原样发出 `[表情:摊手]` 字面量（实测抓到的丑样）。
+                entry = catalog.GetByName(alias);
+            }
+
             if (entry is null)
             {
-                result.Add(new TextSegment(m.Value));
+                // `[表情:xxx]` 是明确的"想发表情"意图，查不到就**丢掉标记**（不把字面量发出去）；
+                // 裸写的 `[xxx]` 可能是普通方括号，原样保留更安全。
+                var isExplicit = m.Value.StartsWith("[表情:", StringComparison.Ordinal);
+                if (!isExplicit)
+                {
+                    result.Add(new TextSegment(m.Value));
+                }
             }
             else if (entry.Kind == "system" && !string.IsNullOrEmpty(entry.Id))
             {

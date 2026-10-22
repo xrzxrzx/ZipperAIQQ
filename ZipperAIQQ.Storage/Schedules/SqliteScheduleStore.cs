@@ -158,6 +158,17 @@ public sealed class SqliteScheduleStore : IScheduleStore
         }, ct);
     }
 
+    public Task<int> CountPendingAsync(CancellationToken ct = default)
+    {
+        return _db.ReadAsync(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM ScheduleTasks WHERE Status = 0;";
+            var result = await cmd.ExecuteScalarAsync(token).ConfigureAwait(false);
+            return Convert.ToInt32(result);
+        }, ct);
+    }
+
     private static ScheduledTask ReadRow(SqliteDataReader reader)
     {
         var chat = new ChatRef

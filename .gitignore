@@ -59,3 +59,12 @@ logs/
 
 # 运行期工作区（AI 的文件沙箱，含用户数据，不入库）
 /workspace/
+
+# Data Protection 密钥环（**主密钥**，绝不入库；泄露 = 已存 key 全可解）
+/data/keys/
+
+# ── 本地部署脚本（含服务器地址，不入库）──
+/scripts/deploy-server.ps1
+/artifacts/deploy/
+/scripts/.http-token
+/artifacts/server.yaml

@@ -147,6 +147,17 @@ public sealed class SqliteEmbeddingStore : IEmbeddingStore
         }, ct);
     }
 
+    public Task<bool> DeleteAsync(long messageId, CancellationToken ct = default)
+    {
+        return _db.WriteAsync(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM MessageEmbeddings WHERE MessageId = @id;";
+            cmd.Parameters.AddWithValue("@id", messageId);
+            return await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false) > 0;
+        }, ct);
+    }
+
     private static byte[] ToBlob(ReadOnlyMemory<float> vector) =>
         MemoryMarshal.AsBytes(vector.Span).ToArray();
 

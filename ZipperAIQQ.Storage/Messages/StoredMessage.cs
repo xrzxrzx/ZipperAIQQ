@@ -14,4 +14,5 @@ public sealed record StoredMessage(
     long Id,
     IncomingMessage Message,
     DateTimeOffset ReceivedAt,
-    bool IsOutgoing);
+    bool IsOutgoing,
+    bool IsCommand);
