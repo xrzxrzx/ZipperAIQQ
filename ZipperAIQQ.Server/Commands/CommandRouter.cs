@@ -99,6 +99,8 @@ public sealed class CommandRouter
         var context = new CommandContext(message.Chat, message.Sender, role, BeijingTime.Now);
 
         string response;
+        byte[]? imagePng = null;
+
         if (role < command.MinRole)
         {
             // 命令语法已被识别，但角色不够：明确告诉用户，不回给模型瞎猜
@@ -108,7 +110,16 @@ public sealed class CommandRouter
         {
             try
             {
-                response = await command.ExecuteAsync(context, args, ct).ConfigureAwait(false);
+                if (command is IImageCommand imageCommand)
+                {
+                    (response, imagePng) = await imageCommand
+                        .ExecuteWithImageAsync(context, args, ct)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    response = await command.ExecuteAsync(context, args, ct).ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
@@ -117,7 +128,7 @@ public sealed class CommandRouter
             }
         }
 
-        await ReplyAsync(message.Chat, response, ct).ConfigureAwait(false);
+        await ReplyAsync(message.Chat, response, imagePng, ct).ConfigureAwait(false);
 
         // 命令交互补进**实时上下文**：否则模型要到重启后从库恢复时才"想起来"，
         // 当前会话里问"刚才那个结果是什么意思"必然会接歪。
@@ -137,13 +148,31 @@ public sealed class CommandRouter
     }
 
     /// <summary>发出去 + 以「命令响应」身份落库（Direction=2）。</summary>
-    private async Task ReplyAsync(ChatRef chat, string text, CancellationToken ct)
+    /// <remarks>
+    /// 带图片时：文字说明 + 图片放在**同一条消息**里（先文字后图），
+    /// 落库时把图记成 <c>[图片]</c> 占位 —— 历史里仍能看到"这条命令发过图"。
+    /// </remarks>
+    private async Task ReplyAsync(ChatRef chat, string text, byte[]? imagePng, CancellationToken ct)
     {
-        var outgoing = new OutgoingMessage
+        OutgoingMessage outgoing;
+
+        if (imagePng is { Length: > 0 })
         {
-            Chat = chat,
-            Segments = [new TextSegment(text)],
-        };
+            // 只发图片（用户要求：图文混在一条里排版会乱）
+            outgoing = new OutgoingMessage
+            {
+                Chat = chat,
+                Segments = [new ImageSegment(null, $"base64://{Convert.ToBase64String(imagePng)}")],
+            };
+        }
+        else
+        {
+            outgoing = new OutgoingMessage
+            {
+                Chat = chat,
+                Segments = [new TextSegment(text)],
+            };
+        }
 
         await _channel.SendAsync(outgoing, ct).ConfigureAwait(false);
 

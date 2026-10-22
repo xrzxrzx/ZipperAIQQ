@@ -79,6 +79,8 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, GetSettingsAction>();
         services.AddSingleton<IApiAction, SetSettingsAction>();
         services.AddSingleton<IApiAction, GetStatsAction>();
+        services.AddSingleton<IApiAction, GetBehaviorAction>();
+        services.AddSingleton<IApiAction, SetBehaviorAction>();
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
 

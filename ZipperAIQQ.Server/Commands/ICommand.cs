@@ -38,3 +38,20 @@ public interface ICommand
     /// <param name="args">命令名之后的原始参数（可能为空）。</param>
     Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default);
 }
+
+/// <summary>
+/// 需要发**图片**的命令（如 <c>/status</c> 的统计表）。
+/// </summary>
+/// <remarks>
+/// 为什么单独一个接口而不是把 <see cref="ICommand"/> 全改成富响应：
+/// 绝大多数命令就是一段文本，为少数派改所有人不划算。
+/// 路由检测到该接口时走「文本 + 图片」路径，其余命令零改动。
+/// </remarks>
+public interface IImageCommand
+{
+    /// <summary>返回要发的文字说明 + PNG 字节（<c>null</c> 表示这次不附图）。</summary>
+    Task<(string Text, byte[]? Png)> ExecuteWithImageAsync(
+        CommandContext context,
+        string args,
+        CancellationToken ct = default);
+}

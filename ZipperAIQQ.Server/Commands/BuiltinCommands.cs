@@ -52,7 +52,7 @@ public sealed class HelpCommand : ICommand
 }
 
 /// <summary>状态：模型、会话消息数、调用指标。</summary>
-public sealed class StatusCommand : ICommand
+public sealed class StatusCommand : ICommand, IImageCommand
 {
     private readonly IMetricsStore _metrics;
     private readonly IMessageStore _messages;
@@ -70,9 +70,83 @@ public sealed class StatusCommand : ICommand
     }
 
     public string Name => "status";
-    public string Description => "模型 / token 用量 / 会话规模";
+    public string Description => "模型 / token 用量 / 会话规模（发统计图）";
     public Role MinRole => Role.Normal;
 
+    /// <summary>
+    /// 发**图片**版：QQ 是纯文本 + 比例字体，文本表格在手机和 PC 上都会错位，
+    /// 图是唯一两端都完美呈现表格的形态。
+    /// </summary>
+    public async Task<(string Text, byte[]? Png)> ExecuteWithImageAsync(
+        CommandContext context, string args, CancellationToken ct = default)
+    {
+        var count = await _messages.CountAsync(context.Chat.SessionId, ct).ConfigureAwait(false);
+        var metrics = await _metrics.GetSummaryAsync(24, ct).ConfigureAwait(false);
+
+        var summaryRows = new List<string[]>();
+        if (metrics.Count > 0)
+        {
+            var llm = metrics.FirstOrDefault(m => m.Kind == "llm.call");
+            var retrieval = metrics.FirstOrDefault(m => m.Kind == "retrieval");
+            var hit = metrics.FirstOrDefault(m => m.Kind == "retrieval.hit");
+            var jev = metrics.FirstOrDefault(m => m.Kind == "jev.judge");
+            var degrade = metrics.FirstOrDefault(m => m.Kind == "jev.degrade");
+            var summary = metrics.FirstOrDefault(m => m.Kind == "summary");
+
+            var hitRate = retrieval is { Count: > 0 }
+                ? $"{(hit?.Count ?? 0) * 100.0 / retrieval.Count:F0}%"
+                : "—";
+
+            var jevText = jev is { Count: > 0 }
+                ? $"{jev.Count} 次（回 {jev.TotalInputTokens} / 不回 {jev.Count - jev.TotalInputTokens}）"
+                : "未启用";
+
+            summaryRows.Add(["LLM 调用", $"{llm?.Count ?? 0} 次"]);
+            summaryRows.Add(["平均耗时", $"{llm?.AvgMs ?? 0:F0} ms"]);
+            summaryRows.Add(["Token 输入", $"{llm?.TotalInputTokens ?? 0:N0}"]);
+            summaryRows.Add(["Token 输出", $"{llm?.TotalOutputTokens ?? 0:N0}"]);
+            summaryRows.Add(["检索命中率", hitRate]);
+            summaryRows.Add(["JEV 判断", jevText]);
+            if (degrade is { Count: > 0 })
+            {
+                summaryRows.Add(["JEV 降级", $"{degrade.Count} 次"]);
+            }
+
+            summaryRows.Add(["上下文压缩", $"{summary?.Count ?? 0} 次"]);
+        }
+        else
+        {
+            summaryRows.Add(["近 24 小时", "无调用记录"]);
+        }
+
+        var tables = new List<StatusImageRenderer.Table>
+        {
+            new("近 24 小时", ["指标", "数值"], summaryRows.ToArray()),
+        };
+
+        if (metrics.Count > 0)
+        {
+            tables.Add(new StatusImageRenderer.Table(
+                "调用类别",
+                ["类别", "次数", "平均耗时"],
+                metrics
+                    .Select(m => new[] { m.Kind, m.Count.ToString(), $"{m.AvgMs:F0} ms" })
+                    .ToArray()));
+        }
+
+        var png = StatusImageRenderer.Render(
+            "ZipperAIQQ · 状态",
+            $"模型 {_options.LlmModel} · 本会话 {count} 条消息 · {BeijingTime.Now:MM-dd HH:mm}",
+            tables);
+
+        // **只发图片**：文字和图放一条消息里，QQ 的图文混排会挤在一起、气泡也怪
+        // （用户反馈要求单图）。标题与模型名已经画在图里，不需要再发一遍文字。
+        return (string.Empty, png);
+    }
+
+    /// <summary>
+    /// 纯文本版 —— 图片渲染失败时的兜底路径（例如缺少中文字体）。
+    /// </summary>
     public async Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default)
     {
         var count = await _messages.CountAsync(context.Chat.SessionId, ct).ConfigureAwait(false);
@@ -95,29 +169,26 @@ public sealed class StatusCommand : ICommand
         var degrade = metrics.FirstOrDefault(m => m.Kind == "jev.degrade");
         var summary = metrics.FirstOrDefault(m => m.Kind == "summary");
 
-        // 汇总表：一眼看清"花了多少、命中多少、该不该回"
+        // ⚠️ QQ 不渲染 Markdown、框线在比例字体下也对不齐 —— 这里只用「键值行」
         var hitRate = retrieval is { Count: > 0 }
-            ? $"{(hit?.Count ?? 0) * 100.0 / retrieval.Count:F0}%（{retrieval.Count} 次检索 / {hit?.Count ?? 0} 次命中）"
+            ? $"{(hit?.Count ?? 0) * 100.0 / retrieval.Count:F0}%（{retrieval.Count} 次检索里命中 {hit?.Count ?? 0} 次）"
             : "—";
 
         var jevText = jev is { Count: > 0 }
-            ? $"{jev.Count} 次（回 {jev.TotalInputTokens} / 不回 {jev.Count - jev.TotalInputTokens}，降级 {degrade?.Count ?? 0}）"
+            ? $"{jev.Count} 次 · 回 {jev.TotalInputTokens} · 不回 {jev.Count - jev.TotalInputTokens} · 降级 {degrade?.Count ?? 0}"
             : "未启用";
 
-        sb.AppendLine("| 指标 | 近 24 小时 |");
-        sb.AppendLine("|---|---|");
-        sb.AppendLine($"| LLM 调用 | {llm?.Count ?? 0} 次（平均 {llm?.AvgMs ?? 0:F0}ms） |");
-        sb.AppendLine($"| Token | 输入 {llm?.TotalInputTokens ?? 0:N0} / 输出 {llm?.TotalOutputTokens ?? 0:N0} |");
-        sb.AppendLine($"| 检索命中率 | {hitRate} |");
-        sb.AppendLine($"| JEV 判断 | {jevText} |");
-        sb.AppendLine($"| 上下文压缩 | {summary?.Count ?? 0} 次 |");
+        sb.AppendLine("【近 24 小时】");
+        sb.AppendLine($"· LLM 调用：{llm?.Count ?? 0} 次（平均 {llm?.AvgMs ?? 0:F0}ms）");
+        sb.AppendLine($"· Token：输入 {llm?.TotalInputTokens ?? 0:N0} / 输出 {llm?.TotalOutputTokens ?? 0:N0}");
+        sb.AppendLine($"· 检索命中率：{hitRate}");
+        sb.AppendLine($"· JEV 判断：{jevText}");
+        sb.AppendLine($"· 上下文压缩：{summary?.Count ?? 0} 次");
         sb.AppendLine();
-
-        sb.AppendLine("| 调用类别 | 次数 | 平均耗时 |");
-        sb.AppendLine("|---|---|---|");
+        sb.AppendLine("【调用类别 · 次数 / 平均耗时】");
         foreach (var m in metrics)
         {
-            sb.AppendLine($"| {m.Kind} | {m.Count} | {m.AvgMs:F0} ms |");
+            sb.AppendLine($"· {m.Kind}：{m.Count} 次 / {m.AvgMs:F0} ms");
         }
 
         return sb.ToString().TrimEnd();
