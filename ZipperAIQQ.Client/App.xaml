@@ -119,6 +119,14 @@
                 <Setter Property="BorderThickness" Value="0" />
             </Style>
 
+            <!-- 进度条：粉色（默认是系统蓝，和主题不搭） -->
+            <Style x:Key="JpProgressBarStyle" TargetType="ProgressBar">
+                <Setter Property="Foreground" Value="{ThemeResource JpAccentBrush}" />
+                <Setter Property="Background" Value="{ThemeResource JpAccentSoftBrush}" />
+                <Setter Property="Height" Value="8" />
+                <Setter Property="CornerRadius" Value="4" />
+            </Style>
+
             <Style x:Key="ToolbarIconButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />

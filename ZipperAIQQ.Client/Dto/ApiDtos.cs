@@ -201,3 +201,151 @@ public sealed class SetSettingsResultDto
     [JsonPropertyName("keys")]
     public List<string> Keys { get; set; } = [];
 }
+
+/// <summary>统计数据（<c>getStats</c>）：24 小时窗口 + 全量。</summary>
+public sealed class StatsDto
+{
+    [JsonPropertyName("windowHours")]
+    public int WindowHours { get; set; }
+
+    [JsonPropertyName("last24h")]
+    public StatsWindowDto Last24h { get; set; } = new();
+
+    [JsonPropertyName("allTime")]
+    public StatsWindowDto AllTime { get; set; } = new();
+}
+
+public sealed class StatsWindowDto
+{
+    [JsonPropertyName("llm")]
+    public LlmStatsDto Llm { get; set; } = new();
+
+    [JsonPropertyName("retrieval")]
+    public RetrievalStatsDto Retrieval { get; set; } = new();
+
+    [JsonPropertyName("jev")]
+    public JevStatsDto Jev { get; set; } = new();
+
+    [JsonPropertyName("summary")]
+    public SummaryStatsDto Summary { get; set; } = new();
+
+    [JsonPropertyName("tools")]
+    public ToolStatsDto Tools { get; set; } = new();
+
+    [JsonPropertyName("kinds")]
+    public List<KindStatsDto> Kinds { get; set; } = [];
+}
+
+public sealed class LlmStatsDto
+{
+    [JsonPropertyName("calls")]
+    public long Calls { get; set; }
+
+    [JsonPropertyName("inputTokens")]
+    public long InputTokens { get; set; }
+
+    [JsonPropertyName("outputTokens")]
+    public long OutputTokens { get; set; }
+
+    [JsonPropertyName("avgMs")]
+    public double AvgMs { get; set; }
+
+    [JsonPropertyName("maxMs")]
+    public double MaxMs { get; set; }
+
+    [JsonPropertyName("retries")]
+    public long Retries { get; set; }
+}
+
+public sealed class RetrievalStatsDto
+{
+    [JsonPropertyName("count")]
+    public long Count { get; set; }
+
+    [JsonPropertyName("hitCount")]
+    public long HitCount { get; set; }
+
+    [JsonPropertyName("hitMessages")]
+    public long HitMessages { get; set; }
+
+    [JsonPropertyName("hitRate")]
+    public double HitRate { get; set; }
+
+    [JsonPropertyName("avgHitsPerHit")]
+    public double AvgHitsPerHit { get; set; }
+
+    [JsonPropertyName("avgMs")]
+    public double AvgMs { get; set; }
+}
+
+public sealed class JevStatsDto
+{
+    [JsonPropertyName("count")]
+    public long Count { get; set; }
+
+    [JsonPropertyName("replies")]
+    public long Replies { get; set; }
+
+    [JsonPropertyName("silences")]
+    public long Silences { get; set; }
+
+    [JsonPropertyName("replyRate")]
+    public double ReplyRate { get; set; }
+
+    [JsonPropertyName("degradeCount")]
+    public long DegradeCount { get; set; }
+
+    [JsonPropertyName("avgMs")]
+    public double AvgMs { get; set; }
+}
+
+public sealed class SummaryStatsDto
+{
+    [JsonPropertyName("count")]
+    public long Count { get; set; }
+}
+
+public sealed class ToolStatsDto
+{
+    [JsonPropertyName("sendMessage")]
+    public long SendMessage { get; set; }
+
+    [JsonPropertyName("embeddingBackfill")]
+    public long EmbeddingBackfill { get; set; }
+}
+
+public sealed class KindStatsDto
+{
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = string.Empty;
+
+    [JsonPropertyName("count")]
+    public long Count { get; set; }
+
+    [JsonPropertyName("avgMs")]
+    public double AvgMs { get; set; }
+
+    [JsonPropertyName("minMs")]
+    public double MinMs { get; set; }
+
+    [JsonPropertyName("maxMs")]
+    public double MaxMs { get; set; }
+
+    [JsonPropertyName("inputTokens")]
+    public long InputTokens { get; set; }
+
+    [JsonPropertyName("outputTokens")]
+    public long OutputTokens { get; set; }
+
+    /// <summary>给界面直接用（x:Bind 不做数值→字符串转换）。</summary>
+    [JsonIgnore]
+    public string CountText => Count.ToString("N0");
+
+    [JsonIgnore]
+    public string AvgMsText => $"{AvgMs:F0} ms";
+
+    [JsonIgnore]
+    public string TokenText => InputTokens == 0 && OutputTokens == 0
+        ? "—"
+        : $"{InputTokens:N0} / {OutputTokens:N0}";
+}

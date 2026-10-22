@@ -1,0 +1,189 @@
+<Page
+    x:Class="ZipperAIQQ.Client.Views.DataPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:dto="using:ZipperAIQQ.Client.Dto"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="mc">
+
+    <ScrollViewer Padding="32">
+        <StackPanel Spacing="16" MaxWidth="1200" HorizontalAlignment="Stretch">
+
+            <TextBlock Text="数据" Style="{StaticResource PageTitleStyle}" />
+            <TextBlock Text="Token 用量 / 检索命中率 / JEV 判断 —— 总量 + 近 24 小时"
+                       Style="{StaticResource CaptionStyle}" Margin="0,-8,0,4" />
+
+            <Grid ColumnSpacing="16" RowSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Token 用量 -->
+                <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE9D9;" FontSize="15" Foreground="{ThemeResource JpAccentBrush}" />
+                            <TextBlock Text="Token 用量" Style="{StaticResource SectionHeaderStyle}"
+                                       VerticalAlignment="Center" Margin="0" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Bottom">
+                            <TextBlock Text="{x:Bind Vm.TokenTotalText, Mode=OneWay}"
+                                       FontSize="34" FontWeight="Bold"
+                                       Foreground="{ThemeResource JpAccentBrush}" />
+                            <TextBlock Text="token" Style="{StaticResource CaptionStyle}"
+                                       VerticalAlignment="Bottom" Margin="0,0,0,6" />
+                        </StackPanel>
+
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="输入" Style="{StaticResource CaptionStyle}" />
+                                <TextBlock Text="{x:Bind Vm.TokenInText, Mode=OneWay}"
+                                           Style="{StaticResource BodyStyle}" FontSize="16" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="输出" Style="{StaticResource CaptionStyle}" />
+                                <TextBlock Text="{x:Bind Vm.TokenOutText, Mode=OneWay}"
+                                           Style="{StaticResource BodyStyle}" FontSize="16" />
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="{x:Bind Vm.TokenDayText, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 检索命中率（图文：数字 + 条形） -->
+                <Border Grid.Row="0" Grid.Column="1" Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE721;" FontSize="15" Foreground="{ThemeResource JpAccentBrush}" />
+                            <TextBlock Text="检索命中率" Style="{StaticResource SectionHeaderStyle}"
+                                       VerticalAlignment="Center" Margin="0" />
+                        </StackPanel>
+
+                        <TextBlock Text="{x:Bind Vm.HitRateText, Mode=OneWay}"
+                                   FontSize="34" FontWeight="Bold"
+                                   Foreground="{ThemeResource JpAccentBrush}" />
+
+                        <ProgressBar Value="{x:Bind Vm.HitRatePercent, Mode=OneWay}" Maximum="100" Style="{StaticResource JpProgressBarStyle}" />
+
+                        <TextBlock Text="{x:Bind Vm.RetrievalDetailText, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <!-- JEV 判断 -->
+                <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE9D2;" FontSize="15" Foreground="{ThemeResource JpAccentBrush}" />
+                            <TextBlock Text="JEV 判断（该不该回）" Style="{StaticResource SectionHeaderStyle}"
+                                       VerticalAlignment="Center" Margin="0" />
+                        </StackPanel>
+
+                        <TextBlock Text="{x:Bind Vm.JevReplyText, Mode=OneWay}"
+                                   FontSize="34" FontWeight="Bold"
+                                   Foreground="{ThemeResource JpAccentBrush}" />
+
+                        <ProgressBar Value="{x:Bind Vm.JevReplyPercent, Mode=OneWay}" Maximum="100" Style="{StaticResource JpProgressBarStyle}" />
+
+                        <TextBlock Text="{x:Bind Vm.JevDetailText, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 其他指标 -->
+                <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE9F9;" FontSize="15" Foreground="{ThemeResource JpAccentBrush}" />
+                            <TextBlock Text="其他" Style="{StaticResource SectionHeaderStyle}"
+                                       VerticalAlignment="Center" Margin="0" />
+                        </StackPanel>
+
+                        <Grid ColumnSpacing="16" RowSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Grid.Row="0" Grid.Column="0">
+                                <TextBlock Text="上下文压缩" Style="{StaticResource CaptionStyle}" />
+                                <TextBlock Text="{x:Bind Vm.SummaryText, Mode=OneWay}"
+                                           Style="{StaticResource BodyStyle}" FontSize="18" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="0" Grid.Column="1">
+                                <TextBlock Text="LLM 调用总数" Style="{StaticResource CaptionStyle}" />
+                                <TextBlock Text="{x:Bind Vm.LlmCallsText, Mode=OneWay}"
+                                           Style="{StaticResource BodyStyle}" FontSize="18" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- 各类调用明细 -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="各类调用（近 24 小时）" Style="{StaticResource SectionHeaderStyle}" />
+
+                    <Grid ColumnSpacing="12" Padding="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="180" />
+                            <ColumnDefinition Width="80" />
+                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="类别" Style="{StaticResource CaptionStyle}" />
+                        <TextBlock Grid.Column="1" Text="次数" Style="{StaticResource CaptionStyle}" />
+                        <TextBlock Grid.Column="2" Text="平均耗时" Style="{StaticResource CaptionStyle}" />
+                        <TextBlock Grid.Column="3" Text="Token（入 / 出）" Style="{StaticResource CaptionStyle}" />
+                    </Grid>
+
+                    <ItemsControl ItemsSource="{x:Bind Vm.KindRows}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="dto:KindStatsDto">
+                                <Grid ColumnSpacing="12" Padding="0,5">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="180" />
+                                        <ColumnDefinition Width="80" />
+                                        <ColumnDefinition Width="90" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{x:Bind Kind}"
+                                               Style="{StaticResource BodyStyle}" />
+                                    <TextBlock Grid.Column="1" Text="{x:Bind CountText}"
+                                               Style="{StaticResource BodyStyle}" />
+                                    <TextBlock Grid.Column="2" Text="{x:Bind AvgMsText}"
+                                               Style="{StaticResource BodyStyle}" />
+                                    <TextBlock Grid.Column="3" Text="{x:Bind TokenText}"
+                                               Style="{StaticResource BodyStyle}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Button Content="刷新统计" Style="{StaticResource JpButtonStyle}"
+                            Command="{x:Bind Vm.LoadStatsCommand}" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
+            <TextBlock Text="{x:Bind Vm.StatusLine, Mode=OneWay}"
+                       Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

@@ -142,7 +142,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             var text = (response.Text ?? string.Empty).Trim().ToLowerInvariant();
             var shouldReply = text.StartsWith("yes", StringComparison.Ordinal) || text.StartsWith("是", StringComparison.Ordinal);
 
-            await RecordAsync(message.Chat.SessionId, sw.Elapsed.TotalMilliseconds, ct).ConfigureAwait(false);
+            await RecordAsync(message.Chat.SessionId, sw.Elapsed.TotalMilliseconds, shouldReply, ct).ConfigureAwait(false);
             _logger.Information("JEV 判断：{Result}（{Elapsed:F0}ms，会话 {SessionId}）",
                 shouldReply ? "回" : "不回", sw.Elapsed.TotalMilliseconds, message.Chat.SessionId);
 
@@ -153,7 +153,8 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             sw.Stop();
             // 超时 / 网络 / 模型报错：一律降级，不丢消息
             _logger.Warning(ex, "JEV 判断失败，降级为 mention（会话 {SessionId}）", message.Chat.SessionId);
-            await RecordAsync(message.Chat.SessionId, sw.Elapsed.TotalMilliseconds, ct).ConfigureAwait(false);
+            await RecordAsync(message.Chat.SessionId, sw.Elapsed.TotalMilliseconds, false, ct).ConfigureAwait(false);
+            await RecordDegradeAsync(message.Chat.SessionId, ct).ConfigureAwait(false);
             return IsMentioned(message, selfId);
         }
     }
@@ -205,17 +206,35 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         }
     }
 
-    private async Task RecordAsync(string sessionId, double elapsedMs, CancellationToken ct)
+    /// <summary>
+    /// 记一次判断：<c>InputTokens</c> 存 <b>1 = 该回 / 0 = 不回</b>，
+    /// 聚合时 sum 就是"回了多少次"，count - sum 就是"忍住多少次"。
+    /// </summary>
+    private async Task RecordAsync(string sessionId, double elapsedMs, bool shouldReply, CancellationToken ct)
     {
         try
         {
             await _metrics
-                .RecordAsync(new MetricEntry(sessionId, "jev.judge", elapsedMs), ct)
+                .RecordAsync(new MetricEntry(sessionId, "jev.judge", elapsedMs, shouldReply ? 1 : 0), ct)
                 .ConfigureAwait(false);
         }
         catch
         {
             // 指标失败不影响判断
+        }
+    }
+
+    /// <summary>降级单独记一类，免得和"判断为不回"混在一起。</summary>
+    private async Task RecordDegradeAsync(string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            await _metrics
+                .RecordAsync(new MetricEntry(sessionId, "jev.degrade", 0), ct)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
         }
     }
 
