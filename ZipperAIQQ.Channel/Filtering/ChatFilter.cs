@@ -43,6 +43,18 @@ public interface IChatFilter
     /// <summary>名单条目数量（用于启动日志与 UI 展示）。</summary>
     int Count { get; }
 
+    /// <summary>
+    /// 运行时更新名单（客户端改配置后**立即生效**，不必重启）。
+    /// </summary>
+    /// <remarks>
+    /// 以前名单只能在启动时从环境变量读 —— 改一次要重启一次，
+    /// 而「哪些聊天能进」恰恰是需要随时调整的东西。
+    /// </remarks>
+    void Update(ChatFilterOptions options);
+
+    /// <summary>当前名单条目（只改模式时用它们保留原名单）。</summary>
+    IReadOnlyCollection<string> Entries { get; }
+
     /// <summary>该聊天是否允许通过。</summary>
     bool IsAllowed(ChatRef chat);
 }
@@ -65,7 +77,8 @@ public interface IChatFilter
 /// </remarks>
 public sealed class ChatFilter : IChatFilter
 {
-    private readonly HashSet<string> _entries;
+    private readonly object _gate = new();
+    private HashSet<string> _entries;
 
     public ChatFilter(ChatFilterOptions options)
     {
@@ -75,18 +88,41 @@ public sealed class ChatFilter : IChatFilter
         _entries = new HashSet<string>(
             options.Entries.Where(e => !string.IsNullOrWhiteSpace(e)),
             StringComparer.OrdinalIgnoreCase);
-        Count = _entries.Count;
     }
 
-    public ChatListMode Mode { get; }
+    public ChatListMode Mode { get; private set; }
 
-    public int Count { get; }
+    public int Count
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _entries.Count;
+            }
+        }
+    }
+
+    public IReadOnlyCollection<string> Entries
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _entries.ToList();
+            }
+        }
+    }
 
     public bool IsAllowed(ChatRef chat)
     {
         ArgumentNullException.ThrowIfNull(chat);
 
-        var hit = _entries.Contains(chat.SessionId);
+        bool hit;
+        lock (_gate)
+        {
+            hit = _entries.Contains(chat.SessionId);
+        }
 
         return Mode switch
         {
@@ -94,5 +130,20 @@ public sealed class ChatFilter : IChatFilter
             ChatListMode.Blacklist => !hit,
             _ => false,
         };
+    }
+
+    public void Update(ChatFilterOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var next = new HashSet<string>(
+            options.Entries.Where(e => !string.IsNullOrWhiteSpace(e)),
+            StringComparer.OrdinalIgnoreCase);
+
+        lock (_gate)
+        {
+            Mode = options.Mode;
+            _entries = next;
+        }
     }
 }
