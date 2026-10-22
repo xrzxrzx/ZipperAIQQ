@@ -63,8 +63,10 @@
             <!-- 让 NavigationView 自身和内容区都透明，渐变背景才能连贯（否则会看到一块色差） -->
             <NavigationView.Resources>
                 <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
-                <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
-                <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent" />
+
+                <!-- 侧栏展开时给一层浅底 + 右侧分隔线，否则会和内容区糊成一片（实测反馈） -->
+                <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#26FFFFFF" />
+                <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="#33FF8FBE" />
 
                 <!-- 选中态改成樱粉（默认是系统蓝，和日系主题不搭） -->
                 <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="#40FF8FBE" />
@@ -101,7 +103,10 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
 
-            <Frame x:Name="ContentFrame" Background="Transparent" />
+            <!-- 内容区左侧加一条分隔线：侧栏展开时边界才清楚 -->
+            <Border BorderBrush="{ThemeResource JpCardStrokeBrush}" BorderThickness="1,0,0,0">
+                <Frame x:Name="ContentFrame" Background="Transparent" />
+            </Border>
         </NavigationView>
     </Grid>
 </Window>
