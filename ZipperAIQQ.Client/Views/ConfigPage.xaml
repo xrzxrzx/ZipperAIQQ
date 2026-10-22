@@ -2,6 +2,7 @@
     x:Class="ZipperAIQQ.Client.Views.ConfigPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:dto="using:ZipperAIQQ.Client.Dto"
     xmlns:vm="using:ZipperAIQQ.Client.ViewModels"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="mc">
@@ -194,6 +195,78 @@
                     <Button Content="保存人设（服务端即时生效）"
                             Style="{StaticResource JpAccentButtonStyle}"
                             Command="{x:Bind Vm.SavePersonaCommand}" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
+            <!-- 人员与名单：管理员 / 主人 / 黑白名单（以前只能改环境变量 + 重启） -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="人员与名单" Style="{StaticResource SectionHeaderStyle}" VerticalAlignment="Center" />
+                        <Button Content="读取" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.LoadAccessCommand}" />
+                        <TextBlock Text="{x:Bind Vm.AccessHint, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <Grid ColumnSpacing="20" RowSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- 主人：从好友列表选 -->
+                        <StackPanel Grid.Row="0" Grid.Column="0" Spacing="4">
+                            <TextBlock Text="主人（最高权限，只能一个）" Style="{StaticResource CaptionStyle}" />
+                            <ComboBox ItemsSource="{x:Bind Vm.OwnerCandidates}"
+                                      SelectedItem="{x:Bind Vm.SelectedOwner, Mode=TwoWay}"
+                                      HorizontalAlignment="Stretch"
+                                      PlaceholderText="（未设置）">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate x:DataType="dto:AccessCandidateDto">
+                                        <TextBlock Text="{x:Bind Display}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <!-- 名单模式 -->
+                        <StackPanel Grid.Row="0" Grid.Column="1" Spacing="4">
+                            <TextBlock Text="会话名单模式" Style="{StaticResource CaptionStyle}" />
+                            <ComboBox SelectedValue="{x:Bind Vm.FilterMode, Mode=TwoWay}"
+                                      HorizontalAlignment="Stretch">
+                                <x:String>Blacklist</x:String>
+                                <x:String>Whitelist</x:String>
+                            </ComboBox>
+                            <TextBlock Text="Whitelist 只收名单内；Blacklist 只排除名单内"
+                                       Style="{StaticResource CaptionStyle}" />
+                        </StackPanel>
+
+                        <!-- 管理员 -->
+                        <StackPanel Grid.Row="1" Grid.Column="0" Spacing="4">
+                            <TextBlock Text="管理员（逗号分隔的账号，可多个）" Style="{StaticResource CaptionStyle}" />
+                            <TextBox Text="{x:Bind Vm.AdminsText, Mode=TwoWay}"
+                                     PlaceholderText="540412345, 123456789"
+                                     AcceptsReturn="False" />
+                        </StackPanel>
+
+                        <!-- 名单条目 -->
+                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                            <TextBlock Text="名单条目（qq:g群号 / qq:p账号，逗号分隔）" Style="{StaticResource CaptionStyle}" />
+                            <TextBox Text="{x:Bind Vm.FilterEntriesText, Mode=TwoWay}"
+                                     PlaceholderText="qq:g123456, qq:p987654"
+                                     AcceptsReturn="False" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Button Content="保存人员与名单（立即生效）"
+                            Style="{StaticResource JpAccentButtonStyle}"
+                            Command="{x:Bind Vm.SaveAccessCommand}" HorizontalAlignment="Left" />
                 </StackPanel>
             </Border>
 

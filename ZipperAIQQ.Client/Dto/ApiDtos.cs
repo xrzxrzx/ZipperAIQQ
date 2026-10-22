@@ -396,3 +396,38 @@ public sealed class PersonaDto
     [JsonPropertyName("split")]
     public bool Split { get; set; }
 }
+
+/// <summary>人员与名单（<c>getAccess</c>）。</summary>
+public sealed class AccessDto
+{
+    [JsonPropertyName("ownerId")]
+    public string? OwnerId { get; set; }
+
+    [JsonPropertyName("admins")]
+    public List<string> Admins { get; set; } = [];
+
+    [JsonPropertyName("filterMode")]
+    public string FilterMode { get; set; } = "Blacklist";
+
+    [JsonPropertyName("filterEntries")]
+    public List<string> FilterEntries { get; set; } = [];
+
+    [JsonPropertyName("filterCount")]
+    public int FilterCount { get; set; }
+
+    [JsonPropertyName("candidates")]
+    public List<AccessCandidateDto> Candidates { get; set; } = [];
+}
+
+public sealed class AccessCandidateDto
+{
+    [JsonPropertyName("userId")]
+    public string UserId { get; set; } = string.Empty;
+
+    [JsonPropertyName("nickname")]
+    public string Nickname { get; set; } = string.Empty;
+
+    /// <summary>下拉框显示用。</summary>
+    [JsonIgnore]
+    public string Display => $"{Nickname}（{UserId}）";
+}

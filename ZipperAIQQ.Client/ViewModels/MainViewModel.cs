@@ -131,6 +131,25 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string PersonaHint { get; set; } = "在「会话」页选一个会话后，这里编辑它的人设";
 
+    // ── 人员与名单（管理员 / 主人 / 黑白名单）──
+
+    [ObservableProperty]
+    public partial string AdminsText { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string FilterMode { get; set; } = "Blacklist";
+
+    [ObservableProperty]
+    public partial string FilterEntriesText { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial AccessCandidateDto? SelectedOwner { get; set; }
+
+    [ObservableProperty]
+    public partial string AccessHint { get; set; } = "点「读取」拉取当前管理员 / 主人 / 名单";
+
+    public ObservableCollection<AccessCandidateDto> OwnerCandidates { get; } = [];
+
     // ── 审计页 ──
 
     public ObservableCollection<AuditDto> Audits { get; } = [];
@@ -416,6 +435,64 @@ public partial class MainViewModel : ObservableObject
 
         StatusLine = $"人设已保存（{SelectedSession.SessionId}）";
     });
+
+    /// <summary>读取人员与名单（管理员 / 主人 / 黑白名单）。</summary>
+    [RelayCommand]
+    private Task LoadAccessAsync() => GuardAsync("读取人员与名单", async () =>
+    {
+        var dto = await _api.CallAsync<AccessDto>("getAccess").ConfigureAwait(true);
+        if (dto is null)
+        {
+            throw new InvalidOperationException("getAccess 没有返回数据。");
+        }
+
+        AdminsText = string.Join(", ", dto.Admins);
+        FilterMode = dto.FilterMode;
+        FilterEntriesText = string.Join(", ", dto.FilterEntries);
+
+        OwnerCandidates.Clear();
+        foreach (var c in dto.Candidates)
+        {
+            OwnerCandidates.Add(c);
+        }
+
+        SelectedOwner = OwnerCandidates.FirstOrDefault(c => c.UserId == dto.OwnerId);
+        AccessHint = $"主人：{dto.OwnerId ?? "未设置"} · 名单条目 {dto.FilterCount} 条 · 好友候选 {dto.Candidates.Count} 人";
+        StatusLine = "人员与名单已读取";
+    });
+
+    /// <summary>保存人员与名单（管理员 / 名单 走 setAccess，主人走 setOwner）。</summary>
+    [RelayCommand]
+    private Task SaveAccessAsync() => GuardAsync("保存人员与名单", async () =>
+    {
+        var admins = SplitList(AdminsText);
+        var entries = SplitList(FilterEntriesText);
+
+        await _api.CallAsync<object>("setAccess", new
+        {
+            admins,
+            filterMode = FilterMode,
+            filterEntries = entries,
+        }).ConfigureAwait(true);
+
+        if (SelectedOwner is not null)
+        {
+            await _api.CallAsync<object>("setOwner", new
+            {
+                userId = SelectedOwner.UserId,
+                nickname = SelectedOwner.Nickname,
+            }).ConfigureAwait(true);
+        }
+
+        StatusLine = $"已保存：管理员 {admins.Count} 人 · 名单 {FilterMode}/{entries.Count} 条" +
+                     (SelectedOwner is null ? "" : $" · 主人 {SelectedOwner.Nickname}");
+    });
+
+    /// <summary>逗号/分号/空格分隔的列表。</summary>
+    private static List<string> SplitList(string text) =>
+        text.Split([',', '，', ';', '；', ' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
 
     [RelayCommand]
     private Task LoadAuditAsync() => GuardAsync("读取审计", async () =>
