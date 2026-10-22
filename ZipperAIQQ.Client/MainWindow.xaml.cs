@@ -63,7 +63,9 @@ public sealed partial class MainWindow : Window
 
         _restoringPane = false;
 
-        ContentFrame.Navigate(typeof(StatusPage));
+        // 初始页 = 上次选中的页（以前这里硬写 Navigate(StatusPage)，
+        // 会把刚恢复的选中项覆盖掉，表现为"切页不生效"）
+        ContentFrame.Navigate(PageForTag(Vm.SelectedNavTag));
 
         // 0.5s 自动刷新（用户要求：数据要实时更新）
         Vm.StartAutoRefresh();
@@ -144,15 +146,16 @@ public sealed partial class MainWindow : Window
         Vm.SelectedNavTag = tag;
         Vm.CurrentPage = tag;
 
-        var page = tag switch
-        {
-            "sessions" => typeof(SessionsPage),
-            "data" => typeof(DataPage),
-            "config" => typeof(ConfigPage),
-            "audit" => typeof(AuditPage),
-            _ => typeof(StatusPage),
-        };
-
-        ContentFrame.Navigate(page);
+        ContentFrame.Navigate(PageForTag(tag));
     }
+
+    /// <summary>导航项 Tag → 页面类型。</summary>
+    private static Type PageForTag(string tag) => tag switch
+    {
+        "sessions" => typeof(SessionsPage),
+        "data" => typeof(DataPage),
+        "config" => typeof(ConfigPage),
+        "audit" => typeof(AuditPage),
+        _ => typeof(StatusPage),
+    };
 }

@@ -108,6 +108,29 @@ public partial class MainViewModel : ObservableObject
     /// <summary>数值型运行参数（发送间隔 / 连发上限 / 冷却 / 文件上限 / 热窗）。</summary>
     public ObservableCollection<SettingItem> Settings { get; } = [];
 
+    // ── 行为设置（回复模式 + 通知响应开关，第 14 项补齐）──
+
+    [ObservableProperty]
+    public partial string ReplyMode { get; set; } = "every";
+
+    public ObservableCollection<string> ReplyModes { get; } = [];
+
+    public ObservableCollection<NoticeToggleItem> NoticeToggles { get; } = [];
+
+    // ── 人设（第 21 项：形象 / 性格分开）──
+
+    [ObservableProperty]
+    public partial string PersonaName { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string PersonaImage { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string PersonaPersonality { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string PersonaHint { get; set; } = "在「会话」页选一个会话后，这里编辑它的人设";
+
     // ── 审计页 ──
 
     public ObservableCollection<AuditDto> Audits { get; } = [];
@@ -341,6 +364,59 @@ public partial class MainViewModel : ObservableObject
         StatusLine = $"已保存 {result?.Updated ?? 0} 项运行参数（服务端已记录审计）";
     });
 
+    /// <summary>读取人设（形象 / 性格分开）。</summary>
+    [RelayCommand]
+    private Task LoadPersonaAsync() => GuardAsync("读取人设", async () =>
+    {
+        if (SelectedSession is null)
+        {
+            throw new InvalidOperationException("先在「会话」页选一个会话。");
+        }
+
+        var dto = await _api
+            .CallAsync<PersonaDto>("getPersona", new { sessionId = SelectedSession.SessionId })
+            .ConfigureAwait(true);
+
+        if (dto is null)
+        {
+            throw new InvalidOperationException("getPersona 没有返回数据。");
+        }
+
+        PersonaName = dto.Name;
+        PersonaImage = dto.Image ?? string.Empty;
+        PersonaPersonality = dto.Personality ?? string.Empty;
+        PersonaHint = dto.Split
+            ? $"正在编辑：{dto.SessionId}"
+            : $"正在编辑：{dto.SessionId}（旧格式人设，没有形象/性格小节，保存后会按新格式重写）";
+
+        StatusLine = "人设已读取";
+    });
+
+    /// <summary>保存人设（服务端拼成完整正文）。</summary>
+    [RelayCommand]
+    private Task SavePersonaAsync() => GuardAsync("保存人设", async () =>
+    {
+        if (SelectedSession is null)
+        {
+            throw new InvalidOperationException("先在「会话」页选一个会话。");
+        }
+
+        if (string.IsNullOrWhiteSpace(PersonaImage) && string.IsNullOrWhiteSpace(PersonaPersonality))
+        {
+            throw new InvalidOperationException("形象与性格至少要填一个（都空会让人设消失）。");
+        }
+
+        await _api.CallAsync<object>("setPersona", new
+        {
+            sessionId = SelectedSession.SessionId,
+            name = PersonaName,
+            image = PersonaImage,
+            personality = PersonaPersonality,
+        }).ConfigureAwait(true);
+
+        StatusLine = $"人设已保存（{SelectedSession.SessionId}）";
+    });
+
     [RelayCommand]
     private Task LoadAuditAsync() => GuardAsync("读取审计", async () =>
     {
@@ -352,6 +428,57 @@ public partial class MainViewModel : ObservableObject
         }
 
         StatusLine = $"审计 {Audits.Count} 条";
+    });
+
+    /// <summary>读取行为设置（回复模式 + 通知开关）。</summary>
+    [RelayCommand]
+    private Task LoadBehaviorAsync() => GuardAsync("读取行为设置", async () =>
+    {
+        var data = await _api.CallAsync<BehaviorDto>("getBehavior").ConfigureAwait(true);
+        if (data is null)
+        {
+            throw new InvalidOperationException("getBehavior 没有返回数据。");
+        }
+
+        ReplyModes.Clear();
+        foreach (var mode in data.ReplyModes)
+        {
+            ReplyModes.Add(mode);
+        }
+
+        ReplyMode = data.ReplyMode;
+
+        NoticeToggles.Clear();
+        foreach (var item in data.Notices)
+        {
+            NoticeToggles.Add(new NoticeToggleItem
+            {
+                Type = item.Type,
+                Label = item.Label,
+                Enabled = item.Enabled,
+            });
+        }
+
+        StatusLine = "行为设置已读取";
+    });
+
+    /// <summary>保存行为设置（服务端会校验类型并写审计）。</summary>
+    [RelayCommand]
+    private Task SaveBehaviorAsync() => GuardAsync("保存行为设置", async () =>
+    {
+        if (ReplyModes.Count == 0)
+        {
+            throw new InvalidOperationException("先读取一次行为设置。");
+        }
+
+        var payload = new
+        {
+            replyMode = ReplyMode,
+            notice = NoticeToggles.ToDictionary(n => n.Type, n => n.Enabled),
+        };
+
+        await _api.CallAsync<object>("setBehavior", payload).ConfigureAwait(true);
+        StatusLine = $"行为设置已保存（回复模式 {ReplyMode}，通知 {NoticeToggles.Count(n => n.Enabled)} 类开启）";
     });
 
     /// <summary>数据页：Token 用量 / 检索命中率 / JEV 判断情况（M2-E）。</summary>

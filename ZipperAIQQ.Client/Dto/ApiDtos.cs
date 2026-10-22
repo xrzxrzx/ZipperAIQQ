@@ -349,3 +349,50 @@ public sealed class KindStatsDto
         ? "—"
         : $"{InputTokens:N0} / {OutputTokens:N0}";
 }
+
+/// <summary>行为设置（<c>getBehavior</c>）：回复模式 + 通知响应开关。</summary>
+public sealed class BehaviorDto
+{
+    [JsonPropertyName("replyMode")]
+    public string ReplyMode { get; set; } = "every";
+
+    [JsonPropertyName("replyModes")]
+    public List<string> ReplyModes { get; set; } = [];
+
+    [JsonPropertyName("notices")]
+    public List<NoticeToggleDto> Notices { get; set; } = [];
+}
+
+public sealed class NoticeToggleDto
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = string.Empty;
+
+    [JsonPropertyName("label")]
+    public string Label { get; set; } = string.Empty;
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+}
+
+/// <summary>人设（<c>getPersona</c>）：形象 / 性格分开。</summary>
+public sealed class PersonaDto
+{
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("image")]
+    public string? Image { get; set; }
+
+    [JsonPropertyName("personality")]
+    public string? Personality { get; set; }
+
+    [JsonPropertyName("content")]
+    public string Content { get; set; } = string.Empty;
+
+    [JsonPropertyName("split")]
+    public bool Split { get; set; }
+}

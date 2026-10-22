@@ -111,6 +111,92 @@
                 </StackPanel>
             </Grid>
 
+            <!-- 行为设置：回复模式 + 通知响应开关（以前只能用 QQ 命令改） -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="行为设置" Style="{StaticResource SectionHeaderStyle}" VerticalAlignment="Center" />
+                        <Button Content="读取" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.LoadBehaviorCommand}" />
+                    </StackPanel>
+
+                    <Grid ColumnSpacing="24">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="240" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="4">
+                            <TextBlock Text="回复模式（全局默认）" Style="{StaticResource CaptionStyle}" />
+                            <ComboBox ItemsSource="{x:Bind Vm.ReplyModes}"
+                                      SelectedItem="{x:Bind Vm.ReplyMode, Mode=TwoWay}"
+                                      HorizontalAlignment="Stretch" />
+                            <TextBlock Text="every=每条都回 / mention=仅被 @ / jev=判断模型决定"
+                                       Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock Text="通知响应（默认全关，只记录）" Style="{StaticResource CaptionStyle}" />
+                            <ItemsControl ItemsSource="{x:Bind Vm.NoticeToggles}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:NoticeToggleItem">
+                                        <ToggleSwitch Header="{x:Bind Label}"
+                                                      IsOn="{x:Bind Enabled, Mode=TwoWay}"
+                                                      OnContent="开" OffContent="关"
+                                                      MinWidth="0" Margin="0,-4,0,-4" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Grid>
+
+                    <Button Content="保存行为设置"
+                            Style="{StaticResource JpAccentButtonStyle}"
+                            Command="{x:Bind Vm.SaveBehaviorCommand}" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
+            <!-- 人设：形象 / 性格分开配（第 21 项） -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="人设" Style="{StaticResource SectionHeaderStyle}" VerticalAlignment="Center" />
+                        <Button Content="读取" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.LoadPersonaCommand}" />
+                        <TextBlock Text="{x:Bind Vm.PersonaHint, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <TextBox Header="人设名" Text="{x:Bind Vm.PersonaName, Mode=TwoWay}" MaxWidth="360"
+                             HorizontalAlignment="Left" />
+
+                    <Grid ColumnSpacing="20">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="4">
+                            <TextBox Header="形象（外观 / 身份 / 说话风格）"
+                                     Text="{x:Bind Vm.PersonaImage, Mode=TwoWay}"
+                                     AcceptsReturn="True" TextWrapping="Wrap"
+                                     Height="160" ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Spacing="4">
+                            <TextBox Header="性格（脾气 / 习惯 / 情绪反应）"
+                                     Text="{x:Bind Vm.PersonaPersonality, Mode=TwoWay}"
+                                     AcceptsReturn="True" TextWrapping="Wrap"
+                                     Height="160" ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Button Content="保存人设（服务端即时生效）"
+                            Style="{StaticResource JpAccentButtonStyle}"
+                            Command="{x:Bind Vm.SavePersonaCommand}" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
             <TextBlock Text="{x:Bind Vm.StatusLine, Mode=OneWay}"
                        Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
         </StackPanel>

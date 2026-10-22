@@ -12,6 +12,10 @@ public sealed partial class ConfigPage : Page
     {
         Vm = App.Services.GetRequiredService<MainViewModel>();
         InitializeComponent();
+
+        // 进页面就把「运行参数」和「行为设置」拉一遍，别让用户对着空白点读取
+        _ = Vm.LoadSettingsCommand.ExecuteAsync(null);
+        _ = Vm.LoadBehaviorCommand.ExecuteAsync(null);
     }
 
     public MainViewModel Vm { get; }
