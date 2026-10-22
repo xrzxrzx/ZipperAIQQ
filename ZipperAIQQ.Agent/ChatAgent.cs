@@ -537,6 +537,10 @@ public sealed class ChatAgent : IChatAgent
         var canCrossSession = _permissionGate.IsAllowed(ToolCapability.CrossSessionHistory, context.Role);
         tools.AddRange(MessageTools.Create(_store, request.Chat, maxResults: 30, allowCrossSession: canCrossSession));
 
+        // 主动给别人发消息（管理员）：让 AI 能跨会话传话，而不只是被动回当前会话
+        tools.AddRange(SendToOtherSessionTool.Create(
+            _channel, _store, context, _permissionGate, _configs, maxResults: 10));
+
         // 平台信息查询（第 19 项）：好友 / 群 / 群成员 / 群头衔
         // 通道实现了 IContactDirectory 才给工具，否则模型会去调一个不存在的能力
         if (_channel is Channel.IContactDirectory contacts)

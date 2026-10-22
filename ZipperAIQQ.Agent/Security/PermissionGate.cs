@@ -24,6 +24,7 @@ public sealed class PermissionGate : IPermissionGate
             // 写操作：改自己签名 / 戳别人 —— 都是**对外可见**的动作，硬底线管理员
             [ToolCapability.WriteProfile] = Role.Admin,
             [ToolCapability.SendPoke] = Role.Admin,
+            [ToolCapability.SendToOtherSession] = Role.Admin,
         };
 
     /// <summary>默认最低角色（M1 的「预置默认允许集」，FR-6.7）。</summary>
@@ -40,6 +41,7 @@ public sealed class PermissionGate : IPermissionGate
             // 写操作：改自己签名 / 戳别人 —— 都是**对外可见**的动作，硬底线管理员
             [ToolCapability.WriteProfile] = Role.Admin,
             [ToolCapability.SendPoke] = Role.Admin,
+            [ToolCapability.SendToOtherSession] = Role.Admin,
         };
 
     private readonly IReadOnlyDictionary<ToolCapability, Role> _minRoles;
