@@ -29,7 +29,7 @@ ServerOptions options;
 try
 {
     // 只解析一次：缺配置就在这里一次性说清，不带半个配置继续跑
-    options = ServerOptions.FromEnvironment();
+    options = ServerConfigLoader.Load(logger: Log.Logger);
 }
 catch (InvalidOperationException ex)
 {
