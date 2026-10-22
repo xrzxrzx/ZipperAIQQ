@@ -60,6 +60,19 @@ public interface IMessageStore
     /// <summary>某会话的消息总数。</summary>
     Task<long> CountAsync(string sessionId, CancellationToken ct = default);
 
+    /// <summary>
+    /// 按关键词搜本会话历史（LIKE），按时间正序返回。
+    /// </summary>
+    /// <remarks>
+    /// 给 agent 的 <c>search_history</c> 工具用：热窗之外的旧消息模型看不到，
+    /// 没有这个工具它只能靠上下文瞎编（实测被用户抓到）。
+    /// </remarks>
+    Task<IReadOnlyList<StoredMessage>> SearchAsync(
+        string sessionId,
+        string keyword,
+        int limit,
+        CancellationToken ct = default);
+
     /// <summary>会话概览（按最后消息时间倒序），供 M2 客户端列出"当前在接收的聊天"。</summary>
     Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(int limit, CancellationToken ct = default);
 

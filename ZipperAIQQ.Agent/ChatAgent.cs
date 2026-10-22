@@ -487,6 +487,10 @@ public sealed class ChatAgent : IChatAgent
 
         tools.AddRange(FileTools.Create(context, _permissionGate, _workspace, _fileMaxBytes));
         tools.AddRange(ScheduleTools.Create(context, _permissionGate, _schedules));
+
+        // 查历史：模型只看得到热窗那十几条，没有这个工具时它会瞎编"我们之前聊过…"
+        tools.AddRange(MessageTools.Create(_store, request.Chat, maxResults: 30));
+
         return tools;
     }
 
