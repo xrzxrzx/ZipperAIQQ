@@ -121,7 +121,11 @@
                                 Command="{x:Bind Vm.LoadBehaviorCommand}" />
                     </StackPanel>
 
-                    <Grid ColumnSpacing="24">
+                    <Grid ColumnSpacing="24" RowSpacing="8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="240" />
                             <ColumnDefinition Width="*" />
@@ -137,6 +141,19 @@
                         </StackPanel>
 
                         <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock Text="判断模型（JEV 用：先判断该不该回）" Style="{StaticResource CaptionStyle}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ComboBox ItemsSource="{x:Bind Vm.EndpointNames}"
+                                          SelectedItem="{x:Bind Vm.JudgeEndpoint, Mode=TwoWay}"
+                                          MinWidth="180" PlaceholderText="（未配置 → JEV 不可用）" />
+                                <Button Content="保存" Style="{StaticResource JpButtonStyle}"
+                                        Command="{x:Bind Vm.SaveJudgeCommand}" />
+                            </StackPanel>
+                            <TextBlock Text="配合回复模式选 jev 使用；没配判断模型时 jev 会降级为 mention"
+                                       Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Spacing="2" Margin="0,12,0,0">
                             <TextBlock Text="通知响应（默认全关，只记录）" Style="{StaticResource CaptionStyle}" />
                             <ItemsControl ItemsSource="{x:Bind Vm.NoticeToggles}">
                                 <ItemsControl.ItemTemplate>

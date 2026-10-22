@@ -44,6 +44,16 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string SelectedNavTag { get; set; } = "status";
 
+    partial void OnSelectedSessionChanged(SessionDto? value)
+    {
+        // 记住上次选的会话：重进客户端时人设、消息都还能读出来
+        if (value is not null)
+        {
+            _settings.SelectedSessionId = value.SessionId;
+            _settings.Save();
+        }
+    }
+
     partial void OnIsPaneOpenChanged(bool value)
     {
         _settings.IsPaneOpen = value;
@@ -117,6 +127,15 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<string> ReplyModes { get; } = [];
 
     public ObservableCollection<NoticeToggleItem> NoticeToggles { get; } = [];
+
+    // ── JEV / 判断模型（第 2 项：JEV 无法配置）──
+
+    /// <summary>判断模型用的端点名（空 = 没配，jev 会降级为 mention）。</summary>
+    [ObservableProperty]
+    public partial string JudgeEndpoint { get; set; } = string.Empty;
+
+    /// <summary>可选端点名（来自 getConfig）。</summary>
+    public ObservableCollection<string> EndpointNames { get; } = [];
 
     // ── 人设（第 21 项：形象 / 性格分开）──
 
@@ -194,6 +213,12 @@ public partial class MainViewModel : ObservableObject
         foreach (var item in list ?? [])
         {
             Sessions.Add(item);
+        }
+
+        // 按记忆恢复上次选中的会话（重进客户端不丢）
+        if (!string.IsNullOrWhiteSpace(_settings.SelectedSessionId))
+        {
+            SelectedSession = Sessions.FirstOrDefault(s => s.SessionId == _settings.SelectedSessionId);
         }
 
         SessionStatus = $"共 {Sessions.Count} 个会话";
@@ -500,6 +525,7 @@ public partial class MainViewModel : ObservableObject
             });
         }
 
+        await LoadJudgeConfigAsync().ConfigureAwait(true);
         StatusLine = "行为设置已读取";
     });
 
@@ -716,4 +742,42 @@ public partial class MainViewModel : ObservableObject
             StatusLine = $"{action}失败：{ex.Message}";
         }
     }
+
+    /// <summary>读判断模型的端点配置（getConfig 的 roles.judge + 端点列表）。</summary>
+    private async Task LoadJudgeConfigAsync()
+    {
+        var cfg = await _api.CallAsync<ConfigDto>("getConfig").ConfigureAwait(true);
+        if (cfg is null)
+        {
+            return;
+        }
+
+        EndpointNames.Clear();
+        foreach (var e in cfg.Endpoints)
+        {
+            EndpointNames.Add(e.Name);
+        }
+
+        // ConfigDto 的 roles 是字典：找 judge（大小写不敏感）
+        JudgeEndpoint = cfg.Roles
+            .FirstOrDefault(kv => string.Equals(kv.Key, "judge", StringComparison.OrdinalIgnoreCase))
+            .Value ?? string.Empty;
+    }
+
+    /// <summary>保存判断模型（setConfig 的 roles.judge）。</summary>
+    [RelayCommand]
+    private Task SaveJudgeAsync() => GuardAsync("保存判断模型", async () =>
+    {
+        if (string.IsNullOrWhiteSpace(JudgeEndpoint))
+        {
+            throw new InvalidOperationException("先选一个端点作为判断模型（或保持为空表示不启用 JEV）。");
+        }
+
+        await _api.CallAsync<object>("setConfig", new
+        {
+            roles = new Dictionary<string, string> { ["judge"] = JudgeEndpoint },
+        }).ConfigureAwait(true);
+
+        StatusLine = $"判断模型已设为 {JudgeEndpoint}（JEV 模式可用）";
+    });
 }
