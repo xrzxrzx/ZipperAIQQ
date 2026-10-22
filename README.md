@@ -20,8 +20,6 @@ QQ 侧通过 **NapCat**（OneBot 11）接入；AI 侧基于 **MEAI（`Microsoft.
 
 **反过来说**：只要某件事是**角色扮演真正需要的**（上下文压缩、跨会话记忆、人设稳定、工具权限），我们就**自己写清楚**，而不是找一个通用框架来配。
 
-这也是项目**明确不引 MAF** 的原因（调研结论见内部记忆）。
-
 ---
 
 ## 技术栈
@@ -36,9 +34,9 @@ QQ 侧通过 **NapCat**（OneBot 11）接入；AI 侧基于 **MEAI（`Microsoft.
 | QQ 协议端 | **NapCat**（OneBot 11） |
 | AI | **MEAI 打底 + 部分自研**；接入走 **Responses API** |
 | 本地向量 | `bge-small-zh-v1.5` + ONNX Runtime（**本地推理，零 API 成本**） |
+| 配置 | **YAML 优先**（`config/server.yaml`），环境变量兜底 |
 | JSON | **`System.Text.Json`**（全项目统一） |
 | 存储 | SQLite |
-| 测试 | xUnit |
 
 ### 通信契约
 
@@ -48,16 +46,139 @@ QQ 侧通过 **NapCat**（OneBot 11）接入；AI 侧基于 **MEAI（`Microsoft.
 
 ---
 
+## 🚀 部署
+
+> 服务端可跑在 **Windows 或 Linux**；客户端是 WinUI3（仅 Windows）。
+> 两者可以同机，也可以分开 —— 客户端始终通过 HTTP/WS 连服务端。
+
+### 前置条件
+
+| 需要什么 | 说明 |
+|---|---|
+| **NapCat** | OneBot 11 **正向 WebSocket**，且**必须开启 access_token**（没 token 会在握手后被关掉） |
+| **LLM API** | 任意 OpenAI 兼容端点（DeepSeek / 兼容 Responses 或 Chat 接口） |
+| **.NET 10 SDK** | **仅构建时需要**；运行时若用 self-contained 发布则目标机无需安装 |
+
+### 1. 发布
+
+```bash
+# Windows
+dotnet publish ZipperAIQQ.Server/ZipperAIQQ.Server.csproj \
+  -c Release -o out -r win-x64 --self-contained true
+
+# Linux
+dotnet publish ZipperAIQQ.Server/ZipperAIQQ.Server.csproj \
+  -c Release -o out -r linux-x64 --self-contained true
+```
+
+> 目标机已装 .NET 10 运行时可把 `--self-contained true` 换成 `false`，体积小很多。
+
+### 2. 补上 publish 产物里没有的文件
+
+| 文件 / 目录 | 用途 | 缺了会怎样 |
+|---|---|---|
+| `temp/bge-small-zh-v1.5/` | 本地向量模型（约 23MB，`.gitignore` 排除） | **启动直接崩**（`找不到 embedding 模型`） |
+| `config/faces.qq.json` | 表情表 | 表情发不出去（变成方括号文字） |
+| `config/persona.md` | 全局人设 | 用兜底人设 |
+
+### 3. 写配置
+
+服务端读 **`config/server.yaml`**（优先级 **YAML > 环境变量 > 默认值**）。
+没有该文件时退回环境变量，两种方式都支持：
+
+```yaml
+server:
+  httpAddress: 127.0.0.1:5180      # 局域网访问改成 0.0.0.0:5180
+  httpToken: "<http-token>"         # 非 loopback 时必填
+  database: ./data/zipperaiqq.db
+  dataProtectionKeys: ./data/keys   # ⚠️ 必须备份：丢了已存的 LLM key 全解不开
+
+napcat:
+  wsUrl: "ws://<napcat-host>:<port>"
+  token: "<napcat-token>"
+  selfId: "<bot-qq>"                # 机器人自己的账号（mention 模式要用）
+
+llm:
+  apiKey: "<llm-api-key>"
+  baseUrl: "https://api.deepseek.com"
+  model: "deepseek-flash"
+  apiKind: Responses                # Responses | Chat
+
+limits:
+  sendIntervalMs: 300               # 会话级最小发送间隔
+  maxConsecutive: 10
+  cooldownMs: 10000
+  fileMaxBytes: 262144
+  hotWindowMessages: 20
+
+access:
+  admins: ["<admin-qq>"]
+  toolWhitelist: []
+  whitelist: []
+
+paths:
+  faces: ./config/faces.qq.json
+  persona: ./config/persona.md
+  workspace: ./workspace
+  embeddingModel: ./temp/bge-small-zh-v1.5
+```
+
+环境变量等价写法（前缀 `ZIPPER_`）：
+`ZIPPER_NAPCAT_WS` / `ZIPPER_NAPCAT_TOKEN` / `ZIPPER_LLM_APIKEY` / `ZIPPER_LLM_BASEURL` /
+`ZIPPER_LLM_MODEL` / `ZIPPER_DB` / `ZIPPER_HTTP_ADDR` / `ZIPPER_HTTP_TOKEN` / `ZIPPER_ADMINS` 等。
+
+### 4. 启动
+
+```bash
+# 最简单：前台直接跑（日志同时写 logs/）
+./ZipperAIQQ.Server            # Windows: ZipperAIQQ.Server.exe
+```
+
+要**常驻**，按平台选一种：
+
+| 平台 | 方式 |
+|---|---|
+| **Linux** | systemd unit：`WorkingDirectory=/opt/zipper`、`ExecStart=/opt/zipper/ZipperAIQQ.Server`、`Restart=always` |
+| **Windows** | **计划任务**：`schtasks /create /sc onstart /ru SYSTEM /tn <name> /tr "<path>\ZipperAIQQ.Server.exe"`<br>⚠️ **别用 `sc create` 注册成服务** —— exe 是控制台程序、不实现 SCM 协议，会报 **1053** |
+
+> Windows 上还有两个坑：作为计划任务运行时**工作目录是 `System32`**（要在包装脚本里自己 `cd`），
+> 且**环境变量不继承** —— 用 `config/server.yaml` 最省事。
+
+### 5. 验证
+
+```bash
+curl -X POST http://127.0.0.1:5180/api \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <http-token>" \
+  -d '{"action":"getStatus"}'
+# → {"code":0, ..., "channelConnected":true, ...}
+```
+
+日志里出现 **`消息路由已启动`** 才算真正起来了 —— **进程活着不等于初始化成功**。
+
+### 6. 客户端
+
+客户端启动后填「服务器地址 + token」（loopback 可留空 token）即可：
+
+- **状态页**：模型 / 通道 / 运行时长 / 会话数（0.5 秒自动刷新）
+- **会话页**：会话列表 → 消息（增量追加、自动滚到底）
+- **数据页**：Token 用量、检索命中率、JEV 判断（图文）
+- **配置页**：模型端点、运行参数、行为模式（every / mention / jev）、
+  人设（形象 + 性格分开）、人员与名单（主人 / 管理员 / 黑白名单）
+- **审计页**：配置变更记录
+
+---
+
 ## 当前状态
 
 | 阶段 | 状态 |
 |---|---|
 | **S1 需求** | ✅ 已冻结（FR-1 ~ FR-21） |
-| **S2 技术方案** | ✅ 已批准（M1 实施设计） |
-| **S3 开发** | 🔄 **进行中**（M1-A：通道与存储） |
-| S4 测试 | ⬜ 未开始 |
+| **S2 技术方案** | ✅ 已批准 |
+| **S3 开发** | 🔄 进行中（M1 + M2 主体完成：通道 / 存储 / 记忆 / 工具 / 命令 / 端点 / 配置 / 客户端） |
+| S4 测试 | ⬜ 未开始（仓库内暂无测试项目） |
 
-> ⚠️ 代码尚在早期，**没有可运行的版本**。本 README 会在首个可运行版本出现时补上「快速开始」。
+**已可运行**：服务端能连 NapCat、收发消息、调用工具、执行命令；客户端能连服务端看状态 / 会话 / 数据 / 配置。
 
 ---
 
@@ -68,6 +189,18 @@ QQ 侧通过 **NapCat**（OneBot 11）接入；AI 侧基于 **MEAI（`Microsoft.
 | **A. 表现层 ↔ 编排层** | 必须走 HTTP/WS，**不得进程内直连** —— 这是「本机单体」与「服务器分离」共用一套代码的前提 |
 | **B. 平台通道 ↔ 编排层** | 必须经**平台无关的消息通道抽象**，**上层不得直接依赖任何平台类型**（QQ 只是第一个实现） |
 | **C. 工具执行 → 权限门禁** | 危险操作（执行命令、写/删文件、访问外部服务）**默认仅管理员**；门禁在服务端 |
+
+---
+
+## 排障速查
+
+| 现象 | 先看什么 |
+|---|---|
+| 启动就崩：找不到 `model_quantized.onnx` | 没传 embedding 模型（见「部署 第 2 步」） |
+| 日志显示连上 WS 但立刻断开 | NapCat 没配 `access_token`（握手成功 ≠ 连上） |
+| 局域网连不上 | `httpAddress` 还写着 `127.0.0.1` |
+| 起来了但群里没反应 | 回复模式：`mention` 模式没被 @ 就不回；名单模式：白名单 + 空名单 = **全部拒绝** |
+| 改配置不生效 | YAML 是否真被加载（日志里找 `已加载配置文件`） |
 
 ---
 
@@ -99,7 +232,7 @@ QQ 侧通过 **NapCat**（OneBot 11）接入；AI 侧基于 **MEAI（`Microsoft.
 ## ⚠️ 使用风险（务必先读）
 
 1. **NapCat 是非官方协议端** —— 使用它可能违反腾讯的用户协议，**你的 QQ 账号存在被限制的风险**，请自行评估后再使用
-2. **消息内容会发给第三方 LLM** —— 涉及隐私的内容**不要经过它**
+2. **消息内容会发给第三方 LLM** —— 涉及隐私的内容**不要**经过它
 3. **群聊里 AI 说的话是"以你的机器人账号发的"** —— 它说错话，后果由账号承担
 4. **默认配置不是安全边界** —— 工具权限门禁默认仅管理员，但对外提供服务前请自己审一遍
 5. **不要把服务暴露到公网** —— 非 loopback 监听必须配 token（本项目会强制校验），但 token 不解决所有问题
