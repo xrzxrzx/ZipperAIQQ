@@ -73,6 +73,28 @@ public interface IMessageStore
         int limit,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// 按关键词搜**所有会话**的历史（跨会话）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 给 <c>search_other_sessions</c> 工具用：让 AI 能回答「谁跟你说过什么」，
+    /// 从而更像一个跨聊天的实体，而不是只活在某一个会话里。
+    /// </para>
+    /// <para>
+    /// ⚠️ 这是**跨会话**读别人的对话 —— 权限门禁默认只给管理员/主人，
+    /// 并且实现上必须能排除当前会话（避免和自己重复）。
+    /// </para>
+    /// </remarks>
+    /// <param name="keyword">关键词（LIKE 模糊匹配）。</param>
+    /// <param name="limit">最多几条。</param>
+    /// <param name="excludeSessionId">要排除的会话（通常是当前会话），可为 null。</param>
+    Task<IReadOnlyList<StoredMessage>> SearchAcrossSessionsAsync(
+        string keyword,
+        int limit,
+        string? excludeSessionId = null,
+        CancellationToken ct = default);
+
     /// <summary>会话概览（按最后消息时间倒序），供 M2 客户端列出"当前在接收的聊天"。</summary>
     Task<IReadOnlyList<SessionSummary>> ListSessionsAsync(int limit, CancellationToken ct = default);
 

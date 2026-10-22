@@ -522,7 +522,9 @@ public sealed class ChatAgent : IChatAgent
         tools.AddRange(ScheduleTools.Create(context, _permissionGate, _schedules));
 
         // 查历史：模型只看得到热窗那十几条，没有这个工具时它会瞎编"我们之前聊过…"
-        tools.AddRange(MessageTools.Create(_store, request.Chat, maxResults: 30));
+        // 跨会话搜索按权限给：这是读**别人的对话**，只给管理员/主人
+        var canCrossSession = _permissionGate.IsAllowed(ToolCapability.CrossSessionHistory, context.Role);
+        tools.AddRange(MessageTools.Create(_store, request.Chat, maxResults: 30, allowCrossSession: canCrossSession));
 
         // 平台信息查询（第 19 项）：好友 / 群 / 群成员 / 群头衔
         // 通道实现了 IContactDirectory 才给工具，否则模型会去调一个不存在的能力

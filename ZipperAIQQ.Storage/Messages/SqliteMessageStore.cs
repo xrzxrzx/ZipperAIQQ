@@ -314,6 +314,45 @@ public sealed class SqliteMessageStore : IMessageStore
         }, ct);
     }
 
+    /// <summary>跨会话关键词搜索；参数化，绝不拼字符串。</summary>
+    public Task<IReadOnlyList<StoredMessage>> SearchAcrossSessionsAsync(
+        string keyword, int limit, string? excludeSessionId = null, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyword);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        return _db.ReadAsync<IReadOnlyList<StoredMessage>>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = SelectCrossSessionSearchSql;
+            cmd.Parameters.AddWithValue("@pattern", "%" + keyword + "%");
+            cmd.Parameters.AddWithValue("@exclude", excludeSessionId ?? string.Empty);
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            var buffer = new List<StoredMessage>(capacity: Math.Min(limit, 128));
+
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                buffer.Add(ReadRow(reader));
+            }
+
+            buffer.Reverse();
+            return buffer;
+        }, ct);
+    }
+
+    private const string SelectCrossSessionSearchSql = """
+        SELECT Id, Platform, ChatType, ChatId, MessageId,
+               SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
+               ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction
+        FROM Messages
+        WHERE PlainText LIKE @pattern
+          AND (@exclude = '' OR SessionId <> @exclude)
+        ORDER BY SentAtMs DESC, Id DESC
+        LIMIT @limit;
+        """;
+
     private const string SelectSearchSql = """
         SELECT Id, Platform, ChatType, ChatId, MessageId,
                SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,

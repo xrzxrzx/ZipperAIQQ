@@ -52,4 +52,13 @@ public enum ToolCapability
     /// 普通成员若能建任务，等于给了他「定时刷屏」的能力 —— 群里到点就被 @ 一次。
     /// </remarks>
     Schedule,
+
+    /// <summary>
+    /// 跨会话读别人的历史（<c>search_other_sessions</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 这是「读别人的私聊」—— 比读文件更该收紧：文件按角色分目录，
+    /// 而跨会话读是**穿透会话隔离**看所有聊天的内容。硬底线管理员，默认也只给管理员。
+    /// </remarks>
+    CrossSessionHistory,
 }
