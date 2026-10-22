@@ -37,6 +37,15 @@ public static class NumericSettingsSchema
     public const string FileMaxBytesKey = "file.maxBytes";
     public const string HotWindowKey = "context.hotWindow";
 
+    /// <summary>
+    /// JEV 判断灵敏度（decisions 模型的概率阈值）。
+    /// </summary>
+    /// <remarks>
+    /// 调低 → 更爱插话（漏回代价高时用）；调高 → 更少出声（误回代价高时用）。
+    /// 只在 judge 端点用 decisions 模型时生效。
+    /// </remarks>
+    public const string JudgeThresholdKey = "jev.threshold";
+
     public static readonly IReadOnlyList<NumericSetting> All =
     [
         new(SendIntervalKey, "发送间隔", 0, 10_000, 300, "ms"),
@@ -44,6 +53,7 @@ public static class NumericSettingsSchema
         new(SendCooldownKey, "连发冷却", 0, 600_000, 10_000, "ms"),
         new(FileMaxBytesKey, "单文件读写上限", 1024, 10 * 1024 * 1024, 256 * 1024, "字节"),
         new(HotWindowKey, "上下文热窗", 4, 100, 20, "条"),
+        new(JudgeThresholdKey, "JEV 判断灵敏度", 0.05, 0.95, 0.55, ""),
     ];
 
     public static NumericSetting? Find(string key) =>

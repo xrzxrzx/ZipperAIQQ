@@ -390,7 +390,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
     {
         try
         {
-            var raw = await _settings.GetAsync("jev.threshold", ct).ConfigureAwait(false);
+            var raw = await _settings.GetAsync(NumericSettingsSchema.JudgeThresholdKey, ct).ConfigureAwait(false);
             if (double.TryParse(raw, System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var v))
             {
