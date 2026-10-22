@@ -26,7 +26,7 @@ namespace ZipperAIQQ.Channel.NapCat;
 /// 两者**不能用同一条路**：事件是 1:N 广播，API 响应是 1:1 定向。
 /// </para>
 /// </remarks>
-public sealed class NapCatChannel : IMessageChannel
+public sealed class NapCatChannel : IMessageChannel, IContactDirectory
 {
     private readonly IClientTransport _transport;
     private readonly IChatFilter _filter;
@@ -60,6 +60,177 @@ public sealed class NapCatChannel : IMessageChannel
         _options = options;
         _logger = logger;
     }
+
+    
+    // ══════════════════════════════════════════════════════════════════
+    // IContactDirectory：好友 / 群 / 群成员（第 17/18/19 项的基础）
+    // ══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// 允许 AI 自主调用的 action 白名单。
+    /// </summary>
+    /// <remarks>
+    /// 只放**只读查询**。发送消息、退群、禁言这类写操作**不在名单里** ——
+    /// 那些必须走有权限门禁的工具，不能被"一个通用 API 调用"绕过去。
+    /// </remarks>
+    public static readonly IReadOnlySet<string> ActionAllowlist = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "get_friend_list",
+        "get_group_list",
+        "get_group_info",
+        "get_group_member_list",
+        "get_group_member_info",
+        "get_stranger_info",
+        "get_login_info",
+        "get_version_info",
+    };
+
+    public async Task<IReadOnlyList<ContactInfo>> GetFriendsAsync(CancellationToken ct = default)
+    {
+        var data = await CallApiNodeAsync("get_friend_list", null, ct).ConfigureAwait(false);
+        if (data is not JsonArray array)
+        {
+            return [];
+        }
+
+        return array
+            .OfType<JsonObject>()
+            .Select(o => new ContactInfo(
+                ReadString(o, "user_id"),
+                ReadString(o, "nickname"),
+                ReadOptional(o, "remark")))
+            .Where(c => c.UserId.Length > 0)
+            .ToList();
+    }
+
+    public async Task<GroupInfo?> GetGroupAsync(string groupId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(groupId);
+
+        var data = await CallApiNodeAsync(
+            "get_group_info",
+            new JsonObject { ["group_id"] = groupId },
+            ct).ConfigureAwait(false);
+
+        if (data is not JsonObject obj)
+        {
+            return null;
+        }
+
+        return new GroupInfo(
+            ReadString(obj, "group_id"),
+            ReadString(obj, "group_name"),
+            ReadInt(obj, "member_count"),
+            ReadInt(obj, "max_member_count"));
+    }
+
+    public async Task<IReadOnlyList<GroupMemberInfo>> GetGroupMembersAsync(
+        string groupId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(groupId);
+
+        var data = await CallApiNodeAsync(
+            "get_group_member_list",
+            new JsonObject { ["group_id"] = groupId },
+            ct).ConfigureAwait(false);
+
+        if (data is not JsonArray array)
+        {
+            return [];
+        }
+
+        return array
+            .OfType<JsonObject>()
+            .Select(o => new GroupMemberInfo(
+                ReadString(o, "user_id"),
+                ReadString(o, "nickname"),
+                ReadOptional(o, "card"),
+                ReadString(o, "role"),
+                ReadOptional(o, "title")))
+            .Where(m => m.UserId.Length > 0)
+            .ToList();
+    }
+
+    public Task<JsonObject?> InvokeApiAsync(string action, JsonObject? parameters, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(action);
+
+        if (!ActionAllowlist.Contains(action))
+        {
+            throw new InvalidOperationException(
+                $"action「{action}」不在可自主调用的白名单里（只允许只读查询）。");
+        }
+
+        return CallApiNodeAsync(action, parameters, ct).ContinueWith(
+            t => t.Result as JsonObject,
+            TaskContinuationOptions.ExecuteSynchronously);
+    }
+
+    /// <summary>调一个 OneBot API 并返回 <c>data</c>（失败返回 null，不抛）。</summary>
+    private async Task<JsonNode?> CallApiNodeAsync(string action, JsonObject? parameters, CancellationToken ct)
+    {
+        var echo = Guid.NewGuid().ToString("N");
+        var tcs = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        if (!_pending.TryAdd(echo, tcs))
+        {
+            throw new InvalidOperationException("生成 echo 冲突（理论上不会发生）");
+        }
+
+        try
+        {
+            var payload = new JsonObject
+            {
+                ["action"] = action,
+                ["params"] = parameters ?? new JsonObject(),
+                ["echo"] = echo,
+            };
+
+            await _transport.SendAsync(payload).ConfigureAwait(false);
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_options.ApiTimeoutSeconds));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+            JsonObject response;
+            try
+            {
+                response = await tcs.Task.WaitAsync(linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+            {
+                _logger.Warning("API {Action} 超时（{Timeout} 秒）", action, _options.ApiTimeoutSeconds);
+                return null;
+            }
+
+            var status = response["status"]?.GetValue<string>();
+            if (!string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.Warning("API {Action} 返回非 ok：{Status}", action, status);
+                return null;
+            }
+
+            return response["data"]?.DeepClone();
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "API {Action} 调用失败", action);
+            return null;
+        }
+        finally
+        {
+            _pending.TryRemove(echo, out _);
+        }
+    }
+
+    private static string ReadString(JsonObject obj, string name) =>
+        obj[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s
+        : obj[name]?.ToString() ?? string.Empty;
+
+    private static string? ReadOptional(JsonObject obj, string name) =>
+        obj[name] is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;
+
+    private static int ReadInt(JsonObject obj, string name) =>
+        obj[name] is JsonValue v && v.TryGetValue<int>(out var i) ? i : 0;
 
     public string Platform => "qq";
 

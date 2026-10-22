@@ -130,22 +130,27 @@ public static class ServiceRegistration
         // ── 通道（内层 NapCat + 外层节流）──
         services.AddSingleton<IClientTransport>(sp =>
             new ClientTransport(sp.GetRequiredService<ILogger>()));
-        services.AddSingleton<IMessageChannel>(sp =>
-        {
-            var inner = new NapCatChannel(
-                sp.GetRequiredService<IClientTransport>(),
-                sp.GetRequiredService<IChatFilter>(),
-                new NapCatOptions
-                {
-                    WebSocketUrl = options.NapCatWebSocketUrl,
-                    AccessToken = options.NapCatAccessToken,
-                },
-                sp.GetRequiredService<ILogger>());
+        // 内层通道单独注册：IContactDirectory（好友/群/群成员查询）需要它，
+        // 而消息发送要过外层节流 —— 两者拿的不是同一个对象。
+        services.AddSingleton<NapCatChannel>(sp => new NapCatChannel(
+            sp.GetRequiredService<IClientTransport>(),
+            sp.GetRequiredService<IChatFilter>(),
+            new NapCatOptions
+            {
+                WebSocketUrl = options.NapCatWebSocketUrl,
+                AccessToken = options.NapCatAccessToken,
+            },
+            sp.GetRequiredService<ILogger>()));
 
+        services.AddSingleton<IContactDirectory>(sp => sp.GetRequiredService<NapCatChannel>());
+
+        services.AddSingleton<IMessageChannel>(sp =>
             // 所有出站消息都过这里：全局最短间隔 + 连发冷却，跨会话共享
-            return new ThrottledMessageChannel(
-                inner, options.SendIntervalMs, options.MaxConsecutive, options.CooldownMs);
-        });
+            new ThrottledMessageChannel(
+                sp.GetRequiredService<NapCatChannel>(),
+                options.SendIntervalMs,
+                options.MaxConsecutive,
+                options.CooldownMs));
 
         // ── 向量与长期记忆 ──
         services.AddSingleton<IEmbeddingService>(_ =>
