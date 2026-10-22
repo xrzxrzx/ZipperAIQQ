@@ -9,64 +9,63 @@
             </ResourceDictionary.MergedDictionaries>
 
             <!-- ═══════════════════════════════════════════════
-                 日系主题（参考 NapCat WebUI 的浅色卡片骨架 + 和风配色）
-                 浅色：樱白渐变底 + 半透白卡片 + 樱粉强调
-                 深色：夜紫底 + 深色卡片
+                 日系 · 粉嫩主题（参考 NapCat WebUI 的浅色卡片 + 粉色强调）
+                 暗色：夜樱粉紫  ·  浅色：樱白粉
                  ═══════════════════════════════════════════════ -->
             <ResourceDictionary.ThemeDictionaries>
 
                 <ResourceDictionary x:Key="Light">
-                    <!-- 页面背景：极浅的樱粉 → 藤紫 渐变 -->
+                    <!-- 背景：更粉的樱白渐变 -->
                     <LinearGradientBrush x:Key="JpBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
-                        <GradientStop Color="#FFF8FB" Offset="0" />
-                        <GradientStop Color="#F7F1FF" Offset="0.55" />
-                        <GradientStop Color="#FFF3F7" Offset="1" />
+                        <GradientStop Color="#FFF5FA" Offset="0" />
+                        <GradientStop Color="#FDEFFA" Offset="0.5" />
+                        <GradientStop Color="#FFF0F6" Offset="1" />
                     </LinearGradientBrush>
 
-                    <!-- 卡片：半透白，浮在渐变上 -->
-                    <SolidColorBrush x:Key="JpCardBrush" Color="#E6FFFFFF" />
-                    <SolidColorBrush x:Key="JpCardHoverBrush" Color="#F2FFFFFF" />
-                    <SolidColorBrush x:Key="JpCardStrokeBrush" Color="#22FF8FAB" />
+                    <SolidColorBrush x:Key="JpCardBrush" Color="#EEFFFFFF" />
+                    <SolidColorBrush x:Key="JpCardHoverBrush" Color="#FFFFFFFF" />
+                    <SolidColorBrush x:Key="JpCardStrokeBrush" Color="#33FF7FB0" />
 
-                    <!-- 强调色：樱粉 / 藤紫 -->
-                    <SolidColorBrush x:Key="JpAccentBrush" Color="#FF8FAB" />
-                    <SolidColorBrush x:Key="JpAccentSoftBrush" Color="#33FF8FAB" />
-                    <SolidColorBrush x:Key="JpAccentSecondaryBrush" Color="#B39DDB" />
+                    <!-- 强调：樱粉 -->
+                    <SolidColorBrush x:Key="JpAccentBrush" Color="#FF7FB0" />
+                    <SolidColorBrush x:Key="JpAccentSoftBrush" Color="#33FF7FB0" />
+                    <SolidColorBrush x:Key="JpAccentSecondaryBrush" Color="#C9A0DC" />
 
-                    <!-- 文字：柔和深灰，不用纯黑 -->
-                    <SolidColorBrush x:Key="JpTextBrush" Color="#3D3D4E" />
-                    <SolidColorBrush x:Key="JpSubtleTextBrush" Color="#8E8EA0" />
+                    <SolidColorBrush x:Key="JpTextBrush" Color="#4A3A44" />
+                    <SolidColorBrush x:Key="JpSubtleTextBrush" Color="#9A8490" />
 
-                    <!-- 标题栏 / 侧栏：几乎透明，让渐变透出来 -->
                     <SolidColorBrush x:Key="JpChromeBrush" Color="#40FFFFFF" />
-                    <SolidColorBrush x:Key="JpSelectionBrush" Color="#26FF8FAB" />
+                    <SolidColorBrush x:Key="JpSelectionBrush" Color="#2EFF7FB0" />
                 </ResourceDictionary>
 
                 <ResourceDictionary x:Key="Dark">
+                    <!-- 背景：夜樱粉紫（不是纯灰紫，带粉调） -->
                     <LinearGradientBrush x:Key="JpBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
-                        <GradientStop Color="#1A1620" Offset="0" />
-                        <GradientStop Color="#221A2E" Offset="0.55" />
-                        <GradientStop Color="#1E1822" Offset="1" />
+                        <GradientStop Color="#2A1622" Offset="0" />
+                        <GradientStop Color="#331A2E" Offset="0.5" />
+                        <GradientStop Color="#241322" Offset="1" />
                     </LinearGradientBrush>
 
-                    <SolidColorBrush x:Key="JpCardBrush" Color="#CC2A2433" />
-                    <SolidColorBrush x:Key="JpCardHoverBrush" Color="#DD332B3E" />
-                    <SolidColorBrush x:Key="JpCardStrokeBrush" Color="#33FF8FAB" />
+                    <SolidColorBrush x:Key="JpCardBrush" Color="#CC3A2434" />
+                    <SolidColorBrush x:Key="JpCardHoverBrush" Color="#DD452B3E" />
+                    <SolidColorBrush x:Key="JpCardStrokeBrush" Color="#40FF9EC4" />
 
-                    <SolidColorBrush x:Key="JpAccentBrush" Color="#FF9DB4" />
-                    <SolidColorBrush x:Key="JpAccentSoftBrush" Color="#33FF9DB4" />
-                    <SolidColorBrush x:Key="JpAccentSecondaryBrush" Color="#C3AEDC" />
+                    <!-- 强调：亮樱粉（暗底上更醒目） -->
+                    <SolidColorBrush x:Key="JpAccentBrush" Color="#FF8FBE" />
+                    <SolidColorBrush x:Key="JpAccentSoftBrush" Color="#33FF8FBE" />
+                    <SolidColorBrush x:Key="JpAccentSecondaryBrush" Color="#C9A0DC" />
 
-                    <SolidColorBrush x:Key="JpTextBrush" Color="#EDE9F2" />
-                    <SolidColorBrush x:Key="JpSubtleTextBrush" Color="#9E96AB" />
+                    <!-- 文字：粉白（原 #EDE9F2 偏灰，粉嫩化后偏粉） -->
+                    <SolidColorBrush x:Key="JpTextBrush" Color="#F8EAEF" />
+                    <SolidColorBrush x:Key="JpSubtleTextBrush" Color="#C4A6B8" />
 
-                    <SolidColorBrush x:Key="JpChromeBrush" Color="#33000000" />
-                    <SolidColorBrush x:Key="JpSelectionBrush" Color="#26FF9DB4" />
+                    <SolidColorBrush x:Key="JpChromeBrush" Color="#33FFFFFF" />
+                    <SolidColorBrush x:Key="JpSelectionBrush" Color="#2EFF8FBE" />
                 </ResourceDictionary>
 
             </ResourceDictionary.ThemeDictionaries>
 
-            <!-- 卡片：大圆角 + 柔和描边（日系的关键是圆角和留白） -->
+            <!-- 卡片：大圆角 + 粉描边（日系的关键是圆角与留白） -->
             <Style x:Key="CardStyle" TargetType="Border">
                 <Setter Property="Background" Value="{ThemeResource JpCardBrush}" />
                 <Setter Property="BorderBrush" Value="{ThemeResource JpCardStrokeBrush}" />
@@ -75,7 +74,6 @@
                 <Setter Property="Padding" Value="20" />
             </Style>
 
-            <!-- 页面标题：字距略松，日系常见的排版感 -->
             <Style x:Key="PageTitleStyle" TargetType="TextBlock">
                 <Setter Property="FontSize" Value="26" />
                 <Setter Property="FontWeight" Value="SemiBold" />
@@ -97,14 +95,13 @@
                 <Setter Property="Foreground" Value="{ThemeResource JpSubtleTextBrush}" />
             </Style>
 
-            <!-- 正文 -->
             <Style x:Key="BodyStyle" TargetType="TextBlock">
                 <Setter Property="FontSize" Value="13" />
                 <Setter Property="LineHeight" Value="22" />
                 <Setter Property="Foreground" Value="{ThemeResource JpTextBrush}" />
             </Style>
 
-            <!-- 强调按钮：樱粉填充、大圆角 -->
+            <!-- 主按钮：亮粉填充 -->
             <Style x:Key="JpAccentButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
                 <Setter Property="CornerRadius" Value="10" />
                 <Setter Property="Padding" Value="16,7" />
@@ -113,6 +110,7 @@
                 <Setter Property="BorderThickness" Value="0" />
             </Style>
 
+            <!-- 次按钮：柔粉底 -->
             <Style x:Key="JpButtonStyle" TargetType="Button">
                 <Setter Property="CornerRadius" Value="10" />
                 <Setter Property="Padding" Value="16,7" />
