@@ -284,6 +284,9 @@ public sealed class ChatAgent : IChatAgent
             reinject.AppendLine().AppendLine(capabilityNote);
         }
 
+        // 基础运行说明（发消息/表情/记忆）：以前在 persona.md 里，和人设混在一起
+        reinject.AppendLine().AppendLine(RuntimeGuideNote);
+
         // 人设守卫（第 20 项）：每次重注入都带，位置紧贴当前消息 ——
         // 长对话里人设会被上下文稀释，靠这一条把它拉回来。
         reinject.AppendLine().AppendLine(PersonaGuardNote);
@@ -556,6 +559,31 @@ public sealed class ChatAgent : IChatAgent
     /// 实测问题：被问「我们之前聊过什么」时，模型宁可编也不调 <c>search_history</c> ——
     /// 工具在那儿但没被用起来，所以要把「什么时候必须用」写清楚。
     /// </remarks>
+    /// <summary>
+    /// 基础运行说明（发消息 / 表情 / 记忆）。
+    /// </summary>
+    /// <remarks>
+    /// 这些内容**原本写在 <c>config/persona.md</c> 里**，导致"人设文件"里一半是操作说明、
+    /// 另一半才是角色设定 —— 用户填了角色也感觉不到效果（模型看到的主要是工具说明书）。
+    /// 现在操作说明固定在代码里，persona.md 只负责角色本身。
+    /// </remarks>
+    private const string RuntimeGuideNote = """
+        【怎么把话说出去】
+        - **必须调用 `send_message` 工具**，直接输出文本对方看不到
+        - 可以一次发多条，像真人把一句话分几条发；回复简短自然，别写小作文
+        - 不能也无需指定发给谁，会话是固定的
+
+        【怎么发表情】
+        1. 需要时先调 `list_faces`（不传关键词看常用，传关键词按名称/标签搜）
+        2. 把 `[表情:名字]` 写进消息里，例如：`哈哈哈[表情:笑哭]`
+        3. **单独一条只写 `[表情:名字]`** 会作为大表情发送（QQ 会自动播放特效）
+
+        【关于记忆】
+        - 上下文里可能出现「【之前对话的摘要】」「【可能相关的早期对话】」
+        - 它们是参考材料，不必逐条回应，但代表「你们之前确实聊过」
+        - 不要假装不记得，也不要生硬复述 —— 像真人那样自然接上
+        """;
+
     /// <summary>
     /// 工具使用指引（**强制语气**）。
     /// </summary>
