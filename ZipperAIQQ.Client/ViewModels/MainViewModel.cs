@@ -414,6 +414,10 @@ public partial class MainViewModel : ObservableObject
     private DispatcherQueueTimer? _timer;
     private bool _tickBusy;
     private string? _lastSessionId;
+    private int _tickCount;
+
+    /// <summary>当前显示的页面（决定 0.5s 心跳刷什么，避免所有接口一起刷）。</summary>
+    public string CurrentPage { get; set; } = "status";
 
     /// <summary>启动 0.5s 自动刷新（在 UI 线程调用一次即可）。</summary>
     public void StartAutoRefresh()
@@ -443,7 +447,13 @@ public partial class MainViewModel : ObservableObject
         _timer = null;
     }
 
-    /// <summary>一次刷新心跳：状态必刷，消息与审计按"有没有在看"决定。</summary>
+    /// <summary>
+    /// 一次刷新心跳（500ms 一拍）。
+    /// </summary>
+    /// <remarks>
+    /// **按页面分频**，不是所有接口一起刷（4 个接口 × 2 次/秒 纯属浪费）：
+    /// 数据页的统计 0.5s（用户要求的"统计数据实时"）；其余页面的数据 1~2s。
+    /// </remarks>
     private async Task TickAsync()
     {
         // 上一拍还没跑完就跳过 —— 0.5s 太密，慢请求不能堆积
@@ -460,10 +470,35 @@ public partial class MainViewModel : ObservableObject
                 return;   // 还没连接，别刷
             }
 
-            await LoadStatusCoreAsync().ConfigureAwait(true);
-            await RefreshMessagesIncrementalAsync().ConfigureAwait(true);
-            await RefreshAuditsIncrementalAsync().ConfigureAwait(true);
-            await RefreshStatsQuietAsync().ConfigureAwait(true);
+            _tickCount++;
+
+            // 统计：数据页 0.5s 一拍；别的页面 1s 一拍（让数字保持新鲜但不抢带宽）
+            if (CurrentPage == "data")
+            {
+                await RefreshStatsQuietAsync().ConfigureAwait(true);
+            }
+            else if (_tickCount % 2 == 0 && Stats is not null)
+            {
+                await RefreshStatsQuietAsync().ConfigureAwait(true);
+            }
+
+            // 消息：只有会话页才拉，1s
+            if (CurrentPage == "sessions" && _tickCount % 2 == 0)
+            {
+                await RefreshMessagesIncrementalAsync().ConfigureAwait(true);
+            }
+
+            // 审计：审计页 2s
+            if (CurrentPage == "audit" && _tickCount % 4 == 0)
+            {
+                await RefreshAuditsIncrementalAsync().ConfigureAwait(true);
+            }
+
+            // 状态：1s（很轻，任何页面都刷，保证连接状态是最新的）
+            if (_tickCount % 2 == 0)
+            {
+                await LoadStatusCoreAsync().ConfigureAwait(true);
+            }
         }
         catch
         {

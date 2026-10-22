@@ -142,6 +142,7 @@ public sealed partial class MainWindow : Window
         }
 
         Vm.SelectedNavTag = tag;
+        Vm.CurrentPage = tag;
 
         var page = tag switch
         {
