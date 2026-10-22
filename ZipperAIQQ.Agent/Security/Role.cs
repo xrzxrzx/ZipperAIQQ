@@ -61,4 +61,14 @@ public enum ToolCapability
     /// 而跨会话读是**穿透会话隔离**看所有聊天的内容。硬底线管理员，默认也只给管理员。
     /// </remarks>
     CrossSessionHistory,
+
+    /// <summary>改自己的资料（个性签名等）。</summary>
+    /// <remarks>写的是**自己的账号**，对外可见，但影响面限于"我这个人看起来什么样"。</remarks>
+    WriteProfile,
+
+    /// <summary>戳一戳别人。</summary>
+    /// <remarks>
+    /// 影响**别人**：会在他那边弹提示。滥用就是骚扰，所以比改签名更严（同样硬底线管理员）。
+    /// </remarks>
+    SendPoke,
 }

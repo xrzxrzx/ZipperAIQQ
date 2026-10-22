@@ -85,6 +85,64 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
         "get_version_info",
     };
 
+    /// <summary>
+    /// **写操作**白名单（比只读严格得多，且只能由有权限门禁的工具调到）。
+    /// </summary>
+    /// <remarks>
+    /// 目前只放两条最不容易造成后果的：改自己签名、戳一戳。
+    /// 退群 / 禁言 / 改群名片一律不放 —— 那些错了没法收拾。
+    /// </remarks>
+    private static readonly IReadOnlySet<string> WriteActionAllowlist = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "set_self_longnick",
+        "send_poke",
+    };
+
+    /// <summary>改自己的个性签名（NapCat <c>set_self_longnick</c>）。</summary>
+    /// <remarks>
+    /// 不走 <see cref="InvokeApiAsync"/> 的白名单 —— 那个是"模型可自主调用"的只读集合，
+    /// 写操作必须被**权限门禁**挡着，而不是开放给通用调用。
+    /// </remarks>
+    public async Task SetSignatureAsync(string text, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        await CallWriteActionAsync("set_self_longnick", new JsonObject
+        {
+            ["longNick"] = text,
+        }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>戳一戳（NapCat <c>send_poke</c>）。</summary>
+    public async Task SendPokeAsync(string userId, string? groupId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userId);
+
+        var args = new JsonObject
+        {
+            ["user_id"] = userId,
+        };
+
+        if (!string.IsNullOrWhiteSpace(groupId))
+        {
+            args["group_id"] = groupId;
+        }
+
+        await CallWriteActionAsync("send_poke", args, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>调用**写**操作（不在只读白名单里，但仍在允许集合内）。</summary>
+    private async Task CallWriteActionAsync(string action, JsonObject parameters, CancellationToken ct)
+    {
+        if (!WriteActionAllowlist.Contains(action))
+        {
+            throw new InvalidOperationException($"action「{action}」不在写操作白名单里。");
+        }
+
+        // 复用只读调用的底层管道（同样的 token + 超时策略），只是不检查只读白名单
+        await CallApiNodeAsync(action, parameters, ct).ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<ContactInfo>> GetFriendsAsync(CancellationToken ct = default)
     {
         var data = await CallApiNodeAsync("get_friend_list", null, ct).ConfigureAwait(false);

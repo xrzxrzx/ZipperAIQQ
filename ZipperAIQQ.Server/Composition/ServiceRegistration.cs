@@ -218,7 +218,8 @@ public static class ServiceRegistration
                 Logger = sp.GetRequiredService<ILogger>(),
             };
 
-            return new ChatAgentPool(chat => new ChatAgent(chat.SessionId, deps));
+            var configs = sp.GetRequiredService<Storage.Config.IConfigStore>();
+            return new ChatAgentPool(chat => new ChatAgent(chat.SessionId, deps, configs));
         });
 
         // ── 定时任务轮询（FR-14：数据库即队列，1 分钟精度，启动时补执行）──

@@ -46,6 +46,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly IMetricsStore _metrics;
     private readonly IEventBus _events;
     private readonly IPermissionGate _permissionGate;
+    private readonly Storage.Config.IConfigStore _configs;
     private readonly IRoleResolver _roles;
     private readonly WorkspacePathResolver _workspace;
     private readonly int _fileMaxBytes;
@@ -68,7 +69,8 @@ public sealed class ChatAgent : IChatAgent
     /// <summary>上次锁定锚点用的人设内容（用于检测"人设被改过"）。</summary>
     private string? _anchorPersonaSource;
 
-    public ChatAgent(string sessionId, ChatAgentDependencies deps)
+    public ChatAgent(string sessionId, ChatAgentDependencies deps,
+        Storage.Config.IConfigStore configs)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(deps);
@@ -85,6 +87,7 @@ public sealed class ChatAgent : IChatAgent
         _metrics = deps.Metrics;
         _events = deps.Events;
         _permissionGate = deps.PermissionGate;
+        _configs = configs;
         _roles = deps.Roles;
         _workspace = deps.Workspace;
         _fileMaxBytes = deps.FileMaxBytes;
@@ -531,6 +534,10 @@ public sealed class ChatAgent : IChatAgent
         if (_channel is Channel.IContactDirectory contacts)
         {
             tools.AddRange(ContactTools.Create(contacts));
+
+            // 写操作（改自己签名 / 戳别人）：同样是"通道支持才给"，
+            // 内部再按权限门禁逐个判断 —— 没权限就连工具都不给模型看
+            tools.AddRange(ProfileTools.Create(contacts, context, _permissionGate, _configs));
         }
 
         return tools;

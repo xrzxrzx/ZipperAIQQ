@@ -45,6 +45,26 @@ public interface IContactDirectory
     /// <summary>好友列表（用于「选择主人」这类配置）。</summary>
     Task<IReadOnlyList<ContactInfo>> GetFriendsAsync(CancellationToken ct = default);
 
+    // ────────────────────────────────────────────────────────────
+    //  写操作（**必须经权限门禁**，不能走通用的 InvokeApiAsync）
+    // ────────────────────────────────────────────────────────────
+    //  为什么单独列方法而不是加进 ActionAllowlist：
+    //  那个白名单是"模型可以自主调用"的只读集合，一旦把写操作塞进去，
+    //  等于给了模型一把「不经过门禁就能改我账号」的钥匙。
+
+    /// <summary>
+    /// 改自己的个性签名。
+    /// </summary>
+    /// <param name="text">签名内容（平台可能截断过长的）。</param>
+    Task SetSignatureAsync(string text, CancellationToken ct = default);
+
+    /// <summary>
+    /// 戳一戳某人。
+    /// </summary>
+    /// <param name="userId">目标账号。</param>
+    /// <param name="groupId">群号（群内戳需要；私聊留空）。</param>
+    Task SendPokeAsync(string userId, string? groupId, CancellationToken ct = default);
+
     /// <summary>群信息；查询失败返回 <c>null</c>。</summary>
     Task<GroupInfo?> GetGroupAsync(string groupId, CancellationToken ct = default);
 
