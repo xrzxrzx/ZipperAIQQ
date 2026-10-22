@@ -26,14 +26,17 @@ public sealed class SetGlobalPersonaAction : IApiAction
 
     private readonly ServerOptions _options;
     private readonly IConfigStore _configs;
+    private readonly IPersonaStore _personas;
 
-    public SetGlobalPersonaAction(ServerOptions options, IConfigStore configs)
+    public SetGlobalPersonaAction(ServerOptions options, IConfigStore configs, IPersonaStore personas)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(configs);
+        ArgumentNullException.ThrowIfNull(personas);
 
         _options = options;
         _configs = configs;
+        _personas = personas;
     }
 
     public string Name => "setGlobalPersona";
@@ -67,6 +70,13 @@ public sealed class SetGlobalPersonaAction : IApiAction
         }
 
         await File.WriteAllTextAsync(path, persona.Content, new UTF8Encoding(false), ct).ConfigureAwait(false);
+
+        // ⚠️ 关键：内存里的全局人设也要换掉，否则"写完再读"还是旧值
+        // （DefaultPersonaStore 的 _global 是构造时固定的）
+        if (_personas is DefaultPersonaStore store)
+        {
+            store.ReloadGlobal(persona);
+        }
 
         await _configs
             .AppendAuditAsync(

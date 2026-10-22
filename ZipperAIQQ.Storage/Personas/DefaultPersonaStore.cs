@@ -6,13 +6,21 @@ namespace ZipperAIQQ.Storage.Personas;
 /// 人设存储：会话级查表，全局回落文件。
 /// </summary>
 /// <remarks>
-/// **全局人设不走数据库**：它是部署时确定的一份，放文件里改完重启即可，
-/// 没必要为了"能改"引入一套管理界面。等客户端要编辑它时再考虑迁移。
+/// <para>
+/// **全局人设不走数据库**：它是部署时确定的一份文件（<c>config/persona.md</c>）。
+/// </para>
+/// <para>
+/// ⚠️ 但它**必须可重载** —— 客户端能改全局人设了（<c>setGlobalPersona</c>），
+/// 如果这里把文件内容钉死在构造函数里，改完文件后再读还是旧值
+/// （实测表现：客户端保存人设成功，重新读取又变回默认）。
+/// </para>
 /// </remarks>
 public sealed class DefaultPersonaStore : IPersonaStore
 {
     private readonly ISqliteDatabase _db;
-    private readonly Persona _global;
+
+    /// <summary>全局人设（可变：文件被改后由 <see cref="ReloadGlobal"/> 刷新）。</summary>
+    private Persona _global;
 
     public DefaultPersonaStore(ISqliteDatabase db, Persona global)
     {
@@ -21,6 +29,19 @@ public sealed class DefaultPersonaStore : IPersonaStore
 
         _db = db;
         _global = global;
+    }
+
+    /// <summary>
+    /// 用新内容替换内存里的全局人设。
+    /// </summary>
+    /// <remarks>
+    /// 由 <c>setGlobalPersona</c> 写完文件后调用 —— 保证「写完立刻能读到」，
+    /// 不用等重启。
+    /// </remarks>
+    public void ReloadGlobal(Persona persona)
+    {
+        ArgumentNullException.ThrowIfNull(persona);
+        _global = persona;
     }
 
     public async Task<Persona> GetAsync(
