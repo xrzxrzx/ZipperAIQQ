@@ -82,6 +82,23 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
 
     var app = builder.Build();
 
+    // 第 17 项：把库里记的主人灌进权限解析器（否则重启后主人身份丢失）
+    try
+    {
+        var settingsStore = app.Services.GetRequiredService<ZipperAIQQ.Storage.Settings.IRuntimeSettingsStore>();
+        var ownerId = await settingsStore.GetAsync(ZipperAIQQ.Server.Api.Handlers.GetOwnerAction.OwnerKey);
+        if (!string.IsNullOrWhiteSpace(ownerId) &&
+            app.Services.GetRequiredService<ZipperAIQQ.Agent.Security.IRoleResolver>() is ZipperAIQQ.Agent.Security.ConfiguredRoleResolver resolver)
+        {
+            resolver.SetOwner(ownerId);
+            Log.Logger.Information("主人已加载：{Owner}", ownerId);
+        }
+    }
+    catch (Exception ex)
+    {
+        Log.Logger.Warning(ex, "加载主人失败（不影响启动）");
+    }
+
     // 强制解析鉴权策略：非 loopback 又没 token → 这里直接抛，拒绝启动（不裸奔）
     _ = app.Services.GetRequiredService<HttpAccessPolicy>();
 

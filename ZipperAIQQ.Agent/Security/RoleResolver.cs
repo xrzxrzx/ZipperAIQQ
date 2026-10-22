@@ -20,6 +20,9 @@ public sealed class ConfiguredRoleResolver : IRoleResolver
     private readonly HashSet<string> _admins;
     private readonly HashSet<string> _toolWhitelist;
 
+    /// <summary>主人（第 17 项）：启动时读库、运行时由 API 改写。</summary>
+    private volatile string? _owner;
+
     public ConfiguredRoleResolver(IEnumerable<string> admins, IEnumerable<string> toolWhitelist)
     {
         ArgumentNullException.ThrowIfNull(admins);
@@ -29,11 +32,24 @@ public sealed class ConfiguredRoleResolver : IRoleResolver
         _toolWhitelist = toolWhitelist.Where(id => !string.IsNullOrWhiteSpace(id)).ToHashSet(StringComparer.Ordinal);
     }
 
+    /// <summary>设置主人（<c>null</c> 表示没设）。</summary>
+    public void SetOwner(string? userId) =>
+        _owner = string.IsNullOrWhiteSpace(userId) ? null : userId.Trim();
+
+    /// <summary>当前主人（没设为 <c>null</c>）。</summary>
+    public string? Owner => _owner;
+
     public Role Resolve(string? userId)
     {
         if (string.IsNullOrWhiteSpace(userId))
         {
             return Role.Normal;
+        }
+
+        // 主人优先于一切（含管理员名单）
+        if (_owner is { Length: > 0 } owner && string.Equals(userId, owner, StringComparison.Ordinal))
+        {
+            return Role.Owner;
         }
 
         if (_admins.Contains(userId))

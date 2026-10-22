@@ -67,6 +67,10 @@ public static class OneBotEventMapper
             UserId = GetString(senderObj ?? obj, "user_id") ?? GetString(obj, "user_id") ?? "unknown",
             GroupCard = GetNonEmpty(senderObj, "card"),
             Nickname = GetNonEmpty(senderObj, "nickname"),
+            // 群内身份（第 18 项）：OneBot 群消息的 sender 里带 role / title。
+            // 有了它模型才能分清「群主 / 群管理 / 普通成员」，与客户端配的管理员是两回事。
+            GroupRole = isGroup ? GetNonEmpty(senderObj, "role") : null,
+            GroupTitle = isGroup ? GetNonEmpty(senderObj, "title") : null,
             // 私聊能发消息 → 对方是好友；群聊里是否为好友**事件里没有**，需另行查询。
             IsFriend = !isGroup,
         };
