@@ -7,6 +7,128 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- ═══════════════════════════════════════════════
+                 日系主题（参考 NapCat WebUI 的浅色卡片骨架 + 和风配色）
+                 浅色：樱白渐变底 + 半透白卡片 + 樱粉强调
+                 深色：夜紫底 + 深色卡片
+                 ═══════════════════════════════════════════════ -->
+            <ResourceDictionary.ThemeDictionaries>
+
+                <ResourceDictionary x:Key="Light">
+                    <!-- 页面背景：极浅的樱粉 → 藤紫 渐变 -->
+                    <LinearGradientBrush x:Key="JpBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#FFF8FB" Offset="0" />
+                        <GradientStop Color="#F7F1FF" Offset="0.55" />
+                        <GradientStop Color="#FFF3F7" Offset="1" />
+                    </LinearGradientBrush>
+
+                    <!-- 卡片：半透白，浮在渐变上 -->
+                    <SolidColorBrush x:Key="JpCardBrush" Color="#E6FFFFFF" />
+                    <SolidColorBrush x:Key="JpCardHoverBrush" Color="#F2FFFFFF" />
+                    <SolidColorBrush x:Key="JpCardStrokeBrush" Color="#22FF8FAB" />
+
+                    <!-- 强调色：樱粉 / 藤紫 -->
+                    <SolidColorBrush x:Key="JpAccentBrush" Color="#FF8FAB" />
+                    <SolidColorBrush x:Key="JpAccentSoftBrush" Color="#33FF8FAB" />
+                    <SolidColorBrush x:Key="JpAccentSecondaryBrush" Color="#B39DDB" />
+
+                    <!-- 文字：柔和深灰，不用纯黑 -->
+                    <SolidColorBrush x:Key="JpTextBrush" Color="#3D3D4E" />
+                    <SolidColorBrush x:Key="JpSubtleTextBrush" Color="#8E8EA0" />
+
+                    <!-- 标题栏 / 侧栏：几乎透明，让渐变透出来 -->
+                    <SolidColorBrush x:Key="JpChromeBrush" Color="#40FFFFFF" />
+                    <SolidColorBrush x:Key="JpSelectionBrush" Color="#26FF8FAB" />
+                </ResourceDictionary>
+
+                <ResourceDictionary x:Key="Dark">
+                    <LinearGradientBrush x:Key="JpBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#1A1620" Offset="0" />
+                        <GradientStop Color="#221A2E" Offset="0.55" />
+                        <GradientStop Color="#1E1822" Offset="1" />
+                    </LinearGradientBrush>
+
+                    <SolidColorBrush x:Key="JpCardBrush" Color="#CC2A2433" />
+                    <SolidColorBrush x:Key="JpCardHoverBrush" Color="#DD332B3E" />
+                    <SolidColorBrush x:Key="JpCardStrokeBrush" Color="#33FF8FAB" />
+
+                    <SolidColorBrush x:Key="JpAccentBrush" Color="#FF9DB4" />
+                    <SolidColorBrush x:Key="JpAccentSoftBrush" Color="#33FF9DB4" />
+                    <SolidColorBrush x:Key="JpAccentSecondaryBrush" Color="#C3AEDC" />
+
+                    <SolidColorBrush x:Key="JpTextBrush" Color="#EDE9F2" />
+                    <SolidColorBrush x:Key="JpSubtleTextBrush" Color="#9E96AB" />
+
+                    <SolidColorBrush x:Key="JpChromeBrush" Color="#33000000" />
+                    <SolidColorBrush x:Key="JpSelectionBrush" Color="#26FF9DB4" />
+                </ResourceDictionary>
+
+            </ResourceDictionary.ThemeDictionaries>
+
+            <!-- 卡片：大圆角 + 柔和描边（日系的关键是圆角和留白） -->
+            <Style x:Key="CardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource JpCardBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource JpCardStrokeBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="16" />
+                <Setter Property="Padding" Value="20" />
+            </Style>
+
+            <!-- 页面标题：字距略松，日系常见的排版感 -->
+            <Style x:Key="PageTitleStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="26" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="CharacterSpacing" Value="20" />
+                <Setter Property="Foreground" Value="{ThemeResource JpTextBrush}" />
+                <Setter Property="Margin" Value="0,0,0,2" />
+            </Style>
+
+            <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="CharacterSpacing" Value="30" />
+                <Setter Property="Foreground" Value="{ThemeResource JpSubtleTextBrush}" />
+                <Setter Property="Margin" Value="0,0,0,8" />
+            </Style>
+
+            <Style x:Key="CaptionStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="Foreground" Value="{ThemeResource JpSubtleTextBrush}" />
+            </Style>
+
+            <!-- 正文 -->
+            <Style x:Key="BodyStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="LineHeight" Value="22" />
+                <Setter Property="Foreground" Value="{ThemeResource JpTextBrush}" />
+            </Style>
+
+            <!-- 强调按钮：樱粉填充、大圆角 -->
+            <Style x:Key="JpAccentButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="Padding" Value="16,7" />
+                <Setter Property="Background" Value="{ThemeResource JpAccentBrush}" />
+                <Setter Property="Foreground" Value="White" />
+                <Setter Property="BorderThickness" Value="0" />
+            </Style>
+
+            <Style x:Key="JpButtonStyle" TargetType="Button">
+                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="Padding" Value="16,7" />
+                <Setter Property="Background" Value="{ThemeResource JpAccentSoftBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource JpTextBrush}" />
+                <Setter Property="BorderThickness" Value="0" />
+            </Style>
+
+            <Style x:Key="ToolbarIconButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="8" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="MinWidth" Value="32" />
+                <Setter Property="Height" Value="32" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
