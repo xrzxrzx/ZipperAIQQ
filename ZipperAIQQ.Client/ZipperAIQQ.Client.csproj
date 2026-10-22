@@ -6,6 +6,8 @@
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>ZipperAIQQ.Client</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- exe 文件本身的图标（资源管理器 / 任务栏 / 快捷方式都会用它） -->
+    <ApplicationIcon>Assets\avatar.ico</ApplicationIcon>
     <!-- 必须同时支持 AnyCPU 与 x64：
          VS 的解决方案配置默认是 Any CPU，项目只声明 x64 时会被判定为「不构建」，
          表现就是「无法启动调试 / 无法启动启动项目」 -->

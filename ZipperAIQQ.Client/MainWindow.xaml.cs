@@ -24,11 +24,11 @@ public sealed partial class MainWindow : Window
         _appWindow = AppWindow;
         InitializeTitleBar();
 
-        // 任务栏/Alt+Tab 图标也用头像（unpackaged 下用输出目录里的文件）
-        var avatar = Path.Combine(AppContext.BaseDirectory, "Assets", "avatar.png");
-        if (File.Exists(avatar))
+        // 任务栏/Alt+Tab 图标也用头像（.ico 多尺寸比 png 稳）
+        var icon = Path.Combine(AppContext.BaseDirectory, "Assets", "avatar.ico");
+        if (File.Exists(icon))
         {
-            _appWindow.SetIcon(avatar);
+            _appWindow.SetIcon(icon);
         }
 
         // 初始窗口：按屏幕工作区取 78% × 82%，并居中（以前固定 1200×820 偏小）
