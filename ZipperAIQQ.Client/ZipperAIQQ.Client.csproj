@@ -6,7 +6,10 @@
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>ZipperAIQQ.Client</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Platforms>x64</Platforms>
+    <!-- 必须同时支持 AnyCPU 与 x64：
+         VS 的解决方案配置默认是 Any CPU，项目只声明 x64 时会被判定为「不构建」，
+         表现就是「无法启动调试 / 无法启动启动项目」 -->
+    <Platforms>AnyCPU;x64</Platforms>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <!-- WinUI3 需要：UseWinUI 打开 XAML 编译；unpackaged 免 MSIX -->
     <UseWinUI>true</UseWinUI>
@@ -16,6 +19,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- WinUI3 生成器需要显式指定，否则 XAML 类找不到 -->
     <EnableMsixTooling>true</EnableMsixTooling>
+  </PropertyGroup>
+
+  <!-- AnyCPU 时固定 RID：WinUI3 的 apphost 需要具体架构 -->
+  <PropertyGroup Condition="'$(Platform)' == 'AnyCPU'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
 
   <ItemGroup>
