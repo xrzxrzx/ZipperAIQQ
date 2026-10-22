@@ -159,7 +159,7 @@ public sealed class RuntimeConfigService
             if (!Enum.TryParse<LlmApiKind>(raw, ignoreCase: true, out var parsed))
             {
                 throw new ApiException(ApiResponse.BadRequest,
-                    $"endpoint.apiKind 只能是 {nameof(LlmApiKind.Responses)} 或 {nameof(LlmApiKind.ChatCompletions)}（也接受 Chat 作为别名）。");
+                    $"endpoint.apiKind 只能是 {nameof(LlmApiKind.Responses)} / {nameof(LlmApiKind.ChatCompletions)} / {nameof(LlmApiKind.Decisions)}（也接受 Chat 作为别名）。");
             }
 
             apiKind = (int)parsed;

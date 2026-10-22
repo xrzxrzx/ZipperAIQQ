@@ -243,6 +243,10 @@ public sealed class ChatAgent : IChatAgent
             .GetAsync(request.Chat.Platform, request.Chat.Type.ToString(), request.Chat.Id, ct)
             .ConfigureAwait(false);
 
+        // 人设正文 + 名字前缀：只给【形象】/【性格】时模型不知道自己叫什么，
+        // 会影响「我是谁」的回答（实测它自己编了个名字）。
+        var personaText = BuildPersonaText(persona);
+
         // 锚点：首次锁定后**永不改动**，保证「最初设定」一直在最前方
         // 锚点 = **首次的人设**，之后固定在最前方，防止长对话把人设冲淡。
 
@@ -250,13 +254,13 @@ public sealed class ChatAgent : IChatAgent
 
         // 重注入里是新的人设，两条 system 互相打架，模型通常听第一条（实测：改了人设像没生效）。
 
-        if (_anchorPersona is null || !string.Equals(_anchorPersonaSource, persona.Content, StringComparison.Ordinal))
+        if (_anchorPersona is null || !string.Equals(_anchorPersonaSource, personaText, StringComparison.Ordinal))
 
         {
 
-            _anchorPersona = persona.Content;
+            _anchorPersona = personaText;
 
-            _anchorPersonaSource = persona.Content;
+            _anchorPersonaSource = personaText;
 
             _logger.Information("人设已刷新（会话 {SessionId}）：{Name}", SessionId, persona.Name);
 
@@ -266,7 +270,7 @@ public sealed class ChatAgent : IChatAgent
         // 摘要并进这里而不是单独占一条 system —— D4 要求人设 system 恰好两条，
         // 多一条会让人分不清哪个才是"角色设定"。
         var summary = await _summaryStore.GetAsync(SessionId, ct).ConfigureAwait(false);
-        var reinject = new StringBuilder(persona.Content);
+        var reinject = new StringBuilder(personaText);
         if (summary is not null && !string.IsNullOrWhiteSpace(summary.Summary))
         {
             reinject.AppendLine().AppendLine()
@@ -567,6 +571,26 @@ public sealed class ChatAgent : IChatAgent
     /// 另一半才是角色设定 —— 用户填了角色也感觉不到效果（模型看到的主要是工具说明书）。
     /// 现在操作说明固定在代码里，persona.md 只负责角色本身。
     /// </remarks>
+    /// <summary>
+    /// 人设正文 + 名字前缀。
+    /// </summary>
+    /// <remarks>
+    /// 只给【形象】/【性格】时，模型不知道自己叫什么 —— 实测它自己编了一个。
+    /// 名字是角色的最低限度信息，必须显式告诉它。
+    /// </remarks>
+    private static string BuildPersonaText(Persona persona)
+    {
+        var name = persona.Name?.Trim();
+
+        // "persona" 是全局文件的默认名，不是真名，别写进 system
+        if (string.IsNullOrWhiteSpace(name) || name.Equals("persona", StringComparison.OrdinalIgnoreCase))
+        {
+            return persona.Content;
+        }
+
+        return $"你的名字是「{name}」。别人问你是谁就回答这个。\n\n{persona.Content}";
+    }
+
     private const string RuntimeGuideNote = """
         【怎么把话说出去】
         - **必须调用 `send_message` 工具**，直接输出文本对方看不到

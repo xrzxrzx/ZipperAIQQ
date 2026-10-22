@@ -83,6 +83,7 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, SetBehaviorAction>();
         services.AddSingleton<IApiAction, GetPersonaAction>();
         services.AddSingleton<IApiAction, SetPersonaAction>();
+        services.AddSingleton<IApiAction, SetGlobalPersonaAction>();
         services.AddSingleton<IApiAction, GetOwnerAction>();
         services.AddSingleton<IApiAction, SetOwnerAction>();
         services.AddSingleton<IApiAction, ProbeNapcatAction>();
@@ -93,6 +94,11 @@ public static class ServiceRegistration
 
         // ── M2-E：回复触发模式（FR-11）：every / mention / jev（判断失败降级 mention）──
         services.AddSingleton<IRuntimeSettingsStore, SqliteRuntimeSettingsStore>();
+        // decisions 模型（Jev）判断客户端：OpenRouter /api/alpha/decisions
+        services.AddHttpClient();
+        services.AddSingleton(sp => new DecisionsJudgeClient(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(DecisionsJudgeClient)),
+            sp.GetRequiredService<Serilog.ILogger>()));
         services.AddSingleton<IReplyModeDecider, ReplyModeDecider>();
 
         // ── M2-E：通知落库 + 可配置响应（FR-18，默认只记录）──

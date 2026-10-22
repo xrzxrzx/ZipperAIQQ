@@ -61,6 +61,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
     private readonly IMetricsStore _metrics;
     private readonly IMessageStore _messages;
     private readonly IPersonaStore _personas;
+    private readonly DecisionsJudgeClient _decisions;
     private readonly ILogger _logger;
 
     // judge 客户端缓存：端点名 + 更新时间变了才重建（避免每次判断都 new HttpClient）
@@ -74,6 +75,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         IMetricsStore metrics,
         IMessageStore messages,
         IPersonaStore personas,
+        DecisionsJudgeClient decisions,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -91,6 +93,8 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         _messages = messages;
         _personas = personas;
         _logger = logger;
+
+        _decisions = decisions;
     }
 
     public async Task<ReplyMode> GetModeAsync(string sessionId, CancellationToken ct = default)
@@ -153,11 +157,24 @@ public sealed class ReplyModeDecider : IReplyModeDecider
 
     private async Task<bool> JudgeAsync(IncomingMessage message, string selfId, CancellationToken ct)
     {
-        var client = await GetJudgeClientAsync(ct).ConfigureAwait(false);
-        if (client is null)
+        var judge = await GetJudgeAsync(ct).ConfigureAwait(false);
+        if (judge is null)
         {
             // 11.4：没配 judge 端点 → 降级 mention
             _logger.Warning("jev 模式没有可用的 Judge 端点，降级为 mention");
+            return IsMentioned(message, selfId);
+        }
+
+        // decisions 模型（Jev 这类）走专用接口：它不接受 chat/completions
+        if (judge.Value.Endpoint.ApiKind == LlmApiKind.Decisions)
+        {
+            return await JudgeWithDecisionsAsync(judge.Value, message, ct).ConfigureAwait(false);
+        }
+
+        var client = judge.Value.Client;
+        if (client is null)
+        {
+            _logger.Warning("judge 端点 {Name} 没有可用的 chat 客户端，降级为 mention", judge.Value.Endpoint.Name);
             return IsMentioned(message, selfId);
         }
 
@@ -276,7 +293,10 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         return sb.ToString();
     }
 
-    private async Task<IChatClient?> GetJudgeClientAsync(CancellationToken ct)
+    /// <summary>judge 端点的解析结果（端点 + 明文 key + 可选的 chat 客户端）。</summary>
+    private readonly record struct JudgeBinding(LlmEndpoint Endpoint, string ApiKey, IChatClient? Client);
+
+    private async Task<JudgeBinding?> GetJudgeAsync(CancellationToken ct)
     {
         var roles = await _configs.ListRolesAsync(ct).ConfigureAwait(false);
         var judgeRole = roles.FirstOrDefault(r => r.Role.Equals("Judge", StringComparison.OrdinalIgnoreCase));
@@ -291,12 +311,6 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             return null;
         }
 
-        var version = $"{endpoint.Name}|{endpoint.UpdatedAt.ToUnixTimeMilliseconds()}";
-        if (version == _judgeVersion && _judgeClient is not null)
-        {
-            return _judgeClient;
-        }
-
         var key = _protector.Unprotect(endpoint.KeyCipher);
         if (string.IsNullOrEmpty(key))
         {
@@ -304,20 +318,102 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             return null;
         }
 
+        var llm = new LlmEndpoint(endpoint.Name, endpoint.BaseUrl, endpoint.Model, (LlmApiKind)endpoint.ApiKind);
+
+        // decisions 模型（Jev）不走 chat 客户端：交给 DecisionsJudgeClient
+        if (llm.ApiKind == LlmApiKind.Decisions)
+        {
+            _logger.Debug("Judge 端点 {Name} 是 decisions 模型（{Model}）", endpoint.Name, endpoint.Model);
+            return new JudgeBinding(llm, key, null);
+        }
+
+        var version = $"{endpoint.Name}|{endpoint.UpdatedAt.ToUnixTimeMilliseconds()}";
+        if (version == _judgeVersion && _judgeClient is not null)
+        {
+            return new JudgeBinding(llm, key, _judgeClient);
+        }
+
         try
         {
-            _judgeClient = ChatClientFactory.Create(
-                new LlmEndpoint(endpoint.Name, endpoint.BaseUrl, endpoint.Model, (LlmApiKind)endpoint.ApiKind),
-                key);
+            _judgeClient = ChatClientFactory.Create(llm, key);
             _judgeVersion = version;
-            _logger.Information("Judge 客户端已就绪：端点={Name} 模型={Model}", endpoint.Name, endpoint.Model);
-            return _judgeClient;
+            _logger.Information("Judge 客户端已就绪：端点={Name} 模型={Model} 形态={Kind}",
+                endpoint.Name, endpoint.Model, llm.ApiKind);
+            return new JudgeBinding(llm, key, _judgeClient);
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "创建 Judge 客户端失败（端点 {Name}）", endpoint.Name);
             return null;
         }
+    }
+
+    /// <summary>用 Decisions API（Jev）判断该不该回。</summary>
+    private async Task<bool> JudgeWithDecisionsAsync(JudgeBinding judge, IncomingMessage message, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(JudgeTimeout);
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var (personaText, recent) = await BuildDecisionsContextAsync(message, ct).ConfigureAwait(false);
+
+            var (shouldReply, probability) = await _decisions
+                .JudgeAsync(judge.Endpoint, judge.ApiKey, personaText, recent, message.PlainText, cts.Token)
+                .ConfigureAwait(false);
+
+            sw.Stop();
+            await RecordAsync(message.Chat.SessionId, sw.Elapsed.TotalMilliseconds, shouldReply, ct).ConfigureAwait(false);
+
+            _logger.Information("JEV(decisions) 判断：{Result}（概率 {P:F2}，{Elapsed:F0}ms，会话 {SessionId}）",
+                shouldReply ? "回" : "不回", probability, sw.Elapsed.TotalMilliseconds, message.Chat.SessionId);
+
+            return shouldReply;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            _logger.Warning(ex, "JEV(decisions) 判断失败，降级为 mention（会话 {SessionId}）", message.Chat.SessionId);
+            await RecordDegradeAsync(message.Chat.SessionId, ct).ConfigureAwait(false);
+            return IsMentioned(message, string.Empty);
+        }
+    }
+
+    /// <summary>decisions 用的上下文：人设 + 最近几条对话。</summary>
+    private async Task<(string? Persona, IReadOnlyList<string> Recent)> BuildDecisionsContextAsync(
+        IncomingMessage message,
+        CancellationToken ct)
+    {
+        var persona = await _personas
+            .GetAsync(message.Chat.Platform, message.Chat.Type.ToString(), message.Chat.Id, ct)
+            .ConfigureAwait(false);
+
+        var recent = new List<string>();
+        try
+        {
+            var history = await _messages
+                .GetRecentAsync(message.Chat.SessionId, 6, ct)
+                .ConfigureAwait(false);
+
+            foreach (var m in history)
+            {
+                var who = m.IsOutgoing ? "我" : "对方";
+                var txt = m.Message.PlainText.Replace('\n', ' ').Trim();
+                if (txt.Length == 0)
+                {
+                    continue;
+                }
+
+                recent.Add($"{who}：{(txt.Length > 80 ? txt[..80] + "…" : txt)}");
+            }
+        }
+        catch
+        {
+            // 历史取不到不影响判断
+        }
+
+        return (persona.Content, recent);
     }
 
     /// <summary>

@@ -50,7 +50,13 @@ internal static class PersonaHandlerHelper
             !payload.TryGetProperty("sessionId", out var element) ||
             element.GetString() is not { Length: > 3 } sessionId)
         {
-            throw new ApiException(ApiResponse.BadRequest, "payload 需要 sessionId（如 qq:p123456）。");
+            throw new ApiException(ApiResponse.BadRequest, "payload 需要 sessionId（如 qq:p123456），或 \"global\" 表示全局人设。");
+        }
+
+        // "global" = 读全局人设：给一组查不到会话级记录的 key，GetAsync 自然回落全局
+        if (string.Equals(sessionId, "global", StringComparison.OrdinalIgnoreCase))
+        {
+            return (string.Empty, string.Empty, string.Empty, "global");
         }
 
         var parts = sessionId.Split(':', 2);
