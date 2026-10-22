@@ -492,9 +492,20 @@ public sealed class ModeCommand : ICommand
 
         if (string.IsNullOrWhiteSpace(args))
         {
-            var current = await _settings.GetAsync(key, ct).ConfigureAwait(false);
-            var shown = string.IsNullOrWhiteSpace(current) ? "（继承全局默认）" : current;
-            return $"本会话回复模式：{shown}\n用法：`/mode every|mention|jev`";
+            // 坑（2026-10-22 实测）：全局设了 jev 却被本会话的旧覆盖顶掉，
+            // 人只会看到"配置对了行为不对"。所以这里**必须**把两级都摊开。
+            var sessionValue = await _settings.GetAsync(key, ct).ConfigureAwait(false);
+            var globalValue = await _settings.GetAsync("replymode.default", ct).ConfigureAwait(false);
+
+            var effective = sessionValue ?? globalValue ?? "Every";
+            var source = sessionValue is not null
+                ? "本会话单独设置（会覆盖全局）"
+                : "继承全局默认";
+
+            return $"本会话回复模式：**{effective}**\n" +
+                   $"· 来源：{source}\n" +
+                   $"· 全局默认：{globalValue ?? "Every"}\n" +
+                   "用法：`/mode every|mention|jev`（只改本会话；要改全局请到客户端「配置 → 行为设置」）";
         }
 
         if (!Enum.TryParse<Agent.ReplyMode>(args.Trim(), ignoreCase: true, out var mode))
