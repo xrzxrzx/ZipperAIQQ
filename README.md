@@ -77,9 +77,29 @@ dotnet publish ZipperAIQQ.Server/ZipperAIQQ.Server.csproj \
 
 | 文件 / 目录 | 用途 | 缺了会怎样 |
 |---|---|---|
-| `temp/bge-small-zh-v1.5/` | 本地向量模型（约 23MB，`.gitignore` 排除） | **启动直接崩**（`找不到 embedding 模型`） |
+| `temp/bge-small-zh-v1.5/` | 本地向量模型（约 24MB，**不入库**） | **启动直接崩**（`找不到 embedding 模型`） |
 | `config/faces.qq.json` | 表情表 | 表情发不出去（变成方括号文字） |
 | `config/persona.md` | 全局人设 | 用兜底人设 |
+
+#### 向量模型怎么来
+
+模型是 [**BAAI/bge-small-zh-v1.5**](https://huggingface.co/BAAI/bge-small-zh-v1.5)（**MIT 许可**，可商用可分发），
+但要的是 **ONNX INT8 量化版**，所以不直接随仓库分发（二进制会永久留在 git 历史）：
+
+```bash
+# 一行生成（需要 Python 3.10+；会装 optimum + onnxruntime，首次几百 MB）
+pip install "optimum[onnxruntime]" transformers
+optimum-cli export onnx --model BAAI/bge-small-zh-v1.5 --task feature-extraction --quantize temp/bge-small-zh-v1.5
+```
+
+或者用仓库里的脚本（多一层环境检查）：
+
+```powershell
+.\scripts\build-embedding-model.ps1
+```
+
+产物里必须包含 `model_quantized.onnx`（约 24MB）+ 三个 tokenizer/config 文件。
+访问不了 HuggingFace 时，可从 [ModelScope](https://www.modelscope.cn/models/AI-ModelScope/bge-small-zh-v1.5) 获取原始模型后再导出。
 
 ### 3. 写配置
 
