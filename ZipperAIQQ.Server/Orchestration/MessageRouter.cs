@@ -24,6 +24,8 @@ public sealed class MessageRouter : BackgroundService
     private readonly MemoryRetriever _retriever;
     private readonly Commands.CommandRouter _commands;
     private readonly Agent.Security.IRoleResolver _roles;
+    private readonly Agent.IReplyModeDecider _replyModes;
+    private readonly Configuration.ServerOptions _options;
     private readonly ILogger _logger;
 
     public MessageRouter(
@@ -33,6 +35,8 @@ public sealed class MessageRouter : BackgroundService
         MemoryRetriever retriever,
         Commands.CommandRouter commands,
         Agent.Security.IRoleResolver roles,
+        Agent.IReplyModeDecider replyModes,
+        Configuration.ServerOptions options,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -41,6 +45,8 @@ public sealed class MessageRouter : BackgroundService
         ArgumentNullException.ThrowIfNull(retriever);
         ArgumentNullException.ThrowIfNull(commands);
         ArgumentNullException.ThrowIfNull(roles);
+        ArgumentNullException.ThrowIfNull(replyModes);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
@@ -49,6 +55,8 @@ public sealed class MessageRouter : BackgroundService
         _retriever = retriever;
         _commands = commands;
         _roles = roles;
+        _replyModes = replyModes;
+        _options = options;
         _logger = logger;
     }
 
@@ -127,10 +135,16 @@ public sealed class MessageRouter : BackgroundService
             return;
         }
 
-        // ② M1-B 只响应私聊
-        if (msg.Chat.Type != ChatType.Private)
+        // ③ 回复触发模式（FR-11）：every / mention / jev
+        //    ⚠️ 群聊不再硬性跳过 —— 由模式决定（mention 只在被 @ 时回）。
+        //    jev 判断失败会**降级为 mention**，不会阻塞、不会丢消息。
+        var mode = await _replyModes
+            .GetModeAsync(msg.Chat.SessionId, ct)
+            .ConfigureAwait(false);
+
+        if (!await _replyModes.ShouldReplyAsync(msg, _options.SelfId ?? string.Empty, ct).ConfigureAwait(false))
         {
-            _logger.Debug("群聊消息 #{Id} 已落库（M1-B 暂不回复群聊）", id);
+            _logger.Debug("回复模式 {Mode}：跳过 #{Id}（会话 {Session}）", mode, id, msg.Chat.SessionId);
             return;
         }
 

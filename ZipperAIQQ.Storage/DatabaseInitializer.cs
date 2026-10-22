@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 9;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -54,6 +54,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, CallMetricsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, ScheduleTasksTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, ConfigTables, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, RuntimeSettingsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -349,5 +350,18 @@ public sealed class DatabaseInitializer
         );
 
         CREATE INDEX IF NOT EXISTS IX_AuditLog_At ON AuditLog (AtMs);
+        """;
+
+    /// <summary>
+    /// 运行期设置（M2-E）：回复模式这类"改完要立即生效"的小配置。
+    /// </summary>
+    /// <remarks>
+    /// 键约定：<c>replymode.default</c>（全局）、<c>replymode:{sessionId}</c>（每聊天覆盖）。
+    /// </remarks>
+    private const string RuntimeSettingsTable = """
+        CREATE TABLE IF NOT EXISTS RuntimeSettings (
+            Key   TEXT PRIMARY KEY,
+            Value TEXT NOT NULL
+        );
         """;
 }

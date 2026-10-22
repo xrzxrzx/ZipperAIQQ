@@ -80,6 +80,14 @@ public sealed record ServerOptions
     /// </remarks>
     public string DataProtectionKeysPath { get; init; } = "./data/keys";
 
+    /// <summary>
+    /// 机器人自身账号（mention 模式判断"@ 的是不是自己"）。
+    /// </summary>
+    /// <remarks>
+    /// 留空时：mention 模式只回私聊（群聊里没法判断 @ 指向谁，宁可保守）。
+    /// </remarks>
+    public string? SelfId { get; init; }
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;
@@ -161,6 +169,7 @@ public sealed record ServerOptions
             HttpAddress = Optional("ZIPPER_HTTP_ADDR") ?? "127.0.0.1:5180",
             HttpToken = Optional("ZIPPER_HTTP_TOKEN"),
             DataProtectionKeysPath = Optional("ZIPPER_DP_KEYS") ?? "./data/keys",
+            SelfId = Optional("ZIPPER_SELF_ID"),
 
             SendIntervalMs = IntOrDefault("ZIPPER_SEND_INTERVAL_MS", 300),
             MaxConsecutive = IntOrDefault("ZIPPER_MAX_CONSECUTIVE", 10),

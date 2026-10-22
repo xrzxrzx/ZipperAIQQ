@@ -18,8 +18,10 @@ using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Orchestration;
+using ZipperAIQQ.Server.Reply;
 using ZipperAIQQ.Server.Scheduler;
 using ZipperAIQQ.Storage.Config;
+using ZipperAIQQ.Storage.Settings;
 using ZipperAIQQ.Storage.Database;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
@@ -74,6 +76,10 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, GetAuditAction>();
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
+
+        // ── M2-E：回复触发模式（FR-11）：every / mention / jev（判断失败降级 mention）──
+        services.AddSingleton<IRuntimeSettingsStore, SqliteRuntimeSettingsStore>();
+        services.AddSingleton<IReplyModeDecider, ReplyModeDecider>();
 
         // ── M2-C：命令系统（新增命令 = 新增一个类 + 这里加一行）──
         services.AddSingleton<ICommand, HelpCommand>();

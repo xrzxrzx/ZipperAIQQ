@@ -372,13 +372,40 @@ public sealed class PurgeCommand : ICommand
     }
 }
 
-/// <summary>回复触发模式（M2-E 才实现，这里明确说"还没做"而不是假装成功）。</summary>
+/// <summary>查看 / 切换回复触发模式（FR-11）。</summary>
 public sealed class ModeCommand : ICommand
 {
+    private const string KeyPrefix = "replymode:";
+
+    private readonly Storage.Settings.IRuntimeSettingsStore _settings;
+
+    public ModeCommand(Storage.Settings.IRuntimeSettingsStore settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        _settings = settings;
+    }
+
     public string Name => "mode";
-    public string Description => "切换回复触发模式（M2-E 尚未实现）";
+    public string Description => "查看/切换回复模式：`/mode every|mention|jev`（管理员）";
     public Role MinRole => Role.Admin;
 
-    public Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default) =>
-        Task.FromResult("回复触发模式（mention / every）还没实现，计划在 M2-E。当前是「每条消息都回」。");
+    public async Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default)
+    {
+        var key = KeyPrefix + context.Chat.SessionId;
+
+        if (string.IsNullOrWhiteSpace(args))
+        {
+            var current = await _settings.GetAsync(key, ct).ConfigureAwait(false);
+            var shown = string.IsNullOrWhiteSpace(current) ? "（继承全局默认）" : current;
+            return $"本会话回复模式：{shown}\n用法：`/mode every|mention|jev`";
+        }
+
+        if (!Enum.TryParse<Agent.ReplyMode>(args.Trim(), ignoreCase: true, out var mode))
+        {
+            return "不支持的模式。可选：`every`（每条都回）/ `mention`（仅 @ 时回）/ `jev`（判断模型决定）";
+        }
+
+        await _settings.SetAsync(key, mode.ToString(), ct).ConfigureAwait(false);
+        return $"本会话回复模式已切换为 **{mode}**（下一轮生效）。";
+    }
 }

@@ -40,7 +40,9 @@ public sealed class GetStatusAction : IApiAction
 
         return new
         {
-            uptimeSeconds = Environment.TickCount64 / 1000,
+            // 进程运行时长，不是系统运行时长 —— Environment.TickCount64 是**系统**开机时间，
+            // 之前用它导致「刚重启的服务显示已运行 25 小时」（实测踩到）。
+            uptimeSeconds = (long)(DateTimeOffset.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalSeconds,
             channelConnected = _transport.IsConnected,
             model = _options.LlmModel,
             sessions = sessions.Count,
