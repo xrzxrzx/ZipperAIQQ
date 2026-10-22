@@ -115,8 +115,18 @@ public sealed class MessageRouter : BackgroundService
 
         // ② 命令优先（FR-9.1）：命中就执行并回复，**不进 agent**
         //    没命中（比如 "/foo" 这种普通文本）继续走原流程，用户无感知（9.2）
+        //
+        //    ⚠️ 群聊里必须 **@ 机器人** 才执行命令：
+        //    否则群里任何人随手打一句 /help 都会触发，等于把机器人变成群里的公共命令台。
         var role = _roles.Resolve(msg.Sender.UserId);
-        if (await _commands.TryExecuteAsync(msg, role, ct).ConfigureAwait(false))
+        var selfId = _options.SelfId ?? string.Empty;
+        var commandAllowed = msg.Chat.Type == ChatType.Private || _replyModes.IsMentioned(msg, selfId);
+
+        if (!commandAllowed)
+        {
+            _logger.Debug("群聊未 @ 机器人，命令不触发（会话 {Session}）", msg.Chat.SessionId);
+        }
+        else if (await _commands.TryExecuteAsync(msg, role, ct).ConfigureAwait(false))
         {
             return;
         }

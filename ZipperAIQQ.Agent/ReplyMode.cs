@@ -29,4 +29,12 @@ public interface IReplyModeDecider
         Channel.Models.IncomingMessage message,
         string selfId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// 这条消息是否 @ 了机器人（群聊里命令也靠它把关）。
+    /// </summary>
+    /// <remarks>
+    /// 没配 <c>ZIPPER_SELF_ID</c> 时：群聊一律视为"没 @ 到"（无法判断），私聊视为 true。
+    /// </remarks>
+    bool IsMentioned(Channel.Models.IncomingMessage message, string selfId);
 }
