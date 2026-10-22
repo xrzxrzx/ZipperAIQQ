@@ -107,6 +107,7 @@ public static class ServiceRegistration
 
         // ── M2-C：命令系统（新增命令 = 新增一个类 + 这里加一行）──
         services.AddSingleton<ICommand, HelpCommand>();
+        services.AddSingleton<ICommand, OwnerCommand>();
         services.AddSingleton<ICommand, StatusCommand>();
         services.AddSingleton<ICommand, PersonaCommand>();
         services.AddSingleton<ICommand, RememberCommand>();
