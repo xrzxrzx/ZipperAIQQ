@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Dispatching;
 using ZipperAIQQ.Client.Dto;
 using ZipperAIQQ.Client.Services;
 
@@ -288,6 +289,131 @@ public partial class MainViewModel : ObservableObject
 
         StatusLine = $"审计 {Audits.Count} 条";
     });
+
+    // ── 自动刷新（0.5s）──
+    //
+    // 为什么要自己轮询：/events 的 WebSocket 只推「有新消息」这类事件，
+    // 但状态页的 uptime、审计条数这些**没有事件**，必须定时拉。
+    // 0.5s 是用户明确要求的频率；消息用**增量追加**，不整表重载（否则列表会跳）。
+
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromMilliseconds(500);
+
+    private DispatcherQueueTimer? _timer;
+    private bool _tickBusy;
+    private string? _lastSessionId;
+
+    /// <summary>启动 0.5s 自动刷新（在 UI 线程调用一次即可）。</summary>
+    public void StartAutoRefresh()
+    {
+        if (_timer is not null)
+        {
+            return;
+        }
+
+        var queue = DispatcherQueue.GetForCurrentThread();
+        if (queue is null)
+        {
+            return;
+        }
+
+        _timer = queue.CreateTimer();
+        _timer.Interval = RefreshInterval;
+        _timer.Tick += async (_, _) => await TickAsync().ConfigureAwait(true);
+        _timer.Start();
+
+        StatusLine = "自动刷新已启动（0.5 秒）";
+    }
+
+    public void StopAutoRefresh()
+    {
+        _timer?.Stop();
+        _timer = null;
+    }
+
+    /// <summary>一次刷新心跳：状态必刷，消息与审计按"有没有在看"决定。</summary>
+    private async Task TickAsync()
+    {
+        // 上一拍还没跑完就跳过 —— 0.5s 太密，慢请求不能堆积
+        if (_tickBusy)
+        {
+            return;
+        }
+
+        _tickBusy = true;
+        try
+        {
+            if (string.IsNullOrEmpty(StatusText))
+            {
+                return;   // 还没连接，别刷
+            }
+
+            await LoadStatusCoreAsync().ConfigureAwait(true);
+            await RefreshMessagesIncrementalAsync().ConfigureAwait(true);
+            await RefreshAuditsIncrementalAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            // 心跳失败不打断用户（连接断了会在状态条上体现，不必每 0.5s 吼一次）
+        }
+        finally
+        {
+            _tickBusy = false;
+        }
+    }
+
+    /// <summary>只把新消息追加到末尾（按 Id 去重），不整表重载。</summary>
+    private async Task RefreshMessagesIncrementalAsync()
+    {
+        if (SelectedSession is null)
+        {
+            return;
+        }
+
+        // 切了会话 → 清空重来
+        if (_lastSessionId != SelectedSession.SessionId)
+        {
+            _lastSessionId = SelectedSession.SessionId;
+            Messages.Clear();
+        }
+
+        var list = await _api
+            .CallAsync<List<MessageDto>>("getMessages", new { sessionId = SelectedSession.SessionId, limit = 50 })
+            .ConfigureAwait(true);
+
+        if (list is null || list.Count == 0)
+        {
+            return;
+        }
+
+        var known = Messages.Select(m => m.Id).ToHashSet();
+        var fresh = list.Where(m => !known.Contains(m.Id)).OrderBy(m => m.Id).ToList();
+
+        foreach (var item in fresh)
+        {
+            Messages.Add(item);
+        }
+
+        if (fresh.Count > 0)
+        {
+            SessionStatus = $"{SelectedSession.SessionId}：{Messages.Count} 条（+{fresh.Count}）";
+        }
+    }
+
+    /// <summary>审计条数变化才刷新（避免每 0.5s 重建整个列表）。</summary>
+    private async Task RefreshAuditsIncrementalAsync()
+    {
+        var list = await _api.CallAsync<List<AuditDto>>("getAudit", new { limit = 50 }).ConfigureAwait(true);
+        if (list is null || list.Count == Audits.Count)
+        {
+            return;
+        }
+
+        Audits.Clear();
+        foreach (var item in list)
+        {
+            Audits.Add(item);
+        }
+    }
 
     // ── 内部 ──
 

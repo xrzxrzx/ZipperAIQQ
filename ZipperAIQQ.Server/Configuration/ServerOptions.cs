@@ -98,6 +98,9 @@ public sealed record ServerOptions
     /// <summary>冷却时长（毫秒）。</summary>
     public int CooldownMs { get; init; } = 10_000;
 
+    /// <summary>上下文热窗保留多少条历史（可被运行参数覆盖）。</summary>
+    public int HotWindowMessages { get; init; } = 20;
+
     // ── 可观测 ──
     public bool OtelConsole { get; init; }
 

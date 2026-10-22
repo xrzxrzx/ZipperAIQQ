@@ -31,10 +31,28 @@ public sealed partial class MainWindow : Window
             _appWindow.SetIcon(avatar);
         }
 
-        // 默认给一个舒服的窗口大小，并选中第一项
-        _appWindow.Resize(new SizeInt32(1200, 820));
+        // 初始窗口：按屏幕工作区取 78% × 82%，并居中（以前固定 1200×820 偏小）
+        var display = DisplayArea.GetFromWindowId(_appWindow.Id, DisplayAreaFallback.Primary);
+        var work = display.WorkArea;
+        var width = Math.Min(1720, (int)(work.Width * 0.78));
+        var height = Math.Min(1080, (int)(work.Height * 0.82));
+
+        _appWindow.Resize(new SizeInt32(width, height));
+        _appWindow.Move(new PointInt32(
+            work.X + ((work.Width - width) / 2),
+            work.Y + ((work.Height - height) / 2)));
+
         NavView.SelectedItem = NavView.MenuItems[0];
         ContentFrame.Navigate(typeof(StatusPage));
+
+        // 0.5s 自动刷新（用户要求：数据要实时更新）
+        Vm.StartAutoRefresh();
+
+        // 启动即尝试连接（地址有默认值；连不上就在状态条上提示，不影响界面）
+        _ = Vm.ConnectCommand.ExecuteAsync(null);
+
+        // 窗口关掉就停掉定时器，别让已关闭窗口还在拉接口
+        Closed += (_, _) => Vm.StopAutoRefresh();
     }
 
     public MainViewModel Vm { get; }

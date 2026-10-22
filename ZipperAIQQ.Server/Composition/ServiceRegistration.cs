@@ -192,7 +192,7 @@ public static class ServiceRegistration
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
                 FileMaxBytes = options.FileMaxBytes,
                 Schedules = sp.GetRequiredService<IScheduleStore>(),
-                Options = BuildAgentOptions(),
+                Options = BuildAgentOptions(options),
                 Logger = sp.GetRequiredService<ILogger>(),
             };
 
@@ -215,11 +215,16 @@ public static class ServiceRegistration
             // 没配：黑名单 + 空 = 全放行（首次跑通方便；生产请显式配白名单）
             : new ChatFilterOptions { Mode = ChatListMode.Blacklist, Entries = [] };
 
-    private static ChatAgentOptions BuildAgentOptions() => new()
+    private static ChatAgentOptions BuildAgentOptions(ServerOptions options) => new()
     {
         // 人设由 IPersonaStore 提供；这里只是「连人设文件都读不到」时的兜底，
         // 保证永远有一条 system，不会出现没有角色的空壳对话。
         FallbackSystemPrompt = "你是一个聊天助手，用简短自然的中文回复。",
+
+        // 这三个以前**没接**（用了 ChatAgentOptions 的默认 0 / 20）：
+        // 也就是说「发送限速=300ms」只打印在启动日志里，实际根本没生效。
+        MinSendIntervalMs = options.SendIntervalMs,
+        HotWindowMessages = options.HotWindowMessages,
     };
 
     /// <summary>读取全局人设文件；读不到就用兜底文案。</summary>

@@ -67,6 +67,9 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     var connectionString = $"Data Source={databasePath}";
     await new DatabaseInitializer(connectionString, Log.Logger).InitializeAsync();
 
+    // M2-E：库里的数值参数覆盖引导配置（发送限速 / 热窗 / 文件上限），改完重启生效
+    options = await RuntimeSettingsOverrides.ApplyAsync(options, connectionString, Log.Logger);
+
     builder.Services.AddZipperServices(options, connectionString);
 
     // M2-B：Data Protection —— 主密钥（密钥环）只走引导层，不入库（FR-8.8）
