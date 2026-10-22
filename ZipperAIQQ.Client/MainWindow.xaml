@@ -64,12 +64,16 @@
                 <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent" />
 
                 <!-- 选中态改成樱粉（默认是系统蓝，和日系主题不搭） -->
-                <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="#33FF8FAB" />
-                <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedPointerOver" Color="#40FF8FAB" />
-                <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedPressed" Color="#4DFF8FAB" />
-                <SolidColorBrush x:Key="NavigationViewItemForegroundSelected" Color="#E8608A" />
-                <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#FF8FAB" />
-                <SolidColorBrush x:Key="NavigationViewItemForeground" Color="#3D3D4E" />
+                <SolidColorBrush x:Key="NavigationViewItemBackgroundSelected" Color="#40FF8FBE" />
+                <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedPointerOver" Color="#4DFF8FBE" />
+                <SolidColorBrush x:Key="NavigationViewItemBackgroundSelectedPressed" Color="#5AFF8FBE" />
+
+                <!-- 文字对比度：原来是浅色主题的深灰 #3D3D4E，在暗底上几乎看不见 -->
+                <SolidColorBrush x:Key="NavigationViewItemForeground" Color="#F2E2EA" />
+                <SolidColorBrush x:Key="NavigationViewItemForegroundPointerOver" Color="#FFFFFF" />
+                <SolidColorBrush x:Key="NavigationViewItemForegroundSelected" Color="#FFB3D2" />
+                <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#FF8FBE" />
+                <SolidColorBrush x:Key="NavigationViewItemForegroundSelectedPointerOver" Color="#FFC6DE" />
             </NavigationView.Resources>
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="状态" Tag="status">
