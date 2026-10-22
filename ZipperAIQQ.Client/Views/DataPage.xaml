@@ -33,7 +33,7 @@
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Bottom">
-                            <TextBlock Text="{x:Bind Vm.TokenTotalText, Mode=OneWay}"
+                            <TextBlock Text="{x:Bind Stats.TokenTotalText, Mode=OneWay}"
                                        FontSize="34" FontWeight="Bold"
                                        Foreground="{ThemeResource JpAccentBrush}" />
                             <TextBlock Text="token" Style="{StaticResource CaptionStyle}"
@@ -47,17 +47,17 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0">
                                 <TextBlock Text="输入" Style="{StaticResource CaptionStyle}" />
-                                <TextBlock Text="{x:Bind Vm.TokenInText, Mode=OneWay}"
+                                <TextBlock Text="{x:Bind Stats.TokenInText, Mode=OneWay}"
                                            Style="{StaticResource BodyStyle}" FontSize="16" />
                             </StackPanel>
                             <StackPanel Grid.Column="1">
                                 <TextBlock Text="输出" Style="{StaticResource CaptionStyle}" />
-                                <TextBlock Text="{x:Bind Vm.TokenOutText, Mode=OneWay}"
+                                <TextBlock Text="{x:Bind Stats.TokenOutText, Mode=OneWay}"
                                            Style="{StaticResource BodyStyle}" FontSize="16" />
                             </StackPanel>
                         </Grid>
 
-                        <TextBlock Text="{x:Bind Vm.TokenDayText, Mode=OneWay}"
+                        <TextBlock Text="{x:Bind Stats.TokenDayText, Mode=OneWay}"
                                    Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
@@ -71,13 +71,13 @@
                                        VerticalAlignment="Center" Margin="0" />
                         </StackPanel>
 
-                        <TextBlock Text="{x:Bind Vm.HitRateText, Mode=OneWay}"
+                        <TextBlock Text="{x:Bind Stats.HitRateText, Mode=OneWay}"
                                    FontSize="34" FontWeight="Bold"
                                    Foreground="{ThemeResource JpAccentBrush}" />
 
-                        <ProgressBar Value="{x:Bind Vm.HitRatePercent, Mode=OneWay}" Maximum="100" Style="{StaticResource JpProgressBarStyle}" />
+                        <ProgressBar Value="{x:Bind Stats.HitRatePercent, Mode=OneWay}" Maximum="100" Style="{StaticResource JpProgressBarStyle}" />
 
-                        <TextBlock Text="{x:Bind Vm.RetrievalDetailText, Mode=OneWay}"
+                        <TextBlock Text="{x:Bind Stats.RetrievalDetailText, Mode=OneWay}"
                                    Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
@@ -91,13 +91,13 @@
                                        VerticalAlignment="Center" Margin="0" />
                         </StackPanel>
 
-                        <TextBlock Text="{x:Bind Vm.JevReplyText, Mode=OneWay}"
+                        <TextBlock Text="{x:Bind Stats.JevReplyText, Mode=OneWay}"
                                    FontSize="34" FontWeight="Bold"
                                    Foreground="{ThemeResource JpAccentBrush}" />
 
-                        <ProgressBar Value="{x:Bind Vm.JevReplyPercent, Mode=OneWay}" Maximum="100" Style="{StaticResource JpProgressBarStyle}" />
+                        <ProgressBar Value="{x:Bind Stats.JevReplyPercent, Mode=OneWay}" Maximum="100" Style="{StaticResource JpProgressBarStyle}" />
 
-                        <TextBlock Text="{x:Bind Vm.JevDetailText, Mode=OneWay}"
+                        <TextBlock Text="{x:Bind Stats.JevDetailText, Mode=OneWay}"
                                    Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
@@ -123,12 +123,12 @@
 
                             <StackPanel Grid.Row="0" Grid.Column="0">
                                 <TextBlock Text="上下文压缩" Style="{StaticResource CaptionStyle}" />
-                                <TextBlock Text="{x:Bind Vm.SummaryText, Mode=OneWay}"
+                                <TextBlock Text="{x:Bind Stats.SummaryText, Mode=OneWay}"
                                            Style="{StaticResource BodyStyle}" FontSize="18" />
                             </StackPanel>
                             <StackPanel Grid.Row="0" Grid.Column="1">
                                 <TextBlock Text="LLM 调用总数" Style="{StaticResource CaptionStyle}" />
-                                <TextBlock Text="{x:Bind Vm.LlmCallsText, Mode=OneWay}"
+                                <TextBlock Text="{x:Bind Stats.LlmCallsText, Mode=OneWay}"
                                            Style="{StaticResource BodyStyle}" FontSize="18" />
                             </StackPanel>
                         </Grid>
@@ -154,7 +154,7 @@
                         <TextBlock Grid.Column="3" Text="Token（入 / 出）" Style="{StaticResource CaptionStyle}" />
                     </Grid>
 
-                    <ItemsControl ItemsSource="{x:Bind Vm.KindRows}">
+                    <ItemsControl ItemsSource="{x:Bind Stats.KindRows}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="dto:KindStatsDto">
                                 <Grid ColumnSpacing="12" Padding="0,5">
@@ -178,7 +178,7 @@
                     </ItemsControl>
 
                     <Button Content="刷新统计" Style="{StaticResource JpButtonStyle}"
-                            Command="{x:Bind Vm.LoadStatsCommand}" HorizontalAlignment="Left" />
+                            Command="{x:Bind Stats.LoadCommand}" HorizontalAlignment="Left" />
                 </StackPanel>
             </Border>
 

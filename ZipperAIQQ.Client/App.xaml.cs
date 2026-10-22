@@ -19,6 +19,7 @@ public partial class App : Application
         var services = new ServiceCollection();
         services.AddSingleton(AppSettings.Load());
         services.AddSingleton<ServerApiClient>();
+        services.AddSingleton<StatsViewModel>();
         services.AddSingleton<MainViewModel>();
 
         Services = services.BuildServiceProvider();
