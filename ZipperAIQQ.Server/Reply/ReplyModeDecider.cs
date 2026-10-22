@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using Microsoft.Extensions.AI;
 using Serilog;
 using ZipperAIQQ.Agent;
@@ -6,7 +7,9 @@ using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Storage.Config;
+using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Metrics;
+using ZipperAIQQ.Storage.Personas;
 using ZipperAIQQ.Storage.Settings;
 
 namespace ZipperAIQQ.Server.Reply;
@@ -30,18 +33,34 @@ public sealed class ReplyModeDecider : IReplyModeDecider
 
     private static readonly TimeSpan JudgeTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>喂给判断器的历史消息条数（含当前这条）。</summary>
+    /// <remarks>
+    /// 只给一条消息看不出"别人正在聊什么"，判断器会把任何一句话都当成可以插嘴的时机；
+    /// 给最近十几条，它才能判断「是不是在插别人话」。
+    /// </remarks>
+    private const int JudgeHistoryCount = 12;
+
     private const string JudgePrompt = """
-        你是对话判断器。给出一条消息，判断机器人此刻是否应该接话。
+        你是「该不该插话」的判断器。给你机器人的**人设**和一段**最近的聊天记录**，
+        判断机器人此刻是否应该说话。
+
         只回答 yes 或 no，不要任何解释。
-        判断标准：
-        - 被直接提问、话题与机器人相关、接话能自然推进对话 → yes
-        - 纯寒暄、与机器人无关的他人闲聊、刷屏式短句 → no
+
+        判断原则：
+        - 被直接提问、被叫到名字、话题与机器人明确相关 → yes
+        - 别人之间正在聊与机器人无关的事 → **no**（硬插话很讨人厌）
+        - 人设偏冷淡/高冷 → 更倾向 no，只在被明确叫到或话题高度相关时 yes
+        - 人设偏活泼/黏人 → 可以更主动
+        - 纯刷屏短句、无意义表情、重复内容 → no
+        - 拿不准时倾向 no（少说一句比说错一句好）
         """;
 
     private readonly IRuntimeSettingsStore _settings;
     private readonly IConfigStore _configs;
     private readonly ISecretProtector _protector;
     private readonly IMetricsStore _metrics;
+    private readonly IMessageStore _messages;
+    private readonly IPersonaStore _personas;
     private readonly ILogger _logger;
 
     // judge 客户端缓存：端点名 + 更新时间变了才重建（避免每次判断都 new HttpClient）
@@ -53,18 +72,24 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         IConfigStore configs,
         ISecretProtector protector,
         IMetricsStore metrics,
+        IMessageStore messages,
+        IPersonaStore personas,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(configs);
         ArgumentNullException.ThrowIfNull(protector);
         ArgumentNullException.ThrowIfNull(metrics);
+        ArgumentNullException.ThrowIfNull(messages);
+        ArgumentNullException.ThrowIfNull(personas);
         ArgumentNullException.ThrowIfNull(logger);
 
         _settings = settings;
         _configs = configs;
         _protector = protector;
         _metrics = metrics;
+        _messages = messages;
+        _personas = personas;
         _logger = logger;
     }
 
@@ -99,7 +124,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
 
     // ── mention ──
 
-    private bool IsMentioned(IncomingMessage message, string selfId)
+    public bool IsMentioned(IncomingMessage message, string selfId)
     {
         if (string.IsNullOrWhiteSpace(selfId))
         {
@@ -130,10 +155,12 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         var sw = Stopwatch.StartNew();
         try
         {
+            var context = await BuildJudgeContextAsync(message, ct).ConfigureAwait(false);
+
             var response = await client.GetResponseAsync(
                 [
                     new ChatMessage(ChatRole.System, JudgePrompt),
-                    new ChatMessage(ChatRole.User, BuildJudgeContext(message)),
+                    new ChatMessage(ChatRole.User, context),
                 ],
                 cancellationToken: cts.Token).ConfigureAwait(false);
 
@@ -159,8 +186,83 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         }
     }
 
-    private static string BuildJudgeContext(IncomingMessage message) =>
-        $"{message.Chat.Type} | {message.Sender.DisplayName}：{message.PlainText}";
+    /// <summary>
+    /// 组判断上下文：**人设** + 最近十几条消息 + 当前这条。
+    /// </summary>
+    /// <remarks>
+    /// 人设要参与判断：冷淡的角色本来就该少说话，
+    /// 用同一套"是否该回"的标准去衡量所有人设，结果一定是话痨。
+    /// </remarks>
+    private async Task<string> BuildJudgeContextAsync(IncomingMessage message, CancellationToken ct)
+    {
+        var sb = new StringBuilder();
+
+        try
+        {
+            var persona = await _personas
+                .GetAsync(message.Chat.Platform, message.Chat.Type.ToString(), message.Chat.Id, ct)
+                .ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(persona.Content))
+            {
+                // 只取开头一段：判断器只需要"性格倾向"，不需要完整设定（省 token）
+                var excerpt = persona.Content.Length > 400
+                    ? persona.Content[..400] + "…"
+                    : persona.Content;
+
+                sb.AppendLine("【机器人人设】");
+                sb.AppendLine(excerpt);
+                sb.AppendLine();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug(ex, "取人设失败，判断器不带人设");
+        }
+
+        try
+        {
+            var recent = await _messages
+                .GetRecentAsync(message.Chat.SessionId, JudgeHistoryCount, ct)
+                .ConfigureAwait(false);
+
+            // 最近一条就是当前消息（已落库），单独列，避免重复
+            var history = recent
+                .OrderBy(m => m.Id)
+                .Where(m => !string.Equals(m.Message.PlainText, message.PlainText, StringComparison.Ordinal))
+                .TakeLast(JudgeHistoryCount - 1)
+                .ToList();
+
+            if (history.Count > 0)
+            {
+                sb.AppendLine("【最近的聊天】");
+                foreach (var stored in history)
+                {
+                    var who = stored.Message.Sender.DisplayName;
+                    var what = stored.Message.PlainText?.Trim();
+                    if (string.IsNullOrEmpty(what))
+                    {
+                        continue;
+                    }
+
+                    sb.AppendLine($"{who}：{what}");
+                }
+
+                sb.AppendLine();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug(ex, "取最近消息失败，判断器只看当前消息");
+        }
+
+        sb.AppendLine("【当前这条】");
+        sb.AppendLine($"{message.Sender.DisplayName}：{message.PlainText}");
+        sb.AppendLine();
+        sb.Append("机器人此刻该说话吗？（只答 yes 或 no）");
+
+        return sb.ToString();
+    }
 
     private async Task<IChatClient?> GetJudgeClientAsync(CancellationToken ct)
     {
