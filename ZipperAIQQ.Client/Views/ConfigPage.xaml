@@ -66,6 +66,43 @@
                                     Command="{x:Bind Vm.SaveConfigCommand}" HorizontalAlignment="Left" />
                         </StackPanel>
                     </Border>
+
+                    <!-- JEV 端点：**独立于**上面的 LLM 端点（用户要求两套分开配） -->
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel Spacing="12">
+                            <TextBlock Text="JEV 端点（判断「该不该回」用的模型）"
+                                       Style="{StaticResource SectionHeaderStyle}" />
+
+                            <Grid ColumnSpacing="12" RowSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBox Grid.Row="0" Grid.Column="0" Header="端点名"
+                                         Text="{x:Bind Vm.JudgeEndpointName, Mode=TwoWay}" />
+                                <TextBox Grid.Row="0" Grid.Column="1" Header="模型"
+                                         Text="{x:Bind Vm.JudgeEndpointModel, Mode=TwoWay}" />
+                                <TextBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Header="BaseUrl"
+                                         Text="{x:Bind Vm.JudgeEndpointBaseUrl, Mode=TwoWay}" />
+                                <PasswordBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                                             Header="API Key（留空 = 不修改；可与 LLM 端点用同一把 key）"
+                                             PasswordChanged="JudgeKeyBox_PasswordChanged" />
+                            </Grid>
+
+                            <TextBlock Text="{x:Bind Vm.JudgeEndpointHint, Mode=OneWay}"
+                                       Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                            <Button Content="保存 JEV 端点（绑定 judge 角色）"
+                                    Style="{StaticResource JpAccentButtonStyle}"
+                                    Command="{x:Bind Vm.SaveJudgeEndpointCommand}" HorizontalAlignment="Left" />
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
 
                 <!-- 右：数值运行参数 -->

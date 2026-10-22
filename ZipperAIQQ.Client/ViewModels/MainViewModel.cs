@@ -137,6 +137,31 @@ public partial class MainViewModel : ObservableObject
     /// <summary>可选端点名（来自 getConfig）。</summary>
     public ObservableCollection<string> EndpointNames { get; } = [];
 
+    // ── JEV 端点（独立于 LLM 端点的第二套配置）──
+    // 用户要求：普通 LLM 与 JEV 各自独立配置，不再共用 primary
+
+    [ObservableProperty]
+    public partial string JudgeEndpointName { get; set; } = "judge";
+
+    /// <summary>
+    /// JEV 端点默认指向 **OpenRouter**（不是 DeepSeek）：
+    /// 判断模型通常要便宜、快，且和对话模型分开计费/限流。
+    /// </summary>
+    [ObservableProperty]
+    public partial string JudgeEndpointBaseUrl { get; set; } = "https://openrouter.ai/api/v1";
+
+    /// <summary>OpenRouter 的模型 ID 形如 <c>provider/model</c>，这里留空由用户填。</summary>
+    [ObservableProperty]
+    public partial string JudgeEndpointModel { get; set; } = string.Empty;
+
+    /// <summary>JEV 端点的 key：留空 = 不修改（与 LLM 端点同样的口径）。</summary>
+    [ObservableProperty]
+    public partial string JudgeEndpointKey { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string JudgeEndpointHint { get; set; } =
+        "JEV 端点：默认 OpenRouter（baseUrl=https://openrouter.ai/api/v1，模型填 provider/model）";
+
     // ── 人设（第 21 项：形象 / 性格分开）──
 
     [ObservableProperty]
@@ -762,6 +787,24 @@ public partial class MainViewModel : ObservableObject
         JudgeEndpoint = cfg.Roles
             .FirstOrDefault(kv => string.Equals(kv.Key, "judge", StringComparison.OrdinalIgnoreCase))
             .Value ?? string.Empty;
+
+        // JEV 端点的独立字段：按 role 绑定的名字找那个端点
+        var judgeEp = cfg.Endpoints.FirstOrDefault(e =>
+            string.Equals(e.Name, JudgeEndpoint, StringComparison.OrdinalIgnoreCase));
+
+        if (judgeEp is not null)
+        {
+            JudgeEndpointName = judgeEp.Name;
+            JudgeEndpointBaseUrl = judgeEp.BaseUrl;
+            JudgeEndpointModel = judgeEp.Model;
+            JudgeEndpointHint = $"JEV 端点：{judgeEp.Name}（{judgeEp.Model}，key {judgeEp.KeyMasked}）";
+        }
+        else
+        {
+            JudgeEndpointHint = JudgeEndpoint.Length > 0
+                ? $"角色 judge → {JudgeEndpoint}（但端点列表里没找到它）"
+                : "JEV 端点：未配置（jev 模式会降级为 mention）";
+        }
     }
 
     /// <summary>保存判断模型（setConfig 的 roles.judge）。</summary>
@@ -779,5 +822,58 @@ public partial class MainViewModel : ObservableObject
         }).ConfigureAwait(true);
 
         StatusLine = $"判断模型已设为 {JudgeEndpoint}（JEV 模式可用）";
+    });
+
+    /// <summary>
+    /// 保存 JEV 端点（独立于 LLM 端点）+ 把 judge 角色绑到它。
+    /// </summary>
+    /// <remarks>
+    /// 用户要求「普通 LLM 与 JEV 各自独立配置」：
+    /// 所以这里存的是**另一个端点**（默认名 judge），并把 roles.judge 指过去，
+    /// 而不是复用 chat 那个 primary。
+    /// </remarks>
+    [RelayCommand]
+    private Task SaveJudgeEndpointAsync() => GuardAsync("保存 JEV 端点", async () =>
+    {
+        if (string.IsNullOrWhiteSpace(JudgeEndpointName))
+        {
+            throw new InvalidOperationException("JEV 端点名不能为空。");
+        }
+
+        var endpoint = new Dictionary<string, object?>
+        {
+            ["name"] = JudgeEndpointName.Trim(),
+            ["baseUrl"] = JudgeEndpointBaseUrl.Trim(),
+            ["model"] = JudgeEndpointModel.Trim(),
+            // OpenRouter 走 Chat 兼容接口（不是 Responses）
+            ["apiKind"] = "Chat",
+        };
+
+        // key 留空 = 不修改（服务端保留旧密文）
+        if (!string.IsNullOrWhiteSpace(JudgeEndpointKey))
+        {
+            endpoint["key"] = JudgeEndpointKey.Trim();
+        }
+
+        var cfg = await _api.CallAsync<ConfigDto>("setConfig", new
+        {
+            endpoint,
+            roles = new Dictionary<string, string> { ["judge"] = JudgeEndpointName.Trim() },
+        }).ConfigureAwait(true);
+
+        JudgeEndpointKey = string.Empty;
+        JudgeEndpoint = JudgeEndpointName.Trim();
+
+        if (cfg is not null)
+        {
+            var ep = cfg.Endpoints.FirstOrDefault(e =>
+                string.Equals(e.Name, JudgeEndpointName, StringComparison.OrdinalIgnoreCase));
+            if (ep is not null)
+            {
+                JudgeEndpointHint = $"JEV 端点：{ep.Name}（{ep.Model}，key {ep.KeyMasked}）";
+            }
+        }
+
+        StatusLine = $"JEV 端点已保存：{JudgeEndpointName}（judge 角色已指向它）";
     });
 }

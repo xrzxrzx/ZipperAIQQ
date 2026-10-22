@@ -20,6 +20,11 @@ public sealed partial class ConfigPage : Page
 
     public MainViewModel Vm { get; }
 
+    private void JudgeKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        Vm.JudgeEndpointKey = ((PasswordBox)sender).Password;
+    }
+
     private void KeyBox_PasswordChanged(object sender, RoutedEventArgs e)
     {
         Vm.ConfigKey = ((PasswordBox)sender).Password;
