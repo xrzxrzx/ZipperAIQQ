@@ -36,6 +36,9 @@ public sealed class ChatAgent : IChatAgent
     private readonly IMessageChannel _channel;
     private readonly IMessageStore _store;
     private readonly FaceCatalog _faces;
+
+    /// <summary>会话级发送节流：保证两次真正发出去之间至少隔 MinSendIntervalMs。</summary>
+    private readonly SendThrottle _sendThrottle = new();
     private readonly MemoryRetriever _retriever;
     private readonly SummaryService _summaries;
     private readonly ISummaryStore _summaryStore;
@@ -288,7 +291,7 @@ public sealed class ChatAgent : IChatAgent
             BotUserId,
             request.Chat,
             _options.MaxMessagesPerCall,
-            _options.MinSendIntervalMs,
+            ct => _sendThrottle.WaitAsync(_options.MinSendIntervalMs, ct),
             _faces,
             _metrics,
             n => sent += n);
@@ -349,15 +352,11 @@ public sealed class ChatAgent : IChatAgent
         if (sent == 0 && !string.IsNullOrWhiteSpace(finalText))
         {
             var parts = MessageContentParser.SplitByBlankLine(finalText, _options.MaxMessagesPerCall);
-            var interval = Math.Max(0, _options.MinSendIntervalMs);
 
             foreach (var part in parts)
             {
-                // 最小发送间隔（防风控）：第一条不等
-                if (sent > 0 && interval > 0)
-                {
-                    await Task.Delay(interval, ct).ConfigureAwait(false);
-                }
+                // 会话级最小发送间隔（防风控）：不是"第几条之后才等"，而是每次真正发送前都排一次队
+                await _sendThrottle.WaitAsync(_options.MinSendIntervalMs, ct).ConfigureAwait(false);
 
                 if (await TrySendAsync(request.Chat, MessageContentParser.Parse(part, _faces), ct).ConfigureAwait(false))
                 {
