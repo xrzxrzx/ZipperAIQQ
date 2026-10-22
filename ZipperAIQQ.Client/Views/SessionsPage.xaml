@@ -51,7 +51,9 @@
             </StackPanel>
 
             <Border Grid.Row="2" Style="{StaticResource CardStyle}" Padding="8">
-                <ListView ItemsSource="{x:Bind Vm.Messages}" SelectionMode="None">
+                <ListView x:Name="MessageList"
+                          ItemsSource="{x:Bind Vm.Messages}"
+                          SelectionMode="None">
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="dto:MessageDto">
                             <TextBlock Text="{x:Bind Display}"
