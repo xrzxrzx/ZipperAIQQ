@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
+using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel;
 
 namespace ZipperAIQQ.Agent.Tools;
@@ -22,9 +23,14 @@ public static class ContactTools
 {
     public const string ToolName = "query_napcat_api";
 
-    public static IEnumerable<AITool> Create(IContactDirectory directory)
+    public static IEnumerable<AITool> Create(
+        IContactDirectory directory,
+        ToolCallContext context,
+        IExecutionPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(directory);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(policy);
 
         yield return AIFunctionFactory.Create(
             async (string action, string? parameters, CancellationToken ct) =>
@@ -32,6 +38,20 @@ public static class ContactTools
                 if (string.IsNullOrWhiteSpace(action))
                 {
                     return "请给出要查询的 action。";
+                }
+
+                var key = action.Trim();
+
+                // #28：客户端可以禁用某个 API；角色不够也不给调（默认只读给普通用户，写操作只给管理员）
+                if (!policy.IsEnabled(PolicyCategory.ChannelApi, key))
+                {
+                    return $"action「{key}」已在客户端被禁用。";
+                }
+
+                var required = policy.MinRole(PolicyCategory.ChannelApi, key, Role.Admin);
+                if (context.Role < required)
+                {
+                    return $"权限不足：action「{key}」需要 {required} 及以上角色，当前是 {context.Role}。";
                 }
 
                 JsonObject? parsed = null;
@@ -49,17 +69,28 @@ public static class ContactTools
 
                 try
                 {
-                    var data = await directory.InvokeApiAsync(action.Trim(), parsed, ct).ConfigureAwait(false);
+                    var data = await directory.InvokeApiAsync(key, parsed, ct).ConfigureAwait(false);
+
+                    // null ≠ 空结果：也可能是这次没查成功。明确告诉模型"没拿到数据"，
+                    // 而不是让它说"确实没有"。
                     return data is null
-                        ? $"查询 {action} 没有返回数据（可能参数不对或平台拒绝）。"
+                        ? $"查询 {action} 没有拿到数据（可能这次没查成功，也可能是空结果）。"
                         : $"`{action}` 结果：\n{data.ToJsonString()}";
                 }
-                catch (InvalidOperationException ex)
+                catch (InvalidOperationException ex) when (ex.Message.Contains("白名单"))
                 {
                     // 白名单拒绝：把「能查什么」直接告诉它，避免它反复试
                     return $"{ex.Message}\n可用 action：get_friend_list / get_group_list / " +
                            "get_group_info / get_group_member_list / get_group_member_info / " +
                            "get_stranger_info / get_login_info / get_version_info";
+                }
+                catch (Exception ex)
+                {
+                    // 真正的查询失败：说清"是失败，不是没有" ——
+                    // 以前这里会掉进白名单分支，模型收到的是"可用 action 列表"，
+                    // 于是它回答"我没有这个能力"或"确实没有"，用户看到的就是"查不到"。
+                    return $"查询 {action} **失败**（不是没有结果）：{ex.Message}\n" +
+                           "可以稍后重试；重试仍失败说明通道有问题，如实告诉对方。";
                 }
             },
             name: ToolName,

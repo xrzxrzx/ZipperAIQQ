@@ -48,8 +48,52 @@ public sealed class DefaultPersonaStore : IPersonaStore
         string platform, string chatType, string chatId, CancellationToken ct = default)
     {
         var sessionId = BuildSessionId(platform, chatType, chatId);
-        var overridePersona = await GetOverrideAsync(sessionId, ct).ConfigureAwait(false);
-        return overridePersona ?? _global;
+        var state = await GetStateAsync(sessionId, ct).ConfigureAwait(false);
+
+        // 会话级预设被关掉时，等同于"没有覆盖" —— 回落到全局（#16）
+        return state.Override is not null && state.Enabled ? state.Override : _global;
+    }
+
+    public Task<PersonaState> GetStateAsync(string sessionId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+
+        return _db.ReadAsync<PersonaState>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT Name, Content, Enabled FROM SessionPersonas WHERE SessionId = @sid;";
+            cmd.Parameters.AddWithValue("@sid", sessionId);
+
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            if (!await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                return new PersonaState(null, true);
+            }
+
+            return new PersonaState(
+                new Persona(reader.GetString(0), reader.GetString(1)),
+                reader.GetInt32(2) != 0);
+        }, ct);
+    }
+
+    public async Task<bool> IsEnabledAsync(string sessionId, CancellationToken ct = default)
+    {
+        var state = await GetStateAsync(sessionId, ct).ConfigureAwait(false);
+        return state.Enabled;
+    }
+
+    public Task SetEnabledAsync(string sessionId, bool enabled, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+
+        return _db.WriteAsync(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "UPDATE SessionPersonas SET Enabled = @enabled WHERE SessionId = @sid;";
+            cmd.Parameters.AddWithValue("@enabled", enabled ? 1 : 0);
+            cmd.Parameters.AddWithValue("@sid", sessionId);
+            await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        }, ct);
     }
 
     public Task SetAsync(string sessionId, Persona persona, CancellationToken ct = default)
@@ -107,7 +151,6 @@ public sealed class DefaultPersonaStore : IPersonaStore
 
             return new Persona(reader.GetString(0), reader.GetString(1));
         }, ct);
-
     /// <summary>
     /// 与 <c>ChatRef.SessionId</c> **必须同构**，否则会话级人设会查不到。
     /// 这里不引 Channel 依赖，所以自己拼一次 —— 两处一起改。

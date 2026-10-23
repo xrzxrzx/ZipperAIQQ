@@ -7,11 +7,21 @@
     mc:Ignorable="mc">
 
     <ScrollViewer Padding="32">
-        <StackPanel Spacing="16" MaxWidth="1200" HorizontalAlignment="Left">
+        <StackPanel Spacing="16" HorizontalAlignment="Stretch">
 
             <TextBlock Text="数据" Style="{StaticResource PageTitleStyle}" />
-            <TextBlock Text="Token 用量 / 检索命中率 / JEV 判断 —— 总量 + 近 24 小时"
+            <TextBlock Text="Token 用量 / 缓存命中 / 检索命中率 / JEV 判断 —— 总量 + 近 24 小时"
                        Style="{StaticResource CaptionStyle}" Margin="0,-8,0,4" />
+
+            <!-- 会话维度（#5）：选「全部会话」= 不带 sessionId -->
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="口径" Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                <ComboBox MinWidth="260"
+                          ItemsSource="{x:Bind Stats.SessionOptions}"
+                          SelectedItem="{x:Bind Stats.SelectedSession, Mode=TwoWay}" />
+                <TextBlock Text="切到某个会话后可看它的独立数据"
+                           Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+            </StackPanel>
 
             <Grid ColumnSpacing="16" RowSpacing="16">
                 <Grid.ColumnDefinitions>
@@ -44,6 +54,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0">
                                 <TextBlock Text="输入" Style="{StaticResource CaptionStyle}" />
@@ -55,9 +66,20 @@
                                 <TextBlock Text="{x:Bind Stats.TokenOutText, Mode=OneWay}"
                                            Style="{StaticResource BodyStyle}" FontSize="16" />
                             </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="缓存命中" Style="{StaticResource CaptionStyle}" />
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <TextBlock Text="{x:Bind Stats.CacheHitText, Mode=OneWay}"
+                                               Style="{StaticResource BodyStyle}" FontSize="16" />
+                                    <TextBlock Text="{x:Bind Stats.CacheRateText, Mode=OneWay}"
+                                               Style="{StaticResource CaptionStyle}" VerticalAlignment="Bottom" />
+                                </StackPanel>
+                            </StackPanel>
                         </Grid>
 
                         <TextBlock Text="{x:Bind Stats.TokenDayText, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind Stats.CacheDetailText, Mode=OneWay}"
                                    Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
@@ -164,8 +186,12 @@
                                         <ColumnDefinition Width="90" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="{x:Bind Kind}"
-                                               Style="{StaticResource BodyStyle}" />
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{x:Bind KindTitle}"
+                                                   Style="{StaticResource BodyStyle}" />
+                                        <TextBlock Text="{x:Bind Kind}"
+                                                   Style="{StaticResource CaptionStyle}" FontSize="11" />
+                                    </StackPanel>
                                     <TextBlock Grid.Column="1" Text="{x:Bind CountText}"
                                                Style="{StaticResource BodyStyle}" />
                                     <TextBlock Grid.Column="2" Text="{x:Bind AvgMsText}"
@@ -176,6 +202,9 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+
+                    <TextBlock Text="{x:Bind Stats.KindEmptyText, Mode=OneWay}"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
                     <Button Content="刷新统计" Style="{StaticResource JpButtonStyle}"
                             Command="{x:Bind Stats.LoadCommand}" HorizontalAlignment="Left" />

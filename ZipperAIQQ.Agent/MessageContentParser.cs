@@ -103,6 +103,34 @@ public static class MessageContentParser
             }
 
             var name = m.Groups[1].Value.Trim();
+
+            // [表情包:摘要|emoji=123] —— 模型原样复制就能发回同一张表情包
+            if (name.StartsWith("表情包:", StringComparison.Ordinal))
+            {
+                var body = name["表情包:".Length..];
+                var summary = body;
+                string? emojiId = null;
+
+                var sep = body.LastIndexOf("|emoji=", StringComparison.Ordinal);
+                if (sep >= 0)
+                {
+                    summary = body[..sep];
+                    emojiId = body[(sep + "|emoji=".Length)..].Trim();
+                }
+
+                if (!string.IsNullOrEmpty(emojiId))
+                {
+                    result.Add(new MfaceSegment(emojiId, null, summary));
+                }
+                else
+                {
+                    // 没有 id 发不出去 —— 说清楚，别静默丢掉
+                    result.Add(new TextSegment($"[表情包:{summary}（没有 id 发不出去）]"));
+                }
+
+                pos = m.Index + m.Length;
+                continue;
+            }
             var entry = catalog.GetByName(name);
 
             if (entry is null && FaceAliases.TryGetValue(name, out var alias))

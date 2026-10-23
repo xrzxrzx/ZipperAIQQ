@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>ZipperAIQQ.Tests</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- xunit 的 using 提到全局，省得每个文件都写 -->
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ZipperAIQQ.Core\ZipperAIQQ.Core.csproj" />
+    <ProjectReference Include="..\ZipperAIQQ.Channel\ZipperAIQQ.Channel.csproj" />
+    <ProjectReference Include="..\ZipperAIQQ.Storage\ZipperAIQQ.Storage.csproj" />
+    <ProjectReference Include="..\ZipperAIQQ.Agent\ZipperAIQQ.Agent.csproj" />
+    <ProjectReference Include="..\ZipperAIQQ.Server\ZipperAIQQ.Server.csproj" />
+  </ItemGroup>
+
+</Project>

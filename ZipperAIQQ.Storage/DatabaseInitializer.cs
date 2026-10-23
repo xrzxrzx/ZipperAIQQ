@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 10;
+    public const int CurrentSchemaVersion = 12;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -65,6 +65,35 @@ public sealed class DatabaseInitializer
         {
             await ExecuteAsync(conn, "ALTER TABLE Messages ADD COLUMN Direction INTEGER NOT NULL DEFAULT 0;", ct).ConfigureAwait(false);
             _logger.Information("已应用迁移：Messages.Direction");
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        {
+            // 已迁移过
+        }
+
+        // ── v11：缓存命中 token（问题记录 #4）──
+        // 只增列：旧行 NULL 表示"当时没采集"，不等于 0 命中。
+        try
+        {
+            await ExecuteAsync(conn, "ALTER TABLE CallMetrics ADD COLUMN CachedInputTokens INTEGER;", ct).ConfigureAwait(false);
+            _logger.Information("已应用迁移：CallMetrics.CachedInputTokens");
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        {
+            // 已迁移过
+        }
+
+        // 会话维度筛选要按 (SessionId, 时间) 查；旧库也要补上这个索引
+        await ExecuteAsync(conn,
+            "CREATE INDEX IF NOT EXISTS IX_CallMetrics_Session_Time ON CallMetrics (SessionId, CreatedAtMs);",
+            ct).ConfigureAwait(false);
+
+        // ── v12：会话人设「是否启用」（问题记录 #16）──
+        // 旧数据默认启用：升级后行为不变。
+        try
+        {
+            await ExecuteAsync(conn, "ALTER TABLE SessionPersonas ADD COLUMN Enabled INTEGER NOT NULL DEFAULT 1;", ct).ConfigureAwait(false);
+            _logger.Information("已应用迁移：SessionPersonas.Enabled");
         }
         catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
         {
@@ -240,6 +269,7 @@ public sealed class DatabaseInitializer
             SessionId   TEXT NOT NULL PRIMARY KEY,
             Name        TEXT NOT NULL,
             Content     TEXT NOT NULL,
+            Enabled     INTEGER NOT NULL DEFAULT 1,
             UpdatedAtMs INTEGER NOT NULL
         );
         """;
@@ -258,16 +288,20 @@ public sealed class DatabaseInitializer
     /// </remarks>
     private const string CallMetricsTable = """
         CREATE TABLE IF NOT EXISTS CallMetrics (
-            Id           INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-            SessionId    TEXT,
-            Kind         TEXT    NOT NULL,
-            ElapsedMs    REAL    NOT NULL,
-            InputTokens  INTEGER,
-            OutputTokens INTEGER,
-            CreatedAtMs  INTEGER NOT NULL
+            Id               INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            SessionId        TEXT,
+            Kind             TEXT    NOT NULL,
+            ElapsedMs        REAL    NOT NULL,
+            InputTokens      INTEGER,
+            OutputTokens     INTEGER,
+            CachedInputTokens INTEGER,
+            CreatedAtMs      INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS IX_CallMetrics_Kind_Time
             ON CallMetrics (Kind, CreatedAtMs);
+
+        CREATE INDEX IF NOT EXISTS IX_CallMetrics_Session_Time
+            ON CallMetrics (SessionId, CreatedAtMs);
         """;
 
     private const string SchemaVersionTable = """

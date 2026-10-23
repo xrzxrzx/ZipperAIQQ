@@ -55,10 +55,10 @@
                         Background="Transparent"
                         IsBackButtonVisible="Collapsed"
                         IsSettingsVisible="False"
-                        PaneDisplayMode="LeftCompact"
                         OpenPaneLength="220"
                         CompactPaneLength="52"
-                        ExpandedModeThresholdWidth="2400"
+                        PaneOpened="NavView_PaneOpened"
+                        PaneClosed="NavView_PaneClosed"
                         SelectionChanged="NavView_SelectionChanged">
             <!-- 让 NavigationView 自身和内容区都透明，渐变背景才能连贯（否则会看到一块色差） -->
             <NavigationView.Resources>
@@ -82,14 +82,10 @@
                 <SolidColorBrush x:Key="NavigationViewItemForegroundSelectedPointerOver" Color="#FFC6DE" />
             </NavigationView.Resources>
             <NavigationView.MenuItems>
+                <NavigationViewItemHeader Content="概览" />
                 <NavigationViewItem Content="状态" Tag="status">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE9D9;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="会话" Tag="sessions">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE8CB;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="数据" Tag="data">
@@ -97,14 +93,48 @@
                         <FontIcon Glyph="&#xE9D2;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="配置" Tag="config">
+                <NavigationViewItem Content="审计" Tag="audit">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE81C;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="服务端日志" Tag="logs">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE9D5;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <NavigationViewItemHeader Content="对话" />
+                <NavigationViewItem Content="会话" Tag="sessions">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8CB;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <NavigationViewItemHeader Content="配置" />
+                <NavigationViewItem Content="模型配置" Tag="models">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE713;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="审计" Tag="audit">
+                <NavigationViewItem Content="运行与行为" Tag="runtime">
                     <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE81C;" />
+                        <FontIcon Glyph="&#xE9F5;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="人设" Tag="persona">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8D4;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="人员与名单" Tag="access">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE716;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="工具管理" Tag="tools">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE90F;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>

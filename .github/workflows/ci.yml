@@ -257,7 +257,7 @@ jobs:
       - name: 还原（跨平台项目）
         if: steps.probe.outputs.found == 'true'
         run: |
-          for p in ZipperAIQQ.Core ZipperAIQQ.Storage ZipperAIQQ.Transport ZipperAIQQ.Channel ZipperAIQQ.Agent ZipperAIQQ.Server; do
+          for p in ZipperAIQQ.Core ZipperAIQQ.Storage ZipperAIQQ.Transport ZipperAIQQ.Channel ZipperAIQQ.Agent ZipperAIQQ.Server ZipperAIQQ.Tests; do
             if [ -f "$p/$p.csproj" ]; then
               echo "→ restore $p"
               dotnet restore "$p/$p.csproj"
@@ -267,7 +267,7 @@ jobs:
       - name: 构建（Release，警告视为错误）
         if: steps.probe.outputs.found == 'true'
         run: |
-          for p in ZipperAIQQ.Core ZipperAIQQ.Storage ZipperAIQQ.Transport ZipperAIQQ.Channel ZipperAIQQ.Agent ZipperAIQQ.Server; do
+          for p in ZipperAIQQ.Core ZipperAIQQ.Storage ZipperAIQQ.Transport ZipperAIQQ.Channel ZipperAIQQ.Agent ZipperAIQQ.Server ZipperAIQQ.Tests; do
             if [ -f "$p/$p.csproj" ]; then
               echo "→ build $p"
               dotnet build "$p/$p.csproj" --no-restore --configuration Release -warnaserror
@@ -289,7 +289,10 @@ jobs:
             echo "::notice::仓库里还没有测试项目 —— 本次「测试」步骤实际未验证任何东西（0 个测试）。这【不等于】测试通过。"
             exit 0
           fi
-          dotnet test --no-build --configuration Release --verbosity normal
+          # 显式指定项目：不加路径时 dotnet test 会去找 sln，
+          # 而 slnx 里含 WinUI3 客户端（Linux 上构建不了）
+          dotnet test ZipperAIQQ.Tests/ZipperAIQQ.Tests.csproj \
+            --no-build --configuration Release --verbosity normal
 
   # ───────────────────────────────────────────────────────────────────
   # ③ WinUI3 客户端 —— 只能跑在 Windows

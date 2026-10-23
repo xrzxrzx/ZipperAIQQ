@@ -37,7 +37,11 @@
             <!-- 状态卡片 -->
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="12">
-                    <TextBlock Text="运行信息" Style="{StaticResource SectionHeaderStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="运行信息" Style="{StaticResource SectionHeaderStyle}" VerticalAlignment="Center" />
+                        <Button Content="重启服务端" Style="{StaticResource JpButtonStyle}"
+                                Click="Restart_Click" Margin="16,0,0,0" />
+                    </StackPanel>
                     <TextBlock Text="{x:Bind Vm.StatusText, Mode=OneWay}"
                                TextWrapping="Wrap" IsTextSelectionEnabled="True" LineHeight="24" />
                 </StackPanel>

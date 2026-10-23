@@ -65,6 +65,13 @@ public sealed class NoticeResponder
             _logger.Warning(ex, "通知落库失败（{Type}，会话 {Session}）", notice.Type, notice.Chat.SessionId);
         }
 
+        // 请求类（加好友 / 加群）**只记录不响应**：自动通过等于替主人做决定
+        if (notice.Type is NoticeType.FriendRequest or NoticeType.GroupRequest)
+        {
+            _logger.Information("请求已记录（{Raw}）：不自动处理", notice.RawType);
+            return;
+        }
+
         if (!await IsEnabledAsync(notice.Type, ct).ConfigureAwait(false))
         {
             _logger.Information("通知 {Type}（{Raw}）已记录，未开启响应（会话 {Session}）",
@@ -102,11 +109,25 @@ public sealed class NoticeResponder
     public static string Describe(IncomingNotice notice) => notice.Type switch
     {
         NoticeType.Poke => $"[戳一戳] {Who(notice.Actor)} 戳了 {Who(notice.Target)}",
-        NoticeType.GroupIncrease => $"[入群] {Who(notice.Target)} 加入了群",
-        NoticeType.GroupDecrease => $"[退群] {Who(notice.Target)} 离开了群",
+        // 成员增减事件没有 target_id 时，被操作者就是 user_id（映射层已补；这里再兜一次）
+        NoticeType.GroupIncrease => $"[入群] {Who(notice.Target ?? notice.Actor)} 加入了群",
+        NoticeType.GroupDecrease => $"[退群] {Who(notice.Target ?? notice.Actor)} 离开了群",
         NoticeType.GroupAdminChanged => $"[管理员变动] {Who(notice.Target)} 的管理员身份发生变化（操作者：{Who(notice.Actor)}）",
         NoticeType.GroupBan => $"[禁言] {Who(notice.Target)} 被 {Who(notice.Actor)} 禁言",
         NoticeType.MessageRecalled => $"[撤回] {Who(notice.Actor)} 撤回了一条消息",
+        NoticeType.FriendAdd => $"[好友添加] {Who(notice.Actor ?? notice.Target)} 添加了好友",
+        NoticeType.GroupFileUpload => $"[群文件] {Who(notice.Actor)} 上传了文件",
+        NoticeType.GroupCardChanged => $"[群名片] {Who(notice.Target ?? notice.Actor)} 修改了群名片",
+        NoticeType.GroupNameChanged => $"[群名变更] {Who(notice.Actor)} 修改了群名",
+        NoticeType.GroupTitleChanged => $"[群头衔] {Who(notice.Actor)} 修改了群头衔",
+        NoticeType.GroupGrayTip => $"[群提示] {Who(notice.Actor)} 触发了一条群提示",
+        NoticeType.ProfileLike => $"[资料点赞] {Who(notice.Actor)} 点赞了资料",
+        NoticeType.InputStatus => $"[输入状态] {Who(notice.Actor)} 正在输入",
+        NoticeType.EssenceChanged => $"[群精华] {Who(notice.Actor)} 调整了精华消息",
+        NoticeType.MessageEmojiLike => $"[表情回应] {Who(notice.Actor)} 回应了消息",
+        NoticeType.BotOffline => "[离线] 机器人已离线",
+        NoticeType.FriendRequest => $"[好友请求] {Who(notice.Actor)} 请求添加好友",
+        NoticeType.GroupRequest => $"[加群请求] {Who(notice.Actor)} 请求加入群",
         _ => $"[通知] {notice.RawType}",
     };
 

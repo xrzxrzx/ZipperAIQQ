@@ -9,6 +9,9 @@ public partial class NoticeToggleItem : ObservableObject
 
     public string Label { get; init; } = string.Empty;
 
+    /// <summary>common / other（#34）。</summary>
+    public string Group { get; init; } = "other";
+
     [ObservableProperty]
     public partial bool Enabled { get; set; }
 }

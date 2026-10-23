@@ -130,6 +130,48 @@ public sealed class SqliteMessageStore : IMessageStore
         }, ct);
     }
 
+    public Task<IReadOnlyList<StoredMessage>> GetRangeAsync(
+        string sessionId,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        int limit,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        var fromMs = from?.ToUnixTimeMilliseconds();
+        var toMs = to?.ToUnixTimeMilliseconds();
+
+        return _db.ReadAsync<IReadOnlyList<StoredMessage>>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            // 区间两端都含（用户选 10-20 ~ 10-22 时，22 号当天的消息也要在）
+            cmd.CommandText = $"""
+                SELECT {SelectColumnsSql}
+                FROM Messages
+                WHERE SessionId = @sessionId
+                  AND (@from IS NULL OR SentAtMs >= @from)
+                  AND (@to IS NULL OR SentAtMs <= @to)
+                ORDER BY SentAtMs ASC, Id ASC
+                LIMIT @limit;
+                """;
+            cmd.Parameters.AddWithValue("@sessionId", sessionId);
+            cmd.Parameters.AddWithValue("@from", (object?)fromMs ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@to", (object?)toMs ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            var list = new List<StoredMessage>(capacity: Math.Min(limit, 256));
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                list.Add(ReadRow(reader));
+            }
+
+            return (IReadOnlyList<StoredMessage>)list;
+        }, ct);
+    }
+
     public Task<IReadOnlyList<StoredMessage>> GetByIdsAsync(
         string sessionId, IReadOnlyList<long> ids, CancellationToken ct = default)
     {
@@ -287,18 +329,38 @@ public sealed class SqliteMessageStore : IMessageStore
 
     /// <summary>关键词搜索（LIKE）；参数化，绝不拼字符串。</summary>
     public Task<IReadOnlyList<StoredMessage>> SearchAsync(
-        string sessionId, string keyword, int limit, CancellationToken ct = default)
+        string sessionId,
+        string keyword,
+        int limit,
+        DateTimeOffset? from = null,
+        DateTimeOffset? to = null,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(keyword);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
 
+        var fromMs = from?.ToUnixTimeMilliseconds();
+        var toMs = to?.ToUnixTimeMilliseconds();
+
         return _db.ReadAsync<IReadOnlyList<StoredMessage>>(async (conn, token) =>
         {
             await using var cmd = conn.CreateCommand();
-            cmd.CommandText = SelectSearchSql;
+            // 时间区间可选（#32）：模型可以问「上周三我们聊过什么」
+            cmd.CommandText = $"""
+                SELECT {SelectColumnsSql}
+                FROM Messages
+                WHERE SessionId = @sessionId
+                  AND PlainText LIKE @pattern
+                  AND (@from IS NULL OR SentAtMs >= @from)
+                  AND (@to IS NULL OR SentAtMs <= @to)
+                ORDER BY SentAtMs DESC, Id DESC
+                LIMIT @limit;
+                """;
             cmd.Parameters.AddWithValue("@sessionId", sessionId);
             cmd.Parameters.AddWithValue("@pattern", "%" + keyword + "%");
+            cmd.Parameters.AddWithValue("@from", (object?)fromMs ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@to", (object?)toMs ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@limit", limit);
 
             var buffer = new List<StoredMessage>(capacity: Math.Min(limit, 128));

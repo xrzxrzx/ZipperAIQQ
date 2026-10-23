@@ -7,7 +7,11 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
+using ZipperAIQQ.Agent.Search;
+using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Apis;
+using ZipperAIQQ.Channel.Audio;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.NapCat;
 using ZipperAIQQ.Channel.Throttling;
@@ -17,9 +21,13 @@ using ZipperAIQQ.Server.Api;
 using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
+using ZipperAIQQ.Server.Contacts;
+using ZipperAIQQ.Server.Logs;
 using ZipperAIQQ.Server.Notices;
 using ZipperAIQQ.Server.Orchestration;
+using ZipperAIQQ.Server.Process;
 using ZipperAIQQ.Server.Reply;
+using ZipperAIQQ.Server.Search;
 using ZipperAIQQ.Server.Scheduler;
 using ZipperAIQQ.Storage.Config;
 using ZipperAIQQ.Storage.Settings;
@@ -90,6 +98,55 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, ProbeNapcatAction>();
         services.AddSingleton<IApiAction, GetAccessAction>();
         services.AddSingleton<IApiAction, SetAccessAction>();
+
+        // ── #28：工具 / 命令 / NapCat API 的策略目录与开关 ──
+        services.AddSingleton<IExecutionPolicy>(sp =>
+        {
+            var items = new List<PolicyItem>(ToolCatalog.All);
+
+            items.AddRange(CommandCatalog.All.Select(c =>
+                new PolicyItem(PolicyCategory.Command, c.Name, c.Label, c.MinRole)));
+
+            items.AddRange(ChannelApiCatalog.All
+                .Where(a => a.ShowInCatalog)
+                .Select(a =>
+                    new PolicyItem(
+                        PolicyCategory.ChannelApi,
+                        a.Action,
+                        a.Label,
+                        a.IsWrite ? Role.Admin : Role.Normal)));
+
+            return new ExecutionPolicy(
+                sp.GetRequiredService<IRuntimeSettingsStore>(),
+                items,
+                sp.GetRequiredService<ILogger>());
+        });
+        services.AddHostedService<PolicyRefreshService>();
+        services.AddSingleton<IApiAction, GetToolCatalogAction>();
+        services.AddSingleton<IApiAction, SetToolPolicyAction>();
+
+        // 系统提示词（与人设分开的基础行为规则）
+        services.AddSingleton<IApiAction, GetSystemPromptAction>();
+        services.AddSingleton<IApiAction, SetSystemPromptAction>();
+        services.AddSingleton<IApiAction, ResetSystemPromptAction>();
+
+        // #31：服务端日志检索（只读 logs/zipper-*.log）
+        services.AddSingleton<ILogQuery>(sp => new FileLogQuery("logs", sp.GetRequiredService<ILogger>()));
+        services.AddSingleton<IApiAction, QueryLogsAction>();
+
+        // #36：重启（优雅停止 + 外部守护拉起）
+        services.AddSingleton<IServerRestartService, ServerRestartService>();
+        services.AddSingleton<IApiAction, RestartServerAction>();
+
+        // #38：网页搜索（DeepSeek 原生 Search/Fetch；形态待实测，失败即不可用）
+        services.AddHttpClient();
+        services.AddSingleton<IWebSearchProvider>(sp => new DeepSeekWebSearchProvider(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(DeepSeekWebSearchProvider)),
+            sp.GetRequiredService<IConfigStore>(),
+            sp.GetRequiredService<ISecretProtector>(),
+            Environment.GetEnvironmentVariable("ZIPPER_SEARCH_BASEURL"),
+            sp.GetRequiredService<ILogger>()));
+
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
 
@@ -153,9 +210,21 @@ public static class ServiceRegistration
                 WebSocketUrl = options.NapCatWebSocketUrl,
                 AccessToken = options.NapCatAccessToken,
             },
-            sp.GetRequiredService<ILogger>()));
+            sp.GetRequiredService<ILogger>(),
+            new SpeechOptions { Enabled = options.SttEnabled }));
 
         services.AddSingleton<IContactDirectory>(sp => sp.GetRequiredService<NapCatChannel>());
+
+        // 会话显示名（#2）：好友昵称 / 群名，带 5 分钟缓存
+        services.AddSingleton<ISessionNameResolver, SessionNameResolver>();
+
+        // 语音转写：契约在 Channel，实现是 NapCat 的 fetch_ptt_text（Q5：不接本地模型）
+        services.AddSingleton<ISpeechTranscriber>(sp => sp.GetRequiredService<NapCatChannel>().SpeechTranscriber);
+
+        // 主人放行范围（私聊 + 主人所在的群）：后台刷新，失败自动重试
+        services.AddSingleton<OwnerScopeResolver>();
+        services.AddSingleton<IOwnerScope>(sp => sp.GetRequiredService<OwnerScopeResolver>());
+        services.AddHostedService(sp => sp.GetRequiredService<OwnerScopeResolver>());
 
         services.AddSingleton<IMessageChannel>(sp =>
             // 所有出站消息都过这里：全局最短间隔 + 连发冷却，跨会话共享
@@ -211,6 +280,8 @@ public static class ServiceRegistration
                 Metrics = sp.GetRequiredService<IMetricsStore>(),
                 Events = sp.GetRequiredService<IEventBus>(),
                 PermissionGate = sp.GetRequiredService<IPermissionGate>(),
+                Policy = sp.GetRequiredService<IExecutionPolicy>(),
+                WebSearch = sp.GetService<IWebSearchProvider>(),
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
                 FileMaxBytes = options.FileMaxBytes,
@@ -236,9 +307,9 @@ public static class ServiceRegistration
     private static ChatFilterOptions BuildFilterOptions(ServerOptions options) =>
         options.Whitelist.Count > 0
             // 配了白名单：只收这些会话
-            ? new ChatFilterOptions { Mode = ChatListMode.Whitelist, Entries = options.Whitelist }
-            // 没配：黑名单 + 空 = 全放行（首次跑通方便；生产请显式配白名单）
-            : new ChatFilterOptions { Mode = ChatListMode.Blacklist, Entries = [] };
+            ? new ChatFilterOptions { Whitelist = options.Whitelist }
+            // 没配：两份名单都空 = 全放行（首次跑通方便；生产请显式配名单）
+            : new ChatFilterOptions();
 
     private static ChatAgentOptions BuildAgentOptions(ServerOptions options) => new()
     {

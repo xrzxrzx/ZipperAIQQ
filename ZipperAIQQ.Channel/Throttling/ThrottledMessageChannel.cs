@@ -144,6 +144,9 @@ public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory
     public Task<IReadOnlyList<ContactInfo>> GetFriendsAsync(CancellationToken ct = default) =>
         Directory.GetFriendsAsync(ct);
 
+    public Task<IReadOnlyList<GroupInfo>> GetGroupsAsync(CancellationToken ct = default) =>
+        Directory.GetGroupsAsync(ct);
+
     public Task<GroupInfo?> GetGroupAsync(string groupId, CancellationToken ct = default) =>
         Directory.GetGroupAsync(groupId, ct);
 

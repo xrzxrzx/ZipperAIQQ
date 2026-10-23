@@ -26,6 +26,31 @@ public static class MessageTools
     /// <summary>跨会话搜索（仅管理员/主人可见）。</summary>
     public const string CrossSessionSearchToolName = "search_other_sessions";
 
+    /// <summary>按时间范围取消息（#32）。</summary>
+    public const string BetweenToolName = "get_history_between";
+
+    /// <summary>解析「yyyy-MM-dd HH:mm」这类本地时间；空串表示不限定。</summary>
+    private static bool TryParseTime(string? raw, out DateTimeOffset? value)
+    {
+        value = null;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return true;
+        }
+
+        if (DateTimeOffset.TryParse(
+                raw,
+                System.Globalization.CultureInfo.CurrentCulture,
+                System.Globalization.DateTimeStyles.AssumeLocal,
+                out var parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        return false;
+    }
+
     /// <param name="allowCrossSession">
     /// 是否给模型「跨会话搜索」能力（由权限门禁决定，默认不给）。
     /// </param>
@@ -38,15 +63,22 @@ public static class MessageTools
         var cap = Math.Clamp(maxResults, 1, 50);
 
         yield return AIFunctionFactory.Create(
-            async (string keyword, int? limit, CancellationToken ct) =>
+            async (string keyword, int? limit, string? from, string? to, CancellationToken ct) =>
             {
                 if (string.IsNullOrWhiteSpace(keyword))
                 {
                     return "请给出要搜的关键词。";
                 }
 
+                if (!TryParseTime(from, out var fromTime) || !TryParseTime(to, out var toTime))
+                {
+                    return "from / to 的时间格式看不懂。用 `yyyy-MM-dd HH:mm`（本地时间）或留空。";
+                }
+
                 var take = Math.Clamp(limit ?? 10, 1, cap);
-                var rows = await store.SearchAsync(chat.SessionId, keyword.Trim(), take, ct).ConfigureAwait(false);
+                var rows = await store
+                    .SearchAsync(chat.SessionId, keyword.Trim(), take, fromTime, toTime, ct)
+                    .ConfigureAwait(false);
 
                 if (rows.Count == 0)
                 {
@@ -58,8 +90,36 @@ public static class MessageTools
             name: SearchToolName,
             description:
                 "按关键词搜索**本会话**的历史消息，包括已经被压缩出当前上下文的部分。\n" +
+                "可以再给 from / to（格式 `yyyy-MM-dd HH:mm`）限定时间范围，例如「上周三聊了什么」。\n" +
                 "当你需要回忆「之前聊过什么 / 谁说过什么 / 某个细节」时用它，不要靠猜。\n" +
-                "参数：keyword（关键词）、limit（最多几条，默认 10）。");
+                "参数：keyword（关键词）、limit（最多几条，默认 10）、from、to（可选）。");
+
+        yield return AIFunctionFactory.Create(
+            async (string from, string to, CancellationToken ct) =>
+            {
+                if (!TryParseTime(from, out var fromTime) || !TryParseTime(to, out var toTime) ||
+                    fromTime is null || toTime is null)
+                {
+                    return "from / to 必填，格式 `yyyy-MM-dd HH:mm`。";
+                }
+
+                if (fromTime > toTime)
+                {
+                    return "from 不能晚于 to。";
+                }
+
+                var rows = await store
+                    .GetRangeAsync(chat.SessionId, fromTime, toTime, 200, ct)
+                    .ConfigureAwait(false);
+
+                return rows.Count == 0
+                    ? "这个时间范围内没有消息。"
+                    : $"这段时间内 {rows.Count} 条：\n" + Format(rows);
+            },
+            name: BetweenToolName,
+            description:
+                "取**本会话**某个时间范围内的消息（含端点），最多 200 条。\n" +
+                "参数：from、to，格式 `yyyy-MM-dd HH:mm`（本地时间）。");
 
         yield return AIFunctionFactory.Create(
             async (int? count, CancellationToken ct) =>

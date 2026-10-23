@@ -1,0 +1,13 @@
+<UserControl
+    x:Class="ZipperAIQQ.Client.Controls.FilterableComboBox"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 可输入过滤的下拉（#17）：AutoSuggestBox 自带搜索，比自绘 Popup 稳 -->
+    <AutoSuggestBox x:Name="Box"
+                    QueryIcon="Find"
+                    TextChanged="Box_TextChanged"
+                    SuggestionChosen="Box_SuggestionChosen"
+                    QuerySubmitted="Box_QuerySubmitted"
+                    MinWidth="240" />
+</UserControl>

@@ -5,6 +5,7 @@ using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
+using ZipperAIQQ.Agent.Search;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
@@ -46,6 +47,8 @@ public sealed class ChatAgent : IChatAgent
     private readonly IMetricsStore _metrics;
     private readonly IEventBus _events;
     private readonly IPermissionGate _permissionGate;
+    private readonly IExecutionPolicy _policy;
+    private readonly Search.IWebSearchProvider? _webSearch;
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
@@ -89,6 +92,8 @@ public sealed class ChatAgent : IChatAgent
         _metrics = deps.Metrics;
         _events = deps.Events;
         _permissionGate = deps.PermissionGate;
+        _policy = deps.Policy;
+        _webSearch = deps.WebSearch;
         _configs = configs;
         _settings = settings;
         _roles = deps.Roles;
@@ -276,6 +281,13 @@ public sealed class ChatAgent : IChatAgent
         // 摘要并进这里而不是单独占一条 system —— D4 要求人设 system 恰好两条，
         // 多一条会让人分不清哪个才是"角色设定"。
         var summary = await _summaryStore.GetAsync(SessionId, ct).ConfigureAwait(false);
+
+        // 系统提示词（与人设分开）：客户端可改；没配就用内置默认
+        var configuredPrompt = await _settings.GetAsync(SystemPrompts.StorageKey, ct).ConfigureAwait(false);
+        var systemPrompt = string.IsNullOrWhiteSpace(configuredPrompt)
+            ? SystemPrompts.Default
+            : configuredPrompt.Trim();
+
         var reinject = new StringBuilder(personaText);
         if (summary is not null && !string.IsNullOrWhiteSpace(summary.Summary))
         {
@@ -294,8 +306,9 @@ public sealed class ChatAgent : IChatAgent
             reinject.AppendLine().AppendLine(capabilityNote);
         }
 
-        // 基础运行说明（发消息/表情/记忆）：以前在 persona.md 里，和人设混在一起
-        reinject.AppendLine().AppendLine(RuntimeGuideNote);
+        // 基础行为规则（发消息 / 表情 / 记忆 / 工具 / 主动行为 / 语气）：
+        // 统一由「系统提示词」提供，客户端可改写，默认值见 SystemPrompts.Default
+        reinject.AppendLine().AppendLine(systemPrompt);
 
         // 关系段：光有"主人是 10001"这个号码，模型认不出这个人是谁
         // （实测它只会照着念号码，不会联想到"这是拉链"）—— 所以把**昵称 + 当前身份**都给出来
@@ -305,9 +318,6 @@ public sealed class ChatAgent : IChatAgent
         // 人设守卫（第 20 项）：每次重注入都带，位置紧贴当前消息 ——
         // 长对话里人设会被上下文稀释，靠这一条把它拉回来。
         reinject.AppendLine().AppendLine(PersonaGuardNote);
-
-        // 工具使用指引：明确"该用工具时别猜"（实测模型会跳过工具直接编）
-        reinject.AppendLine().AppendLine(ToolUsageNote);
 
         var messages = new List<ChatMessage>
         {
@@ -545,14 +555,40 @@ public sealed class ChatAgent : IChatAgent
         // 通道实现了 IContactDirectory 才给工具，否则模型会去调一个不存在的能力
         if (_channel is Channel.IContactDirectory contacts)
         {
-            tools.AddRange(ContactTools.Create(contacts));
+            tools.AddRange(ContactTools.Create(contacts, context, _policy));
 
             // 写操作（改自己签名 / 戳别人）：同样是"通道支持才给"，
             // 内部再按权限门禁逐个判断 —— 没权限就连工具都不给模型看
             tools.AddRange(ProfileTools.Create(contacts, context, _permissionGate, _configs));
         }
 
-        return tools;
+        // 策略过滤（#28）：关掉的工具不给 schema；角色不够的也不给。
+        // 可见性不是唯一防线 —— 每个工具执行前仍会再过一次门禁。
+        if (_webSearch is { IsAvailable: true })
+        {
+            tools.AddRange(WebSearchTool.Create(_webSearch));
+        }
+
+        var allowed = new List<AITool>(tools.Count);
+        foreach (var tool in tools)
+        {
+            var capability = ToolCatalog.CapabilityOf(tool.Name);
+            var fallback = capability is null ? Role.Normal : PermissionGate.DefaultRoleOf(capability.Value);
+
+            if (!_policy.IsEnabled(PolicyCategory.Tool, tool.Name))
+            {
+                continue;
+            }
+
+            if (context.Role < _policy.MinRole(PolicyCategory.Tool, tool.Name, fallback))
+            {
+                continue;
+            }
+
+            allowed.Add(tool);
+        }
+
+        return allowed;
     }
 
     /// <summary>
@@ -715,6 +751,12 @@ public sealed class ChatAgent : IChatAgent
         2. **不许**在没查的情况下回「我不知道 / 说不出来」—— 那等于没试就放弃
         3. 查了确实没有，才说「查不到」，并说清查过什么
         4. 工具报错就如实说报错，不要假装成功
+
+        【可以主动做的事】
+        - `poke_someone`（戳一戳）和 `set_my_signature`（改个性签名）是**你自己可以决定**的行为：
+          心情好、想引起注意、想表达态度时可以主动做，不必等对方要求
+        - 但要克制：同一轮里不要反复戳同一个人；签名不要频繁改
+        - 做完自然带过即可，不要解释成"我调用了工具"
         """;
 
     /// <summary>
@@ -795,13 +837,14 @@ public sealed class ChatAgent : IChatAgent
         llmActivity?.SetTag("llm.input.tokens", response.Usage?.InputTokenCount);
         llmActivity?.SetTag("llm.output.tokens", response.Usage?.OutputTokenCount);
 
-        // token 用量与耗时落库 —— 客户端要能看「哪类调用最慢 / token 烧多快」
+        // token 用量与耗时落库 —— 客户端要能看「哪类调用最慢 / token 烧多快 / 缓存命中多少」
         await _metrics.RecordAsync(new MetricEntry(
             SessionId,
             metricKind,
             sw.Elapsed.TotalMilliseconds,
             response.Usage?.InputTokenCount,
-            response.Usage?.OutputTokenCount), ct).ConfigureAwait(false);
+            response.Usage?.OutputTokenCount,
+            response.Usage?.CachedInputTokenCount), ct).ConfigureAwait(false);
 
         return response;
     }
@@ -914,6 +957,10 @@ public sealed class ChatAgent : IChatAgent
                     contents.Add(new TextContent(RenderFace(face)));
                     break;
 
+                case RecordSegment record:
+                    contents.Add(new TextContent(RenderRecord(record)));
+                    break;
+
                 case ImageSegment image when Uri.TryCreate(image.Url, UriKind.Absolute, out var uri):
                     contents.Add(new UriContent(uri, "image/jpeg"));
                     break;
@@ -966,7 +1013,15 @@ public sealed class ChatAgent : IChatAgent
             {
                 TextSegment text => text.Text,
                 FaceSegment face => RenderFace(face),
+                // 语音：**转写已在通道层完成**（FR-1.5），这里只负责呈现结果
+                RecordSegment record => RenderRecord(record),
+                // 历史里的图片：**当前消息**会把图作为 UriContent 传给模型（多模态），
+                // 但历史回放只能给占位文本 —— 所以这里标"历史"，不要让它以为现在也看不见。
                 ImageSegment => "[图片]",
+                // 表情包：带上 emoji id，模型**原样复制**这个标记就能发回同一张
+                MfaceSegment mface => string.IsNullOrEmpty(mface.EmojiId)
+                    ? "[表情包:" + (mface.Summary ?? "动画表情") + "]"
+                    : "[表情包:" + (mface.Summary ?? "动画表情") + "|emoji=" + mface.EmojiId + "]",
                 MentionSegment mention => "@" + mention.UserId + " ",
                 ReplySegment => string.Empty,
                 _ => string.Empty,
@@ -977,9 +1032,31 @@ public sealed class ChatAgent : IChatAgent
         return rendered.Length > 0 ? rendered : fallback;
     }
 
+    /// <summary>
+    /// 把入站表情渲染成**模型能认出来的形式**。
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ 以前输出的是 <c>[笑哭]</c> —— 模型会把它当成普通方括号文字，
+    /// 根本不知道「对方发了个表情」，因此既不会复读、也不会学着用（实测踩到）。
+    /// 现在和出站格式统一成 <c>[表情:名字]</c>：模型看到就知道这是表情，
+    /// 而且**可以直接照抄这个标记发回去**。
+    /// </remarks>
     private string RenderFace(FaceSegment face)
     {
         var entry = _faces.GetById(face.Id);
-        return entry is null ? "[表情]" : "[" + entry.Name + "]";
+
+        // 查不到名字时也要说清"这是个表情"，否则模型会以为消息里有段空白。
+        // 带上 id：模型至少能原样复读同一个表情，排查时也能看出是哪一个（问题记录 #25）。
+        return entry is null ? "[表情:" + face.Id + "]" : "[表情:" + entry.Name + "]";
     }
+
+    /// <summary>
+    /// 把通道层转写好的语音渲染成模型能读的文本。
+    /// </summary>
+    /// <remarks>
+    /// 未转写时保留 <c>[语音]</c>：模型需要知道"对方发了语音但内容不可见"，
+    /// 而不是以为消息里什么都没有。
+    /// </remarks>
+    private static string RenderRecord(RecordSegment record) =>
+        string.IsNullOrWhiteSpace(record.Text) ? "[语音]" : "[语音转写:" + record.Text + "]";
 }

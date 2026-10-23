@@ -22,6 +22,11 @@ public sealed record ServerOptions
     public string? NapCatAccessToken { get; init; }
     public IReadOnlyList<string> Whitelist { get; init; } = [];
 
+    /// <summary>
+    /// 语音转写开关（默认开）：走 NapCat 自带的 <c>fetch_ptt_text</c>，不接本地模型（Q5 定稿）。
+    /// </summary>
+    public bool SttEnabled { get; init; } = true;
+
     // ── 模型 ──
     public required string LlmApiKey { get; init; }
     public required string LlmBaseUrl { get; init; }
@@ -151,6 +156,7 @@ public sealed record ServerOptions
             NapCatAccessToken = Optional("ZIPPER_NAPCAT_TOKEN"),
             Whitelist = (Optional("ZIPPER_WHITELIST") ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            SttEnabled = Optional("ZIPPER_STT_ENABLED") is not "0",
 
             LlmApiKey = apiKey,
             LlmBaseUrl = baseUrl,

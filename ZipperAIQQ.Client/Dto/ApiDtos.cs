@@ -54,11 +54,26 @@ public sealed class SessionDto
     [JsonPropertyName("sessionId")]
     public string SessionId { get; set; } = string.Empty;
 
+    [JsonPropertyName("platform")]
+    public string Platform { get; set; } = string.Empty;
+
+    /// <summary>0 = 私聊，1 = 群聊（与服务端 ChatType 一致）。</summary>
+    [JsonPropertyName("chatType")]
+    public int ChatType { get; set; }
+
+    /// <summary>「QQ · 昵称」/「QQ群 · 群名」；解析失败时等于 SessionId。</summary>
+    [JsonPropertyName("displayName")]
+    public string DisplayName { get; set; } = string.Empty;
+
     [JsonPropertyName("messageCount")]
     public int MessageCount { get; set; }
 
     [JsonPropertyName("lastMessageAt")]
     public long LastMessageAt { get; set; }
+
+    /// <summary>列表主标题：优先显示名，旧服务端没给就退回编号。</summary>
+    [JsonIgnore]
+    public string Title => string.IsNullOrWhiteSpace(DisplayName) ? SessionId : DisplayName;
 
     public string LastMessageText =>
         DateTimeOffset.FromUnixTimeMilliseconds(LastMessageAt).LocalDateTime.ToString("MM-dd HH:mm");
@@ -85,7 +100,19 @@ public sealed class MessageDto
     public string TimeText =>
         DateTimeOffset.FromUnixTimeMilliseconds(OccurredAt).LocalDateTime.ToString("HH:mm:ss");
 
-    public string Display => $"[{TimeText}] {(IsOutgoing ? "AI" : Sender)}：{Text}";
+    /// <summary>发送人显示名（AI 统一显示「AI」）。</summary>
+    [JsonIgnore]
+    public string SenderText => IsOutgoing ? "AI" : Sender;
+
+    /// <summary>正文（不含时间 / 发送人，便于分段高亮）。</summary>
+    [JsonIgnore]
+    public string BodyText => Text;
+
+    /// <summary>是否用户侧（给 x:Load 做二选一显示）。</summary>
+    [JsonIgnore]
+    public bool IsUser => !IsOutgoing;
+
+    public string Display => $"[{TimeText}] {SenderText}：{Text}";
 }
 
 /// <summary>端点配置（<c>getConfig</c>，key 只回掩码）。</summary>
@@ -121,6 +148,10 @@ public sealed class ConfigDto
 
     [JsonPropertyName("hasClient")]
     public bool HasClient { get; set; }
+
+    /// <summary>固定端点名（#12：界面只读展示 + 下拉）。</summary>
+    [JsonPropertyName("endpointNames")]
+    public List<string> EndpointNames { get; set; } = [];
 
     public string Summary
     {
@@ -208,11 +239,36 @@ public sealed class StatsDto
     [JsonPropertyName("windowHours")]
     public int WindowHours { get; set; }
 
+    /// <summary>本次统计的会话口径；<c>null</c> = 全部会话。</summary>
+    [JsonPropertyName("sessionId")]
+    public string? SessionId { get; set; }
+
+    /// <summary>有指标记录的会话（下拉用）。</summary>
+    [JsonPropertyName("sessions")]
+    public List<SessionStatsDto> Sessions { get; set; } = [];
+
     [JsonPropertyName("last24h")]
     public StatsWindowDto Last24h { get; set; } = new();
 
     [JsonPropertyName("allTime")]
     public StatsWindowDto AllTime { get; set; } = new();
+}
+
+/// <summary>一个会话的指标概况（数据页筛选下拉）。</summary>
+public sealed class SessionStatsDto
+{
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    [JsonPropertyName("calls")]
+    public long Calls { get; set; }
+
+    [JsonPropertyName("lastAt")]
+    public long LastAt { get; set; }
+
+    /// <summary>下拉显示用（B3 起会换成昵称）。</summary>
+    [JsonIgnore]
+    public string Display => SessionId;
 }
 
 public sealed class StatsWindowDto
@@ -246,6 +302,14 @@ public sealed class LlmStatsDto
 
     [JsonPropertyName("outputTokens")]
     public long OutputTokens { get; set; }
+
+    /// <summary>命中缓存的输入 token。</summary>
+    [JsonPropertyName("cachedInputTokens")]
+    public long CachedInputTokens { get; set; }
+
+    /// <summary>缓存命中率（0~1）。</summary>
+    [JsonPropertyName("cacheHitRate")]
+    public double CacheHitRate { get; set; }
 
     [JsonPropertyName("avgMs")]
     public double AvgMs { get; set; }
@@ -319,6 +383,10 @@ public sealed class KindStatsDto
     [JsonPropertyName("kind")]
     public string Kind { get; set; } = string.Empty;
 
+    /// <summary>中文名（#6：界面主显示；英文仍保留在 <see cref="Kind"/>）。</summary>
+    [JsonPropertyName("kindLabel")]
+    public string KindLabel { get; set; } = string.Empty;
+
     [JsonPropertyName("count")]
     public long Count { get; set; }
 
@@ -337,7 +405,34 @@ public sealed class KindStatsDto
     [JsonPropertyName("outputTokens")]
     public long OutputTokens { get; set; }
 
-    /// <summary>给界面直接用（x:Bind 不做数值→字符串转换）。</summary>
+    [JsonPropertyName("cachedInputTokens")]
+    public long CachedInputTokens { get; set; }
+
+    /// <summary>
+    /// 中文名（#6）：优先用服务端 <c>kindLabel</c>；**旧服务端没给时用客户端内置表兜底**，
+    /// 免得界面上出现「上下两排英文」。
+    /// </summary>
+    [JsonIgnore]
+    public string KindTitle =>
+        !string.IsNullOrWhiteSpace(KindLabel)
+            ? KindLabel
+            : KnownLabels.TryGetValue(Kind, out var label) ? label : Kind;
+
+    private static readonly Dictionary<string, string> KnownLabels = new(StringComparer.Ordinal)
+    {
+        ["llm.call"] = "LLM 调用",
+        ["llm.retry"] = "LLM 重试（漂移纠正）",
+        ["retrieval"] = "记忆检索",
+        ["retrieval.hit"] = "检索命中",
+        ["jev.judge"] = "JEV 判断",
+        ["jev.degrade"] = "JEV 降级",
+        ["summary"] = "上下文压缩",
+        ["tool.send_message"] = "发送消息",
+        ["embedding.backfill"] = "向量回填",
+        ["tool.web_search"] = "网页搜索",
+        ["tool.fetch_url"] = "网页抓取",
+    };
+
     [JsonIgnore]
     public string CountText => Count.ToString("N0");
 
@@ -371,8 +466,43 @@ public sealed class NoticeToggleDto
     [JsonPropertyName("label")]
     public string Label { get; set; } = string.Empty;
 
+    /// <summary>common / other（#34：常用单独一组）。</summary>
+    [JsonPropertyName("group")]
+    public string Group { get; set; } = "other";
+
+    [JsonPropertyName("groupLabel")]
+    public string GroupLabel { get; set; } = "其他";
+
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; }
+}
+
+/// <summary>工具 / 命令 / NapCat API 策略项（#28）。</summary>
+public sealed class ToolCatalogItemDto
+{
+    [JsonPropertyName("category")]
+    public string Category { get; set; } = string.Empty;
+
+    [JsonPropertyName("categoryLabel")]
+    public string CategoryLabel { get; set; } = string.Empty;
+
+    [JsonPropertyName("key")]
+    public string Key { get; set; } = string.Empty;
+
+    [JsonPropertyName("label")]
+    public string Label { get; set; } = string.Empty;
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+
+    [JsonPropertyName("role")]
+    public string Role { get; set; } = "Normal";
+
+    [JsonPropertyName("defaultRole")]
+    public string DefaultRole { get; set; } = "Normal";
+
+    [JsonPropertyName("hardFloor")]
+    public string? HardFloor { get; set; }
 }
 
 /// <summary>人设（<c>getPersona</c>）：形象 / 性格分开。</summary>
@@ -395,6 +525,20 @@ public sealed class PersonaDto
 
     [JsonPropertyName("split")]
     public bool Split { get; set; }
+
+    /// <summary>会话级预设是否启用（#16）。</summary>
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>该会话是否有自己的预设（没有时开关禁用）。</summary>
+    [JsonPropertyName("hasOverride")]
+    public bool HasOverride { get; set; }
+
+    [JsonPropertyName("updated")]
+    public int Updated { get; set; }
+
+    [JsonPropertyName("skipped")]
+    public bool Skipped { get; set; }
 }
 
 /// <summary>人员与名单（<c>getAccess</c>）。</summary>
@@ -411,6 +555,20 @@ public sealed class AccessDto
 
     [JsonPropertyName("filterEntries")]
     public List<string> FilterEntries { get; set; } = [];
+
+    /// <summary>黑白双名单（#20）。</summary>
+    [JsonPropertyName("whitelist")]
+    public List<string> Whitelist { get; set; } = [];
+
+    [JsonPropertyName("blacklist")]
+    public List<string> Blacklist { get; set; } = [];
+
+    /// <summary>主人放行范围（私聊 + 主人所在的群）。</summary>
+    [JsonPropertyName("alwaysAllow")]
+    public List<string> AlwaysAllow { get; set; } = [];
+
+    [JsonPropertyName("groupCandidates")]
+    public List<GroupCandidateDto> GroupCandidates { get; set; } = [];
 
     [JsonPropertyName("filterCount")]
     public int FilterCount { get; set; }
@@ -430,4 +588,76 @@ public sealed class AccessCandidateDto
     /// <summary>下拉框显示用。</summary>
     [JsonIgnore]
     public string Display => $"{Nickname}（{UserId}）";
+}
+
+/// <summary>群候选（名单条目用）。</summary>
+public sealed class GroupCandidateDto
+{
+    [JsonPropertyName("groupId")]
+    public string GroupId { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    public string Display => $"群 · {Name}（{SessionId}）";
+}
+
+/// <summary>一条服务端日志（#31）。</summary>
+public sealed class LogLineDto
+{
+    [JsonPropertyName("at")]
+    public long At { get; set; }
+
+    [JsonPropertyName("level")]
+    public string Level { get; set; } = string.Empty;
+
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    [JsonPropertyName("file")]
+    public string File { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    public string TimeText => DateTimeOffset.FromUnixTimeMilliseconds(At).LocalDateTime.ToString("MM-dd HH:mm:ss");
+
+    [JsonIgnore]
+    public bool IsError => Level is "ERR" or "FTL";
+
+    [JsonIgnore]
+    public bool IsWarning => Level == "WRN";
+
+    [JsonIgnore]
+    public bool IsInfo => !IsError && !IsWarning;
+
+    [JsonIgnore]
+    public string Display => $"[{TimeText} {Level}] {Message}";
+}
+
+/// <summary>系统提示词（与人设分开）。</summary>
+public sealed class SystemPromptDto{
+    [JsonPropertyName("text")]
+    public string Text { get; set; } = string.Empty;
+
+    [JsonPropertyName("isDefault")]
+    public bool IsDefault { get; set; }
+
+    [JsonPropertyName("defaultText")]
+    public string DefaultText { get; set; } = string.Empty;
+}
+
+/// <summary>保存类 action 的统一结果（#10 幂等）。</summary>
+public sealed class SaveResultDto
+{
+    [JsonPropertyName("updated")]
+    public int Updated { get; set; }
+
+    [JsonPropertyName("skipped")]
+    public bool Skipped { get; set; }
+
+    [JsonPropertyName("changed")]
+    public List<string> Changed { get; set; } = [];
 }

@@ -16,8 +16,30 @@ public sealed class GetBehaviorAction : IApiAction
     /// <summary>可配置回复模式的取值。</summary>
     public static readonly string[] ReplyModes = ["every", "mention", "jev"];
 
-    /// <summary>首批支持响应的通知类型（与 <c>/notice</c> 命令保持一致）。</summary>
+    /// <summary>可响应（可配置开关）的通知类型（#34：从 6 类扩到全部非请求类）。</summary>
     public static readonly NoticeType[] ReplyableNotices =
+    [
+        NoticeType.Poke,
+        NoticeType.GroupIncrease,
+        NoticeType.GroupDecrease,
+        NoticeType.GroupAdminChanged,
+        NoticeType.GroupBan,
+        NoticeType.MessageRecalled,
+        NoticeType.FriendAdd,
+        NoticeType.GroupFileUpload,
+        NoticeType.GroupCardChanged,
+        NoticeType.GroupNameChanged,
+        NoticeType.GroupTitleChanged,
+        NoticeType.GroupGrayTip,
+        NoticeType.ProfileLike,
+        NoticeType.InputStatus,
+        NoticeType.EssenceChanged,
+        NoticeType.MessageEmojiLike,
+        NoticeType.BotOffline,
+    ];
+
+    /// <summary>「常用」的 6 类（界面上单独一组）。</summary>
+    public static readonly NoticeType[] CommonNotices =
     [
         NoticeType.Poke,
         NoticeType.GroupIncrease,
@@ -49,6 +71,8 @@ public sealed class GetBehaviorAction : IApiAction
             {
                 type = type.ToString(),
                 label = Describe(type),
+                group = CommonNotices.Contains(type) ? "common" : "other",
+                groupLabel = CommonNotices.Contains(type) ? "常用" : "其他",
                 enabled = value is "1" or "true",
             });
         }
@@ -69,6 +93,17 @@ public sealed class GetBehaviorAction : IApiAction
         NoticeType.GroupAdminChanged => "管理员变动",
         NoticeType.GroupBan => "禁言",
         NoticeType.MessageRecalled => "撤回",
+        NoticeType.FriendAdd => "好友添加",
+        NoticeType.GroupFileUpload => "群文件",
+        NoticeType.GroupCardChanged => "群名片",
+        NoticeType.GroupNameChanged => "群名变更",
+        NoticeType.GroupTitleChanged => "群头衔",
+        NoticeType.GroupGrayTip => "群提示",
+        NoticeType.ProfileLike => "资料点赞",
+        NoticeType.InputStatus => "输入状态",
+        NoticeType.EssenceChanged => "群精华",
+        NoticeType.MessageEmojiLike => "表情回应",
+        NoticeType.BotOffline => "机器人离线",
         _ => type.ToString(),
     };
 }

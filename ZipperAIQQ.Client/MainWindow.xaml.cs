@@ -20,7 +20,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private bool _restoringPane = true;
 
-    public MainWindow(MainViewModel vm)
+    public MainWindow(ShellViewModel vm)
     {
         ArgumentNullException.ThrowIfNull(vm);
 
@@ -71,7 +71,7 @@ public sealed partial class MainWindow : Window
         Vm.StartAutoRefresh();
 
         // 启动即尝试连接（地址有默认值；连不上就在状态条上提示，不影响界面）
-        _ = Vm.ConnectCommand.ExecuteAsync(null);
+        _ = Vm.Status.ConnectCommand.ExecuteAsync(null);
 
         // 窗口关掉：记录侧栏状态（初始化期间的事件不可靠，这里才准）+ 停掉定时器
         Closed += (_, _) =>
@@ -81,7 +81,7 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    public MainViewModel Vm { get; }
+    public ShellViewModel Vm { get; }
 
     /// <summary>隐藏系统标题栏，内容扩展到标题栏区域，系统按钮透明化。</summary>
     private void InitializeTitleBar()
@@ -131,6 +131,26 @@ public sealed partial class MainWindow : Window
         ]);
     }
 
+    private void NavView_PaneOpened(NavigationView sender, object args)
+    {
+        if (_restoringPane)
+        {
+            return;
+        }
+
+        Vm.IsPaneOpen = true;
+    }
+
+    private void NavView_PaneClosed(NavigationView sender, object args)
+    {
+        if (_restoringPane)
+        {
+            return;
+        }
+
+        Vm.IsPaneOpen = false;
+    }
+
     private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         if (args.SelectedItem is not NavigationViewItem item || item.Tag?.ToString() is not { } tag)
@@ -154,8 +174,14 @@ public sealed partial class MainWindow : Window
     {
         "sessions" => typeof(SessionsPage),
         "data" => typeof(DataPage),
-        "config" => typeof(ConfigPage),
+        "models" => typeof(EndpointsPage),
+        "runtime" => typeof(RuntimePage),
+        "persona" => typeof(PersonaPage),
+        "access" => typeof(AccessPage),
+        "tools" => typeof(ToolsPage),
         "audit" => typeof(AuditPage),
+        "logs" => typeof(LogsPage),
         _ => typeof(StatusPage),
     };
 }
+

@@ -4,7 +4,7 @@ using ZipperAIQQ.Storage.Metrics;
 namespace ZipperAIQQ.Server.Api.Handlers;
 
 /// <summary>
-/// 数据页统计（M2-E）：Token 用量 / 检索命中率 / JEV 判断情况 / 压缩次数。
+/// 数据页统计（M2-E）：Token 用量（含缓存命中）/ 检索命中率 / JEV 判断 / 压缩次数。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -12,6 +12,10 @@ namespace ZipperAIQQ.Server.Api.Handlers;
 /// </para>
 /// <para>
 /// 两个口径：<c>last24h</c> 给趋势看，<c>allTime</c> 给总量看 —— 用户看到的"烧了多少"通常是总量。
+/// </para>
+/// <para>
+/// payload 可带 <c>sessionId</c>（#5）：只看某个会话。不带 = 全部会话。
+/// 同时返回 <c>sessions</c>（有指标的会话列表），供页面上的下拉选择。
 /// </para>
 /// </remarks>
 public sealed class GetStatsAction : IApiAction
@@ -28,12 +32,33 @@ public sealed class GetStatsAction : IApiAction
 
     public async Task<object?> HandleAsync(JsonElement payload, CancellationToken ct)
     {
-        var day = await _metrics.GetSummaryAsync(24, ct).ConfigureAwait(false);
-        var all = await _metrics.GetSummaryAsync(0, ct).ConfigureAwait(false);
+        var sessionId = payload.ValueKind == JsonValueKind.Object &&
+                        payload.TryGetProperty("sessionId", out var idElement) &&
+                        idElement.ValueKind == JsonValueKind.String
+            ? idElement.GetString()?.Trim()
+            : null;
+
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            sessionId = null;
+        }
+
+        var day = await _metrics.GetSummaryAsync(24, sessionId, ct).ConfigureAwait(false);
+        var all = await _metrics.GetSummaryAsync(0, sessionId, ct).ConfigureAwait(false);
+        var sessions = await _metrics.ListSessionAsync(24, ct).ConfigureAwait(false);
 
         return new
         {
             windowHours = 24,
+            sessionId,
+            sessions = sessions
+                .Select(s => new
+                {
+                    sessionId = s.SessionId,
+                    calls = s.Calls,
+                    lastAt = s.LastAt.ToUnixTimeMilliseconds(),
+                })
+                .ToList(),
             last24h = Build(day),
             allTime = Build(all),
         };
@@ -62,13 +87,21 @@ public sealed class GetStatsAction : IApiAction
         var jevCount = jev?.Count ?? 0;
         var jevReplies = jev?.TotalInputTokens ?? 0;
 
+        var inputTokens = llm?.TotalInputTokens ?? 0;
+        var cachedTokens = llm?.TotalCachedInputTokens ?? 0;
+        var cacheHitRate = inputTokens > 0
+            ? Math.Round((double)cachedTokens / inputTokens, 4)
+            : 0;
+
         return new
         {
             llm = new
             {
                 calls = llm?.Count ?? 0,
-                inputTokens = llm?.TotalInputTokens ?? 0,
+                inputTokens,
                 outputTokens = llm?.TotalOutputTokens ?? 0,
+                cachedInputTokens = cachedTokens,
+                cacheHitRate,
                 avgMs = Math.Round(llm?.AvgMs ?? 0, 1),
                 maxMs = Math.Round(llm?.MaxMs ?? 0, 1),
                 retries = retry?.Count ?? 0,
@@ -104,12 +137,14 @@ public sealed class GetStatsAction : IApiAction
                 .Select(r => new
                 {
                     kind = r.Kind,
+                    kindLabel = MetricKindCatalog.Label(r.Kind),
                     count = r.Count,
                     avgMs = Math.Round(r.AvgMs, 1),
                     minMs = Math.Round(r.MinMs, 1),
                     maxMs = Math.Round(r.MaxMs, 1),
                     inputTokens = r.TotalInputTokens,
                     outputTokens = r.TotalOutputTokens,
+                    cachedInputTokens = r.TotalCachedInputTokens,
                 })
                 .ToList(),
         };

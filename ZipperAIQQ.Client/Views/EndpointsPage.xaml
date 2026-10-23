@@ -1,0 +1,66 @@
+<Page
+    x:Class="ZipperAIQQ.Client.Views.EndpointsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="mc">
+
+    <ScrollViewer Padding="32">
+        <StackPanel Spacing="16" HorizontalAlignment="Stretch">
+
+            <TextBlock Text="模型配置" Style="{StaticResource PageTitleStyle}" />
+            <TextBlock Text="两个固定端点：普通 LLM（primary）与判断模型 JEV（judge）；端点名不可改"
+                       Style="{StaticResource CaptionStyle}" Margin="0,-8,0,4" />
+
+            <!-- 两个端点左右并列（窄窗口时每列最小 380） -->
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MinWidth="380" />
+                    <ColumnDefinition Width="*" MinWidth="380" />
+                </Grid.ColumnDefinitions>
+
+                <!-- 普通 LLM -->
+                <Border Grid.Column="0" Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="普通 LLM（primary）" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="负责正常对话与工具调用"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                        <TextBox Header="BaseUrl" Text="{x:Bind Vm.LlmBaseUrl, Mode=TwoWay}" />
+                        <TextBox Header="模型" Text="{x:Bind Vm.LlmModel, Mode=TwoWay}" />
+                        <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="LlmKey_PasswordChanged" />
+
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Content="保存普通 LLM" Style="{StaticResource JpAccentButtonStyle}"
+                                    Command="{x:Bind Vm.SaveLlmCommand}" />
+                            <TextBlock Text="{x:Bind Vm.LlmStatus, Mode=OneWay}"
+                                       Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- JEV -->
+                <Border Grid.Column="1" Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="JEV 判断模型（judge）" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="只在「回复模式 = jev」时使用，判断此刻该不该开口"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                        <TextBox Header="BaseUrl" Text="{x:Bind Vm.JudgeBaseUrl, Mode=TwoWay}" />
+                        <TextBox Header="模型" Text="{x:Bind Vm.JudgeModel, Mode=TwoWay}" />
+                        <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="JudgeKey_PasswordChanged" />
+
+                        <TextBlock Text="灵敏度在「运行与行为」页配置，这里只改端点本身"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                        <Button Content="保存 JEV" Style="{StaticResource JpAccentButtonStyle}"
+                                Command="{x:Bind Vm.SaveJudgeCommand}" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="{x:Bind Vm.JudgeStatus, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

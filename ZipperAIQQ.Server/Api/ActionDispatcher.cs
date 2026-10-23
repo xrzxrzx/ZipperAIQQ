@@ -47,7 +47,7 @@ public sealed class ActionDispatcher
         catch (ApiException ex)
         {
             // 参数 / 前置条件问题：客户端能自己修
-            return ApiResponse.Fail(ex.Code, ex.Message);
+            return ApiResponse.Fail(ex.Code, ex.Message, ex.Payload);
         }
         catch (Exception ex)
         {
