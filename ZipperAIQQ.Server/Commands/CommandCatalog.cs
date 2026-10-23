@@ -3,7 +3,7 @@ using ZipperAIQQ.Agent.Security;
 namespace ZipperAIQQ.Server.Commands;
 
 /// <summary>
-/// 内置命令清单（名字 + 代码里的默认最低角色）。
+/// 内置命令清单（名字 / 中文名 / 代码里的默认最低角色）。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -18,20 +18,20 @@ namespace ZipperAIQQ.Server.Commands;
 /// </remarks>
 public static class CommandCatalog
 {
-    public static readonly IReadOnlyList<(string Name, Role MinRole)> All =
+    public static readonly IReadOnlyList<(string Name, string Label, Role MinRole)> All =
     [
-        ("help", Role.Normal),
-        ("status", Role.Normal),
-        ("persona", Role.Normal),
-        ("remember", Role.Normal),
-        ("search", Role.Normal),
-        ("compact", Role.Admin),
-        ("reset", Role.Admin),
-        ("forget", Role.Admin),
-        ("export", Role.Admin),
-        ("mode", Role.Admin),
-        ("purge", Role.Owner),
-        ("owner", Role.Owner),
-        ("notice", Role.Admin),
+        ("help", "帮助", Role.Normal),
+        ("status", "状态", Role.Normal),
+        ("persona", "人设", Role.Normal),
+        ("remember", "记住", Role.Normal),
+        ("search", "搜索历史", Role.Normal),
+        ("compact", "压缩上下文", Role.Admin),
+        ("reset", "重置会话", Role.Admin),
+        ("forget", "忘记记忆", Role.Admin),
+        ("export", "导出记录", Role.Admin),
+        ("mode", "回复模式", Role.Admin),
+        ("purge", "清空会话", Role.Owner),
+        ("owner", "设置主人", Role.Owner),
+        ("notice", "通知开关", Role.Admin),
     ];
 }

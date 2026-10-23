@@ -14,6 +14,9 @@ namespace ZipperAIQQ.Client.ViewModels;
 /// </remarks>
 public sealed partial class RuntimeViewModel : ObservableObject
 {
+    /// <summary>JEV 灵敏度在「运行与行为」里单独用滑条调，不混在通用参数列表里。</summary>
+    public const string JudgeThresholdKey = "jev.threshold";
+
     private readonly ServerApiClient _api;
     private readonly List<NoticeToggleItem> _allNotices = [];
 
@@ -41,6 +44,9 @@ public sealed partial class RuntimeViewModel : ObservableObject
     public partial string SettingsStatus { get; set; } = string.Empty;
 
     [ObservableProperty]
+    public partial double JudgeThreshold { get; set; } = 0.55;
+
+    [ObservableProperty]
     public partial string BehaviorStatus { get; set; } = string.Empty;
 
     partial void OnNoticeSearchChanged(string value) => ApplyNoticeFilter();
@@ -55,6 +61,12 @@ public sealed partial class RuntimeViewModel : ObservableObject
             Settings.Clear();
             foreach (var item in items)
             {
+                if (item.Key == JudgeThresholdKey)
+                {
+                    JudgeThreshold = item.Value;
+                    continue;
+                }
+
                 Settings.Add(new SettingItem
                 {
                     Key = item.Key,
@@ -139,6 +151,8 @@ public sealed partial class RuntimeViewModel : ObservableObject
             }
 
             var payload = Settings.ToDictionary(s => s.Key, s => s.Value);
+            payload[JudgeThresholdKey] = JudgeThreshold;
+
             var result = await _api.CallAsync<SaveResultDto>("setSettings", new { settings = payload })
                 .ConfigureAwait(true);
 

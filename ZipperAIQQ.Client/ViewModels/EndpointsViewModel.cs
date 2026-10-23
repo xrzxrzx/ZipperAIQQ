@@ -48,9 +48,6 @@ public sealed partial class EndpointsViewModel : ObservableObject
     public partial string JudgeKey { get; set; } = string.Empty;
 
     [ObservableProperty]
-    public partial double JudgeThreshold { get; set; } = 0.55;
-
-    [ObservableProperty]
     public partial string JudgeStatus { get; set; } = string.Empty;
 
     [RelayCommand]
@@ -71,9 +68,6 @@ public sealed partial class EndpointsViewModel : ObservableObject
             JudgeBaseUrl = judge?.BaseUrl ?? string.Empty;
             JudgeModel = judge?.Model ?? string.Empty;
             JudgeKey = string.Empty;
-
-            var settings = await _api.CallAsync<List<SettingDto>>("getSettings").ConfigureAwait(true) ?? [];
-            JudgeThreshold = settings.FirstOrDefault(s => s.Key == "judge.threshold")?.Value ?? 0.55;
 
             LlmStatus = "已加载";
             JudgeStatus = "已加载";
@@ -127,24 +121,6 @@ public sealed partial class EndpointsViewModel : ObservableObject
 
             JudgeStatus = result?.Skipped == true ? "无变化" : "JEV 端点已保存";
             JudgeKey = string.Empty;
-        }
-        catch (Exception ex)
-        {
-            JudgeStatus = $"保存失败：{ex.Message}";
-        }
-    }
-
-    [RelayCommand]
-    private async Task SaveThresholdAsync()
-    {
-        try
-        {
-            var result = await _api.CallAsync<SaveResultDto>("setSettings", new
-            {
-                settings = new Dictionary<string, double> { ["judge.threshold"] = JudgeThreshold },
-            }).ConfigureAwait(true);
-
-            JudgeStatus = result?.Skipped == true ? "无变化" : $"判断灵敏度已保存（{JudgeThreshold:F2}）";
         }
         catch (Exception ex)
         {

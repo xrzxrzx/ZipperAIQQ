@@ -101,14 +101,16 @@ public static class ServiceRegistration
             var items = new List<PolicyItem>(ToolCatalog.All);
 
             items.AddRange(CommandCatalog.All.Select(c =>
-                new PolicyItem(PolicyCategory.Command, c.Name, c.Name, c.MinRole)));
+                new PolicyItem(PolicyCategory.Command, c.Name, c.Label, c.MinRole)));
 
-            items.AddRange(ChannelApiCatalog.All.Select(a =>
-                new PolicyItem(
-                    PolicyCategory.ChannelApi,
-                    a.Action,
-                    a.Label,
-                    a.IsWrite ? Role.Admin : Role.Normal)));
+            items.AddRange(ChannelApiCatalog.All
+                .Where(a => a.ShowInCatalog)
+                .Select(a =>
+                    new PolicyItem(
+                        PolicyCategory.ChannelApi,
+                        a.Action,
+                        a.Label,
+                        a.IsWrite ? Role.Admin : Role.Normal)));
 
             return new ExecutionPolicy(
                 sp.GetRequiredService<IRuntimeSettingsStore>(),

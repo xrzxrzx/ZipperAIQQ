@@ -50,16 +50,11 @@
                         <TextBox Header="模型" Text="{x:Bind Vm.JudgeModel, Mode=TwoWay}" />
                         <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="JudgeKey_PasswordChanged" />
 
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <NumberBox Header="判断灵敏度" Minimum="0.05" Maximum="0.95"
-                                       SmallChange="0.05" Value="{x:Bind Vm.JudgeThreshold, Mode=TwoWay}" />
-                            <Button Content="保存 JEV" Style="{StaticResource JpAccentButtonStyle}"
-                                    Command="{x:Bind Vm.SaveJudgeCommand}" VerticalAlignment="Bottom" />
-                            <Button Content="只保存灵敏度" Style="{StaticResource JpButtonStyle}"
-                                    Command="{x:Bind Vm.SaveThresholdCommand}" VerticalAlignment="Bottom" />
-                        </StackPanel>
-                        <Slider Minimum="0.05" Maximum="0.95" StepFrequency="0.05"
-                                Value="{x:Bind Vm.JudgeThreshold, Mode=TwoWay}" />
+                        <TextBlock Text="灵敏度在「运行与行为」页配置，这里只改端点本身"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                        <Button Content="保存 JEV" Style="{StaticResource JpAccentButtonStyle}"
+                                Command="{x:Bind Vm.SaveJudgeCommand}" HorizontalAlignment="Left" />
 
                         <TextBlock Text="{x:Bind Vm.JudgeStatus, Mode=OneWay}"
                                    Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />

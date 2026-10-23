@@ -42,6 +42,20 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
+                    <TextBlock Text="JEV 判断灵敏度" FontWeight="SemiBold" Margin="0,6,0,0" />
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="140" />
+                        </Grid.ColumnDefinitions>
+                        <Slider Grid.Column="0" Minimum="0.05" Maximum="0.95" StepFrequency="0.05"
+                                Value="{x:Bind Vm.JudgeThreshold, Mode=TwoWay}" />
+                        <NumberBox Grid.Column="1" Minimum="0.05" Maximum="0.95" SmallChange="0.05"
+                                   Value="{x:Bind Vm.JudgeThreshold, Mode=TwoWay}" />
+                    </Grid>
+                    <TextBlock Text="调低 = 更爱插话；调高 = 更少出声"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
                     <StackPanel Orientation="Horizontal" Spacing="10">
                         <Button Content="保存运行参数" Style="{StaticResource JpAccentButtonStyle}"
                                 Command="{x:Bind Vm.SaveSettingsCommand}" />
