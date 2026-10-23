@@ -408,9 +408,30 @@ public sealed class KindStatsDto
     [JsonPropertyName("cachedInputTokens")]
     public long CachedInputTokens { get; set; }
 
-    /// <summary>给界面直接用（x:Bind 不做数值→字符串转换）。</summary>
+    /// <summary>
+    /// 中文名（#6）：优先用服务端 <c>kindLabel</c>；**旧服务端没给时用客户端内置表兜底**，
+    /// 免得界面上出现「上下两排英文」。
+    /// </summary>
     [JsonIgnore]
-    public string KindTitle => string.IsNullOrWhiteSpace(KindLabel) ? Kind : KindLabel;
+    public string KindTitle =>
+        !string.IsNullOrWhiteSpace(KindLabel)
+            ? KindLabel
+            : KnownLabels.TryGetValue(Kind, out var label) ? label : Kind;
+
+    private static readonly Dictionary<string, string> KnownLabels = new(StringComparer.Ordinal)
+    {
+        ["llm.call"] = "LLM 调用",
+        ["llm.retry"] = "LLM 重试（漂移纠正）",
+        ["retrieval"] = "记忆检索",
+        ["retrieval.hit"] = "检索命中",
+        ["jev.judge"] = "JEV 判断",
+        ["jev.degrade"] = "JEV 降级",
+        ["summary"] = "上下文压缩",
+        ["tool.send_message"] = "发送消息",
+        ["embedding.backfill"] = "向量回填",
+        ["tool.web_search"] = "网页搜索",
+        ["tool.fetch_url"] = "网页抓取",
+    };
 
     [JsonIgnore]
     public string CountText => Count.ToString("N0");

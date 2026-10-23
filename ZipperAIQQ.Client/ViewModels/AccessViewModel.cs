@@ -128,7 +128,7 @@ public sealed partial class AccessViewModel : ObservableObject
             }
 
             AlwaysAllowText = data.AlwaysAllow.Count == 0
-                ? "（尚未解析）"
+                ? "（服务端未返回 —— 可能是旧版本；本地新服务端会显示主人私聊与所在群）"
                 : string.Join("、", data.AlwaysAllow);
 
             PeopleStatus = "已加载";

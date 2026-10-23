@@ -8,7 +8,7 @@
     mc:Ignorable="mc">
 
     <ScrollViewer Padding="32">
-        <StackPanel Spacing="16" MaxWidth="1100" HorizontalAlignment="Center">
+        <StackPanel Spacing="16" MaxWidth="1200" HorizontalAlignment="Left">
 
             <TextBlock Text="端点与参数" Style="{StaticResource PageTitleStyle}" />
             <TextBlock Text="模型端点 / 运行参数 / 行为设置 / JEV 判断模型；保存没变化会提示「无变化」"
