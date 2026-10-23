@@ -47,6 +47,13 @@ public sealed partial class PersonaViewModel : ObservableObject
     [ObservableProperty]
     public partial string Status { get; set; } = string.Empty;
 
+    /// <summary>系统提示词（基础行为规则）：与人设分开放，但都属于「这个角色怎么表现」。</summary>
+    [ObservableProperty]
+    public partial string SystemPrompt { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string PromptStatus { get; set; } = string.Empty;
+
     [ObservableProperty]
     public partial string Hint { get; set; } = "选一个会话编辑它的人设；不选会话时可改全局人设。";
 
@@ -92,6 +99,11 @@ public sealed partial class PersonaViewModel : ObservableObject
             }
 
             await LoadPersonaAsync().ConfigureAwait(true);
+
+            var prompt = await _api.CallAsync<SystemPromptDto>("getSystemPrompt").ConfigureAwait(true);
+            SystemPrompt = prompt?.Text ?? string.Empty;
+            PromptStatus = prompt?.IsDefault == true ? "当前是默认提示词" : "已自定义";
+
             Status = "已加载";
         }
         catch (Exception ex)
@@ -185,8 +197,7 @@ public sealed partial class PersonaViewModel : ObservableObject
 
     [RelayCommand]
     private async Task ClearAsync()
-    {
-        try
+    {        try
         {
             if (SelectedSession == GlobalLabel)
             {
@@ -207,6 +218,35 @@ public sealed partial class PersonaViewModel : ObservableObject
         catch (Exception ex)
         {
             Status = $"清除失败：{ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task SavePromptAsync()
+    {
+        try
+        {
+            await _api.CallAsync<object>("setSystemPrompt", new { text = SystemPrompt }).ConfigureAwait(true);
+            PromptStatus = string.IsNullOrWhiteSpace(SystemPrompt) ? "已恢复默认" : "系统提示词已保存";
+        }
+        catch (Exception ex)
+        {
+            PromptStatus = $"保存失败：{ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task ResetPromptAsync()
+    {
+        try
+        {
+            var result = await _api.CallAsync<SystemPromptDto>("resetSystemPrompt").ConfigureAwait(true);
+            SystemPrompt = result?.DefaultText ?? string.Empty;
+            PromptStatus = "已恢复默认提示词";
+        }
+        catch (Exception ex)
+        {
+            PromptStatus = $"恢复失败：{ex.Message}";
         }
     }
 }

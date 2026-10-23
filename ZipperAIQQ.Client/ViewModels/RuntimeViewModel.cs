@@ -46,13 +46,6 @@ public sealed partial class RuntimeViewModel : ObservableObject
     [ObservableProperty]
     public partial double JudgeThreshold { get; set; } = 0.55;
 
-    /// <summary>系统提示词：与人设分开的基础行为规则。</summary>
-    [ObservableProperty]
-    public partial string SystemPrompt { get; set; } = string.Empty;
-
-    [ObservableProperty]
-    public partial string PromptStatus { get; set; } = string.Empty;
-
     [ObservableProperty]
     public partial string BehaviorStatus { get; set; } = string.Empty;
 
@@ -113,10 +106,6 @@ public sealed partial class RuntimeViewModel : ObservableObject
             }
 
             SettingsStatus = "已加载";
-
-            var prompt = await _api.CallAsync<SystemPromptDto>("getSystemPrompt").ConfigureAwait(true);
-            SystemPrompt = prompt?.Text ?? string.Empty;
-            PromptStatus = prompt?.IsDefault == true ? "当前是默认提示词" : "已自定义";
         }
         catch (Exception ex)
         {
@@ -193,35 +182,6 @@ public sealed partial class RuntimeViewModel : ObservableObject
         catch (Exception ex)
         {
             BehaviorStatus = $"保存失败：{ex.Message}";
-        }
-    }
-
-    [RelayCommand]
-    private async Task SavePromptAsync()
-    {
-        try
-        {
-            await _api.CallAsync<object>("setSystemPrompt", new { text = SystemPrompt }).ConfigureAwait(true);
-            PromptStatus = string.IsNullOrWhiteSpace(SystemPrompt) ? "已恢复默认" : "系统提示词已保存";
-        }
-        catch (Exception ex)
-        {
-            PromptStatus = $"保存失败：{ex.Message}";
-        }
-    }
-
-    [RelayCommand]
-    private async Task ResetPromptAsync()
-    {
-        try
-        {
-            var result = await _api.CallAsync<SystemPromptDto>("resetSystemPrompt").ConfigureAwait(true);
-            SystemPrompt = result?.DefaultText ?? string.Empty;
-            PromptStatus = "已恢复默认提示词";
-        }
-        catch (Exception ex)
-        {
-            PromptStatus = $"恢复失败：{ex.Message}";
         }
     }
 }
