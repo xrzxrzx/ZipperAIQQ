@@ -966,7 +966,13 @@ public sealed class ChatAgent : IChatAgent
             {
                 TextSegment text => text.Text,
                 FaceSegment face => RenderFace(face),
+                // 历史里的图片：**当前消息**会把图作为 UriContent 传给模型（多模态），
+                // 但历史回放只能给占位文本 —— 所以这里标"历史"，不要让它以为现在也看不见。
                 ImageSegment => "[图片]",
+                // 表情包：带上 emoji id，模型**原样复制**这个标记就能发回同一张
+                MfaceSegment mface => string.IsNullOrEmpty(mface.EmojiId)
+                    ? "[表情包:" + (mface.Summary ?? "动画表情") + "]"
+                    : "[表情包:" + (mface.Summary ?? "动画表情") + "|emoji=" + mface.EmojiId + "]",
                 MentionSegment mention => "@" + mention.UserId + " ",
                 ReplySegment => string.Empty,
                 _ => string.Empty,
@@ -977,9 +983,20 @@ public sealed class ChatAgent : IChatAgent
         return rendered.Length > 0 ? rendered : fallback;
     }
 
+    /// <summary>
+    /// 把入站表情渲染成**模型能认出来的形式**。
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ 以前输出的是 <c>[笑哭]</c> —— 模型会把它当成普通方括号文字，
+    /// 根本不知道「对方发了个表情」，因此既不会复读、也不会学着用（实测踩到）。
+    /// 现在和出站格式统一成 <c>[表情:名字]</c>：模型看到就知道这是表情，
+    /// 而且**可以直接照抄这个标记发回去**。
+    /// </remarks>
     private string RenderFace(FaceSegment face)
     {
         var entry = _faces.GetById(face.Id);
-        return entry is null ? "[表情]" : "[" + entry.Name + "]";
+
+        // 查不到名字时也要说清"这是个表情"，否则模型会以为消息里有段空白
+        return entry is null ? "[表情:未知]" : "[表情:" + entry.Name + "]";
     }
 }

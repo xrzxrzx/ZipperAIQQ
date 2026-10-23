@@ -213,6 +213,14 @@ public static class OneBotEventMapper
                     }
                     break;
 
+                case "mface":
+                    // 表情包：保留 id/url/summary —— 出站复读要用
+                    segments.Add(new MfaceSegment(
+                        EmojiId: GetNonEmpty(data, "emoji_id"),
+                        Url: GetNonEmpty(data, "url"),
+                        Summary: GetNonEmpty(data, "summary")));
+                    break;
+
                 case "face":
                     // 系统表情：保留 id，名称由上层按平台表情表渲染
                     var faceId = GetString(data ?? seg, "id");
@@ -227,7 +235,9 @@ public static class OneBotEventMapper
                     // 丢弃会让 AI 完全不知道"这里有个表情/语音"，读起来就像对方什么都没发。
                     var label = type switch
                     {
-                        "mface" => "[" + (GetString(data ?? seg, "summary") ?? "动画表情") + "]",
+                        // 表情包：带上 summary（"猫猫头"这类），但**标明它是表情包**
+                        // 只给 [表情] 两个字时，模型读不出"对方发了个表情"，也不会跟着发表情
+                        "mface" => "[表情包]",
                         "record" => "[语音]",
                         "video" => "[视频]",
                         "json" => "[卡片消息]",

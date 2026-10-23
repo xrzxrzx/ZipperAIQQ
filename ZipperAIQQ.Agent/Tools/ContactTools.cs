@@ -50,16 +50,27 @@ public static class ContactTools
                 try
                 {
                     var data = await directory.InvokeApiAsync(action.Trim(), parsed, ct).ConfigureAwait(false);
+
+                    // null ≠ 空结果：也可能是这次没查成功。明确告诉模型"没拿到数据"，
+                    // 而不是让它说"确实没有"。
                     return data is null
-                        ? $"查询 {action} 没有返回数据（可能参数不对或平台拒绝）。"
+                        ? $"查询 {action} 没有拿到数据（可能这次没查成功，也可能是空结果）。"
                         : $"`{action}` 结果：\n{data.ToJsonString()}";
                 }
-                catch (InvalidOperationException ex)
+                catch (InvalidOperationException ex) when (ex.Message.Contains("白名单"))
                 {
                     // 白名单拒绝：把「能查什么」直接告诉它，避免它反复试
                     return $"{ex.Message}\n可用 action：get_friend_list / get_group_list / " +
                            "get_group_info / get_group_member_list / get_group_member_info / " +
                            "get_stranger_info / get_login_info / get_version_info";
+                }
+                catch (Exception ex)
+                {
+                    // 真正的查询失败：说清"是失败，不是没有" ——
+                    // 以前这里会掉进白名单分支，模型收到的是"可用 action 列表"，
+                    // 于是它回答"我没有这个能力"或"确实没有"，用户看到的就是"查不到"。
+                    return $"查询 {action} **失败**（不是没有结果）：{ex.Message}\n" +
+                           "可以稍后重试；重试仍失败说明通道有问题，如实告诉对方。";
                 }
             },
             name: ToolName,

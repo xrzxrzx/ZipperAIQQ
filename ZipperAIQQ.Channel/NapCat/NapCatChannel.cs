@@ -146,9 +146,14 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
     public async Task<IReadOnlyList<ContactInfo>> GetFriendsAsync(CancellationToken ct = default)
     {
         var data = await CallApiNodeAsync("get_friend_list", null, ct).ConfigureAwait(false);
+
+        // ⚠️ 失败**必须抛**，不能 return []：
+        // 返回空列表会让上层和模型都以为「真的一个好友都没有」（实测用户报"好友列表查不到"）。
+        // 好友列表不存在"合法的空"——人至少有自己。
         if (data is not JsonArray array)
         {
-            return [];
+            throw new InvalidOperationException(
+                "查询好友列表失败：NapCat 没有返回有效数据（可能超时或通道异常）。");
         }
 
         return array
@@ -192,9 +197,11 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
             new JsonObject { ["group_id"] = groupId },
             ct).ConfigureAwait(false);
 
+        // 同好友列表：失败不能伪装成"群里没人"
         if (data is not JsonArray array)
         {
-            return [];
+            throw new InvalidOperationException(
+                $"查询群 {groupId} 的成员列表失败：NapCat 没有返回有效数据。");
         }
 
         return array
@@ -472,6 +479,36 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
                         ["type"] = "face",
                         ["data"] = new JsonObject { ["id"] = face.Id },
                     });
+                    break;
+
+                case MfaceSegment mface:
+                    // 表情包：emoji_id 是必需字段；没有就退化成发图（有 url 时）
+                    if (!string.IsNullOrEmpty(mface.EmojiId))
+                    {
+                        var mdata = new JsonObject
+                        {
+                            ["emoji_id"] = mface.EmojiId,
+                            // NapCat 通常要求这两个字段，缺省用 "1" 能发出去
+                            ["emoji_package_id"] = "1",
+                            ["key"] = string.Empty,
+                            ["summary"] = mface.Summary ?? string.Empty,
+                        };
+
+                        array.Add(new JsonObject
+                        {
+                            ["type"] = "mface",
+                            ["data"] = mdata,
+                        });
+                    }
+                    else if (!string.IsNullOrEmpty(mface.Url))
+                    {
+                        array.Add(new JsonObject
+                        {
+                            ["type"] = "image",
+                            ["data"] = new JsonObject { ["file"] = mface.Url },
+                        });
+                    }
+
                     break;
 
                 case ImageSegment image:

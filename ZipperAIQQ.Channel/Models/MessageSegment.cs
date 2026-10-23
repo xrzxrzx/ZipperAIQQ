@@ -37,3 +37,15 @@ public sealed record ReplySegment(string MessageId) : MessageSegment;
 
 /// <summary>QQ 系统表情（face）。保留原始 id，名称由上层按平台表情表渲染。</summary>
 public sealed record FaceSegment(string Id) : MessageSegment;
+
+/// <summary>
+/// QQ **表情包**（<c>mface</c>）—— 和系统表情（<see cref="FaceSegment"/>）不是一回事。
+/// </summary>
+/// <param name="EmojiId">表情 id（发送时必需）。</param>
+/// <param name="Url">静态图 url（可能为空）。</param>
+/// <param name="Summary">摘要文字（"笑哭""猫猫头"这类，平台给的）。</param>
+/// <remarks>
+/// 之前**只解析不出站**：用户发表情包 AI 看得见，但没能力发回同一张，
+/// 只能文字描述"蓝蓝的一坨"。这个类型就是为了补上出站通道。
+/// </remarks>
+public sealed record MfaceSegment(string? EmojiId, string? Url, string? Summary) : MessageSegment;
