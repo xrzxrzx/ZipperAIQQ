@@ -41,12 +41,24 @@ public static class ObservabilityRegistration
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
             .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Warning)
+
+            // ⚠️ HTTP 请求日志必须干掉：客户端 0.5 秒轮询一次 /api，
+            // 每条请求 `Request starting/finished` 两行 → 一天几万行、几 MB，
+            // 而且没有任何信息量（真正的业务日志被冲走）。
+            // 降级到 Warning 只保留 4xx/5xx 与管道异常；正常的 200 不再记。
+            .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+
             .WriteTo.Console(outputTemplate: ConsoleTemplate)
             .WriteTo.File(
                 path: Path.Combine("logs", "zipper-.log"),
                 rollingInterval: RollingInterval.Day,
                 encoding: new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
                 outputTemplate: FileTemplate,
+
+                // 单文件上限 + 超限滚动：避免某天异常刷屏把磁盘写满
+                fileSizeLimitBytes: 32L * 1024 * 1024,
+                rollOnFileSizeLimit: true,
+                retainedFileCountLimit: 14,
                 shared: true)
             .CreateLogger();
 
