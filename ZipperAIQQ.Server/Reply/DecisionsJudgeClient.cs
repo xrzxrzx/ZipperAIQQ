@@ -139,6 +139,14 @@ public sealed class DecisionsJudgeClient
             throw new InvalidOperationException($"judge 端点的 baseUrl 不合法：{baseUrl}");
         }
 
+        // 只接受 http/https：ftp/file 之类的 scheme 会被 Uri 认可，
+        // 拼出来的地址却根本发不出去，晚一步才在调用时报错（错误信息还看不懂）。
+        if (uri.Scheme is not ("http" or "https"))
+        {
+            throw new InvalidOperationException(
+                $"judge 端点的 baseUrl 必须是 http/https，当前是 {uri.Scheme}：{baseUrl}");
+        }
+
         return new Uri($"{uri.Scheme}://{uri.Authority}/api/alpha/decisions");
     }
 
