@@ -23,7 +23,7 @@ public sealed class SpeechTranscriberTests
     private static NapCatPttTextTranscriber Create(
         Func<string, JsonObject?, CancellationToken, Task<JsonNode?>> callApi,
         SpeechOptions? options = null) =>
-        new(callApi, options ?? new SpeechOptions(), Logger);
+        new(callApi, options ?? new SpeechOptions { RetryDelayMs = 0 }, Logger);
 
     [Fact]
     public async Task Returns_text_from_object_payload()
@@ -97,6 +97,26 @@ public sealed class SpeechTranscriberTests
     }
 
     [Fact]
+    public async Task Transient_failure_is_retried_once()
+    {
+        // 实测：语音刚到时 QQ 侧 ASR 可能还没出结果（1200），等一下再问就成功
+        var calls = 0;
+        var transcriber = Create((_, _, _) =>
+        {
+            calls++;
+            return Task.FromResult<JsonNode?>(calls == 1
+                ? null
+                : JsonNode.Parse("""{ "text": "你能听懂我说的话吗？" }"""));
+        });
+
+        var text = await transcriber.TranscribeAsync(Clip());
+
+        Assert.Equal("你能听懂我说的话吗？", text);
+        Assert.Equal(2, calls);
+        Assert.True(transcriber.IsAvailable);
+    }
+
+    [Fact]
     public async Task Consecutive_failures_disable_transcriber()
     {
         var calls = 0;
@@ -106,15 +126,15 @@ public sealed class SpeechTranscriberTests
                 calls++;
                 return Task.FromResult<JsonNode?>(null);
             },
-            new SpeechOptions { MaxConsecutiveFailures = 3 });
+            new SpeechOptions { MaxConsecutiveFailures = 3, RetryDelayMs = 0 });
 
         for (var i = 0; i < 5; i++)
         {
             Assert.Null(await transcriber.TranscribeAsync(Clip()));
         }
 
-        // 第 3 次失败后熔断，后两次不再发起调用（否则每条语音都白等一次超时）
-        Assert.Equal(3, calls);
+        // 每次尝试内部重试 1 次（共 2 次调用）；3 次失败后熔断，后两次不再发起调用
+        Assert.Equal(6, calls);
         Assert.False(transcriber.IsAvailable);
     }
 
@@ -122,19 +142,24 @@ public sealed class SpeechTranscriberTests
     public async Task Success_resets_failure_counter()
     {
         var calls = 0;
+        var succeed = false;
         var transcriber = Create(
             (_, _, _) =>
             {
                 calls++;
-                // 偶数次成功、奇数次失败
                 return Task.FromResult<JsonNode?>(
-                    calls % 2 == 0 ? JsonNode.Parse("""{ "text": "恢复" }""") : null);
+                    succeed ? JsonNode.Parse("""{ "text": "恢复" }""") : null);
             },
-            new SpeechOptions { MaxConsecutiveFailures = 2 });
+            new SpeechOptions { MaxConsecutiveFailures = 2, RetryDelayMs = 0 });
 
-        Assert.Null(await transcriber.TranscribeAsync(Clip())); // 失败 1
+        Assert.Null(await transcriber.TranscribeAsync(Clip())); // 1 次失败（内部重试 2 次调用）
+        Assert.Equal(2, calls);
+
+        succeed = true;
         Assert.Equal("恢复", await transcriber.TranscribeAsync(Clip())); // 成功，清零
-        Assert.Null(await transcriber.TranscribeAsync(Clip())); // 失败 1（重新计）
+
+        succeed = false;
+        Assert.Null(await transcriber.TranscribeAsync(Clip())); // 重新从 1 开始计
 
         Assert.True(transcriber.IsAvailable);
     }
@@ -142,8 +167,9 @@ public sealed class SpeechTranscriberTests
     [Fact]
     public async Task Exception_is_swallowed_as_null()
     {
-        var transcriber = Create((_, _, _) =>
-            throw new InvalidOperationException("boom"));
+        var transcriber = Create(
+            (_, _, _) => throw new InvalidOperationException("boom"),
+            new SpeechOptions { RetryDelayMs = 0 });
 
         Assert.Null(await transcriber.TranscribeAsync(Clip()));
     }

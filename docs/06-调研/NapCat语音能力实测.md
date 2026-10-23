@@ -12,7 +12,8 @@
 | NapCat 有取语音文件的 API | **有**（`get_record`） | 官方文档 + 运行期不再是 1404 |
 | NapCat 有语音转文字 API | **有**（`fetch_ptt_text`） | **运行期实测**：不存在会返回 `1404 不支持的API` |
 | `fetch_ptt_text` 的必填参数 | **`message_id`**（不是 `file`） | 实测：只给 `file` → `1400 Schema compilation error`；给 `message_id` → `1200 消息不存在` |
-| 能否拿到转写文本 | **尚未验证** | 最近 8 个群各 50 条里没有语音段，缺一条真实语音 |
+| 能否拿到转写文本 | **能** | 真实语音（私聊，`message_id=351810651`）→ `data.text` = 「你能听懂我说的话吗？」 |
+| 首次调用偶发失败 | **有** | 语音刚到就转写时返回 `1200 获取语音转文字结果失败`，隔一会儿重试即成功 |
 
 ## 二、实测记录
 
@@ -46,15 +47,30 @@
 - 段类型统计：`at` / `face` / `image` / `json` / `text` —— **没有 `record`**。
 - 结论：需要一条**真实语音**才能验证 `data.text` 的返回形状。
 
+### 2.5 真实语音端到端（2026-10-23）
+
+- 私聊收到一条语音：`record` 段带 `file=14d68…amr`、`path=…\nt_data\Ptt\2026-10\Ori\…amr`、`url=https://multimedia.nt.qq.com.cn/download?...`、`file_size=4359`。
+- 第一次调 `fetch_ptt_text`（`message_id` 字符串）→ **`1200 获取语音转文字结果失败`**。
+- 约 1 分钟后同一参数重试 → `status=ok`：
+
+  ```json
+  { "text": "你能听懂我说的话吗？" }
+  ```
+
+- 参数形态验证：`message_id` 用字符串 / 数字都行；附带 `file`（文件名或绝对路径）也行；`msg_id` 别名不行（1400）。
+- **结论**：QQ 侧 ASR 是「收到后异步出结果」，所以**首问可能失败**。实现里必须重试一次（默认 700ms 后），
+  不能把一次失败直接计入熔断。
+
 ## 三、对本项目的影响
 
 1. 代码已按实测契约调整：`AudioClip.MessageId`，调用参数为
    `{"message_id": "...", "file": "..."}`；没有 `message_id` 时**不发请求**。
-2. 转写失败 / 连续 3 次失败 → 熔断禁用，语音降级为 `[语音]` 占位，**不阻塞消息**。
+2. 转写失败会**先重试一次**（`SpeechOptions.MaxAttempts=2`，间隔 700ms），仍失败才计入熔断；
+   连续 3 次失败 → 禁用，语音降级为 `[语音]` 占位，**不阻塞消息**。
 3. 不引入本地 ASR 模型（Q5 定稿）。
 
 ## 四、待办
 
-- [ ] 在测试群/私聊发一条语音，取该消息 `message_id` 调 `fetch_ptt_text`，确认返回形状（预期 `data.text`）
-- [ ] 若返回形状不同（如 `data` 为字符串），调整 `NapCatPttTextTranscriber.ExtractText`
+- [x] 用真实语音验证 `fetch_ptt_text` 返回形状（`data.text`）
+- [x] 实现「首问失败 → 短暂等待后重试一次」
 - [ ] 端到端：服务端运行时收到语音 → 日志出现「语音已转写」→ `SegmentsJson` 里 `text` 非空

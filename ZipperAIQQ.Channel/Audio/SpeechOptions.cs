@@ -14,4 +14,16 @@ public sealed record SpeechOptions
 
     /// <summary>连续失败多少次后禁用转写（避免每条语音都白等一次超时）。</summary>
     public int MaxConsecutiveFailures { get; init; } = 3;
+
+    /// <summary>
+    /// 单条语音最多尝试几次（含首次）。
+    /// </summary>
+    /// <remarks>
+    /// 实测：语音刚到达时立刻转写，QQ 侧 ASR 可能还没出结果（NapCat 回 <c>1200 获取语音转文字结果失败</c>），
+    /// 隔一会儿再问就成功。所以默认重试一次，而不是直接判失败。
+    /// </remarks>
+    public int MaxAttempts { get; init; } = 2;
+
+    /// <summary>重试前等待多久（毫秒）。</summary>
+    public int RetryDelayMs { get; init; } = 700;
 }

@@ -66,31 +66,49 @@ public sealed class NapCatPttTextTranscriber : ISpeechTranscriber
             parameters["file"] = clip.FileId;
         }
 
-        try
-        {
-            var data = await _callApi(ActionName, parameters, ct).ConfigureAwait(false);
+        var attempts = Math.Max(1, _options.MaxAttempts);
 
-            var text = ExtractText(data);
-            if (text is null)
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            try
             {
-                OnFailure();
+                var data = await _callApi(ActionName, parameters, ct).ConfigureAwait(false);
+
+                var text = ExtractText(data);
+                if (text is not null)
+                {
+                    Interlocked.Exchange(ref _consecutiveFailures, 0);
+                    return text.Length == 0 ? null : text;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // 取消不算失败（通常是停机 / 超时链路），保持可用
                 return null;
             }
+            catch (Exception ex)
+            {
+                _logger.Warning(ex, "语音转写异常（message={MessageId}）", clip.MessageId);
+            }
 
-            Interlocked.Exchange(ref _consecutiveFailures, 0);
-            return text.Length == 0 ? null : text;
+            if (attempt >= attempts)
+            {
+                break;
+            }
+
+            // 语音刚到就转写时，QQ 侧 ASR 可能还没出结果 —— 等一下再问
+            try
+            {
+                await Task.Delay(Math.Max(0, _options.RetryDelayMs), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
         }
-        catch (OperationCanceledException)
-        {
-            // 取消不算失败（通常是停机 / 超时链路），保持可用
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _logger.Warning(ex, "语音转写异常（message={MessageId}）", clip.MessageId);
-            OnFailure();
-            return null;
-        }
+
+        OnFailure();
+        return null;
     }
 
     private void OnFailure()
