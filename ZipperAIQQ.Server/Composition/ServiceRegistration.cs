@@ -160,6 +160,9 @@ public static class ServiceRegistration
 
         services.AddSingleton<IContactDirectory>(sp => sp.GetRequiredService<NapCatChannel>());
 
+        // 会话显示名（#2）：好友昵称 / 群名，带 5 分钟缓存
+        services.AddSingleton<ISessionNameResolver, SessionNameResolver>();
+
         // 语音转写：契约在 Channel，实现是 NapCat 的 fetch_ptt_text（Q5：不接本地模型）
         services.AddSingleton<ISpeechTranscriber>(sp => sp.GetRequiredService<NapCatChannel>().SpeechTranscriber);
 

@@ -24,20 +24,32 @@ public partial class MainViewModel : ObservableObject
     private readonly ServerApiClient _api;
     private readonly AppSettings _settings;
 
-    public MainViewModel(ServerApiClient api, AppSettings settings, StatsViewModel stats)
+    public MainViewModel(
+        ServerApiClient api,
+        AppSettings settings,
+        StatsViewModel stats,
+        SessionsViewModel sessions)
     {
         ArgumentNullException.ThrowIfNull(api);
         ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(sessions);
 
         _api = api;
         _settings = settings;
         Stats = stats;
+        Sessions = sessions;
+
+        // 会话列表刷新后，人设页的会话下拉跟着更新（B4 后由 PersonaViewModel 自己管）
+        sessions.SessionsLoaded += RebuildPersonaSessionOptions;
 
         ServerUrl = settings.ServerUrl;
         Token = settings.Token;
         IsPaneOpen = settings.IsPaneOpen;
         SelectedNavTag = settings.SelectedNavTag;
     }
+
+    /// <summary>会话页的 VM（心跳需要按页分频驱动它）。</summary>
+    public SessionsViewModel Sessions { get; }
 
     /// <summary>侧栏展开状态（改动即落盘，下次启动恢复）。</summary>
     [ObservableProperty]
@@ -63,16 +75,6 @@ public partial class MainViewModel : ObservableObject
         if (!string.IsNullOrWhiteSpace(value))
         {
             _ = LoadPersonaCommand.ExecuteAsync(null);
-        }
-    }
-
-    partial void OnSelectedSessionChanged(SessionDto? value)
-    {
-        // 记住上次选的会话：重进客户端时人设、消息都还能读出来
-        if (value is not null)
-        {
-            _settings.SelectedSessionId = value.SessionId;
-            _settings.Save();
         }
     }
 
@@ -107,18 +109,6 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     public partial string StatusText { get; set; } = string.Empty;
-
-    // ── 会话页 ──
-
-    [ObservableProperty]
-    public partial SessionDto? SelectedSession { get; set; }
-
-    [ObservableProperty]
-    public partial string SessionStatus { get; set; } = "点「刷新会话」获取列表。";
-
-    public ObservableCollection<SessionDto> Sessions { get; } = [];
-
-    public ObservableCollection<MessageDto> Messages { get; } = [];
 
     // ── 配置页 ──
 
@@ -261,7 +251,7 @@ public partial class MainViewModel : ObservableObject
         // 不然用户不点「刷新会话」就拿不到 target，保存人设会直接失败（实测）
         try
         {
-            await LoadSessionsAsync().ConfigureAwait(true);
+            await Sessions.LoadSessionsCommand.ExecuteAsync(null).ConfigureAwait(true);
         }
         catch
         {
@@ -276,83 +266,6 @@ public partial class MainViewModel : ObservableObject
     {
         await LoadStatusCoreAsync().ConfigureAwait(true);
         StatusLine = "状态已刷新";
-    });
-
-    [RelayCommand]
-    private Task LoadSessionsAsync() => GuardAsync("刷新会话", async () =>
-    {
-        var list = await _api.CallAsync<List<SessionDto>>("listSessions", new { limit = 100 }).ConfigureAwait(true);
-        Sessions.Clear();
-        foreach (var item in list ?? [])
-        {
-            Sessions.Add(item);
-        }
-
-        // 按记忆恢复上次选中的会话（重进客户端不丢）
-        if (!string.IsNullOrWhiteSpace(_settings.SelectedSessionId))
-        {
-            SelectedSession = Sessions.FirstOrDefault(s => s.SessionId == _settings.SelectedSessionId);
-        }
-
-        PersonaSessionOptions.Clear();
-        PersonaSessionOptions.Add(GlobalPersonaTag);   // 第一项永远是「全局」
-        foreach (var s in Sessions)
-        {
-            PersonaSessionOptions.Add(s.SessionId);
-        }
-
-        if (string.IsNullOrWhiteSpace(PersonaSessionId) && SelectedSession is not null)
-        {
-            PersonaSessionId = SelectedSession.SessionId;
-        }
-
-        SessionStatus = $"共 {Sessions.Count} 个会话";
-        StatusLine = "会话列表已刷新";
-    });
-
-    [RelayCommand]
-    private Task LoadMessagesAsync() => GuardAsync("加载消息", async () =>
-    {
-        if (SelectedSession is null)
-        {
-            throw new InvalidOperationException("先在左边选一个会话。");
-        }
-
-        var list = await _api
-            .CallAsync<List<MessageDto>>("getMessages", new { sessionId = SelectedSession.SessionId, limit = 100 })
-            .ConfigureAwait(true);
-
-        Messages.Clear();
-        foreach (var item in list ?? [])
-        {
-            Messages.Add(item);
-        }
-
-        SessionStatus = $"{SelectedSession.SessionId}：{Messages.Count} 条";
-        StatusLine = "消息已加载";
-    });
-
-    [RelayCommand]
-    private Task ExportAsync() => GuardAsync("导出记录", async () =>
-    {
-        if (Messages.Count == 0)
-        {
-            throw new InvalidOperationException("先加载消息再导出。");
-        }
-
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ZipperAIQQ", "exports");
-        System.IO.Directory.CreateDirectory(dir);
-
-        var session = SelectedSession?.SessionId ?? "unknown";
-        var safe = new string(session.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
-        var file = Path.Combine(dir, $"session-{safe}-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
-
-        var content = string.Join(Environment.NewLine, Messages.Select(m => m.Display));
-        await File.WriteAllTextAsync(file, content, new UTF8Encoding(false)).ConfigureAwait(true);
-
-        StatusLine = $"已导出到：{file}";
     });
 
     [RelayCommand]
@@ -489,9 +402,11 @@ public partial class MainViewModel : ObservableObject
     private Task SavePersonaAsync() => GuardAsync("保存人设", async () =>
     {
         // 兜底：没选会话时先把列表拉回来（否则只会报"先选一个会话"，用户会误以为是保存失败）
-        if (string.IsNullOrWhiteSpace(PersonaSessionId) && SelectedSession is null && Sessions.Count == 0)
+        if (string.IsNullOrWhiteSpace(PersonaSessionId) &&
+            Sessions.SelectedSession is null &&
+            Sessions.Sessions.Count == 0)
         {
-            await LoadSessionsAsync().ConfigureAwait(true);
+            await Sessions.LoadSessionsCommand.ExecuteAsync(null).ConfigureAwait(true);
         }
 
         var target = ResolvePersonaTarget();
@@ -661,7 +576,6 @@ public partial class MainViewModel : ObservableObject
 
     private DispatcherQueueTimer? _timer;
     private bool _tickBusy;
-    private string? _lastSessionId;
     private int _tickCount;
 
     /// <summary>当前显示的页面（决定 0.5s 心跳刷什么，避免所有接口一起刷）。</summary>
@@ -733,7 +647,7 @@ public partial class MainViewModel : ObservableObject
             // 消息：只有会话页才拉，1s
             if (CurrentPage == "sessions" && _tickCount % 2 == 0)
             {
-                await RefreshMessagesIncrementalAsync().ConfigureAwait(true);
+                await Sessions.RefreshIncrementalAsync().ConfigureAwait(true);
             }
 
             // 审计：审计页 2s
@@ -755,44 +669,6 @@ public partial class MainViewModel : ObservableObject
         finally
         {
             _tickBusy = false;
-        }
-    }
-
-    /// <summary>只把新消息追加到末尾（按 Id 去重），不整表重载。</summary>
-    private async Task RefreshMessagesIncrementalAsync()
-    {
-        if (SelectedSession is null)
-        {
-            return;
-        }
-
-        // 切了会话 → 清空重来
-        if (_lastSessionId != SelectedSession.SessionId)
-        {
-            _lastSessionId = SelectedSession.SessionId;
-            Messages.Clear();
-        }
-
-        var list = await _api
-            .CallAsync<List<MessageDto>>("getMessages", new { sessionId = SelectedSession.SessionId, limit = 50 })
-            .ConfigureAwait(true);
-
-        if (list is null || list.Count == 0)
-        {
-            return;
-        }
-
-        var known = Messages.Select(m => m.Id).ToHashSet();
-        var fresh = list.Where(m => !known.Contains(m.Id)).OrderBy(m => m.Id).ToList();
-
-        foreach (var item in fresh)
-        {
-            Messages.Add(item);
-        }
-
-        if (fresh.Count > 0)
-        {
-            SessionStatus = $"{SelectedSession.SessionId}：{Messages.Count} 条（+{fresh.Count}）";
         }
     }
 
@@ -833,12 +709,34 @@ public partial class MainViewModel : ObservableObject
             return PersonaSessionId;
         }
 
-        if (SelectedSession is not null)
+        if (Sessions.SelectedSession is not null)
         {
-            return SelectedSession.SessionId;
+            return Sessions.SelectedSession.SessionId;
         }
 
         throw new InvalidOperationException("还没选要编辑哪个会话：请在人设卡片顶部的下拉里选一个（下拉为空就先点「刷新会话」）。");
+    }
+
+    /// <summary>会话列表刷新后重建人设页的会话下拉（值仍是 sessionId，B4 换成显示名）。</summary>
+    private void RebuildPersonaSessionOptions()
+    {
+        var previous = PersonaSessionId;
+
+        PersonaSessionOptions.Clear();
+        PersonaSessionOptions.Add(GlobalPersonaTag);   // 第一项永远是「全局」
+        foreach (var s in Sessions.Sessions)
+        {
+            PersonaSessionOptions.Add(s.SessionId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(previous))
+        {
+            PersonaSessionId = previous;
+        }
+        else if (Sessions.SelectedSession is not null)
+        {
+            PersonaSessionId = Sessions.SelectedSession.SessionId;
+        }
     }
 
     private async Task LoadStatusCoreAsync()

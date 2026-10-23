@@ -130,6 +130,48 @@ public sealed class SqliteMessageStore : IMessageStore
         }, ct);
     }
 
+    public Task<IReadOnlyList<StoredMessage>> GetRangeAsync(
+        string sessionId,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        int limit,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        var fromMs = from?.ToUnixTimeMilliseconds();
+        var toMs = to?.ToUnixTimeMilliseconds();
+
+        return _db.ReadAsync<IReadOnlyList<StoredMessage>>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            // 区间两端都含（用户选 10-20 ~ 10-22 时，22 号当天的消息也要在）
+            cmd.CommandText = $"""
+                SELECT {SelectColumnsSql}
+                FROM Messages
+                WHERE SessionId = @sessionId
+                  AND (@from IS NULL OR SentAtMs >= @from)
+                  AND (@to IS NULL OR SentAtMs <= @to)
+                ORDER BY SentAtMs ASC, Id ASC
+                LIMIT @limit;
+                """;
+            cmd.Parameters.AddWithValue("@sessionId", sessionId);
+            cmd.Parameters.AddWithValue("@from", (object?)fromMs ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@to", (object?)toMs ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            var list = new List<StoredMessage>(capacity: Math.Min(limit, 256));
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                list.Add(ReadRow(reader));
+            }
+
+            return (IReadOnlyList<StoredMessage>)list;
+        }, ct);
+    }
+
     public Task<IReadOnlyList<StoredMessage>> GetByIdsAsync(
         string sessionId, IReadOnlyList<long> ids, CancellationToken ct = default)
     {

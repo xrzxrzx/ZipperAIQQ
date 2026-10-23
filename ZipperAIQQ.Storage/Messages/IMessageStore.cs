@@ -41,9 +41,23 @@ public interface IMessageStore
         CancellationToken ct = default);
 
     /// <summary>
-    /// 取某会话最近 <paramref name="limit"/> 条消息，**按时间正序**返回。
+    /// 取某个会话最近 <paramref name="limit"/> 条消息，**按时间正序**返回。
     /// </summary>
     Task<IReadOnlyList<StoredMessage>> GetRecentAsync(string sessionId, int limit, CancellationToken ct = default);
+
+    /// <summary>
+    /// 按时间区间取消息（起止都可空），**按时间正序**返回。
+    /// </summary>
+    /// <remarks>
+    /// 给「会话导出按区间」用（问题记录 #37）：不能在内存里过滤已加载的 100 条，
+    /// 那既漏数据又受上次加载限制。
+    /// </remarks>
+    Task<IReadOnlyList<StoredMessage>> GetRangeAsync(
+        string sessionId,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        int limit,
+        CancellationToken ct = default);
 
     /// <summary>
     /// 按主键批量取消息（检索命中后用）。

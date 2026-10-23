@@ -1,15 +1,17 @@
+using System.Collections.Specialized;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using ZipperAIQQ.Client.ViewModels;
 
 namespace ZipperAIQQ.Client.Views;
 
-/// <summary>会话页：左侧会话列表 / 右侧消息 + 导出。</summary>
+/// <summary>会话页：左侧会话列表 / 右侧消息 + 搜索 + 区间导出。</summary>
 public sealed partial class SessionsPage : Page
 {
     public SessionsPage()
     {
-        Vm = App.Services.GetRequiredService<MainViewModel>();
+        Vm = App.Services.GetRequiredService<SessionsViewModel>();
         InitializeComponent();
 
         // 消息更新后自动滚到底部（0.5s 增量追加时尤其需要，否则新消息在视野外）
@@ -21,17 +23,77 @@ public sealed partial class SessionsPage : Page
         Unloaded += (_, _) => Vm.Messages.CollectionChanged -= OnMessagesChanged;
     }
 
-    public MainViewModel Vm { get; }
+    public SessionsViewModel Vm { get; }
 
-    private void OnMessagesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    private void SearchBox_QuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
     {
-        if (e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Add ||
-            Vm.Messages.Count == 0)
+        _ = Vm.LoadSessionsCommand.ExecuteAsync(null);
+    }
+
+    /// <summary>按时间区间导出（#37）：起止都可空，空 = 不限那一端。</summary>
+    private async void ExportRange_Click(object sender, RoutedEventArgs e)
+    {
+        var today = DateTimeOffset.Now.Date;
+
+        var fromPicker = new DatePicker { Header = "开始日期", Date = today.AddDays(-7) };
+        var toPicker = new DatePicker { Header = "结束日期", Date = today };
+        var unlimited = new CheckBox { Content = "不限时间（导出当前已加载）" };
+
+        var panel = new StackPanel { Spacing = 10, MinWidth = 300 };
+        panel.Children.Add(fromPicker);
+        panel.Children.Add(toPicker);
+        panel.Children.Add(unlimited);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "按区间导出",
+            Content = panel,
+            PrimaryButtonText = "导出",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
         {
             return;
         }
 
-        // 放到下一帧：集合刚变更时容器还没生成，立刻 ScrollIntoView 会滚不到位
+        try
+        {
+            var file = unlimited.IsChecked == true
+                ? await Vm.ExportAsync(null, null)
+                : await Vm.ExportAsync(
+                    new DateTimeOffset(fromPicker.Date.Date, TimeSpan.Zero).ToLocalTime(),
+                    new DateTimeOffset(toPicker.Date.Date.AddDays(1).AddMilliseconds(-1), TimeSpan.Zero).ToLocalTime());
+
+            await new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = "已导出",
+                Content = file,
+                CloseButtonText = "好",
+            }.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            await new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = "导出失败",
+                Content = ex.Message,
+                CloseButtonText = "好",
+            }.ShowAsync();
+        }
+    }
+
+    private void OnMessagesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action != NotifyCollectionChangedAction.Add || Vm.Messages.Count == 0)
+        {
+            return;
+        }
+
         ScrollToBottom();
     }
 

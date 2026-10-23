@@ -20,6 +20,7 @@ public partial class App : Application
         services.AddSingleton(AppSettings.Load());
         services.AddSingleton<ServerApiClient>();
         services.AddSingleton<StatsViewModel>();
+        services.AddSingleton<SessionsViewModel>();
         services.AddSingleton<MainViewModel>();
 
         Services = services.BuildServiceProvider();
