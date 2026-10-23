@@ -81,7 +81,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
         CommandContext context, string args, CancellationToken ct = default)
     {
         var count = await _messages.CountAsync(context.Chat.SessionId, ct).ConfigureAwait(false);
-        var metrics = await _metrics.GetSummaryAsync(24, ct).ConfigureAwait(false);
+        var metrics = await _metrics.GetSummaryAsync(24, ct: ct).ConfigureAwait(false);
 
         var summaryRows = new List<string[]>();
         if (metrics.Count > 0)
@@ -150,7 +150,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
     public async Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default)
     {
         var count = await _messages.CountAsync(context.Chat.SessionId, ct).ConfigureAwait(false);
-        var metrics = await _metrics.GetSummaryAsync(24, ct).ConfigureAwait(false);
+        var metrics = await _metrics.GetSummaryAsync(24, ct: ct).ConfigureAwait(false);
 
         var sb = new StringBuilder();
         sb.AppendLine($"**状态** · 模型 `{_options.LlmModel}` · 本会话 {count} 条消息");

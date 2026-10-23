@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 10;
+    public const int CurrentSchemaVersion = 11;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -70,6 +70,23 @@ public sealed class DatabaseInitializer
         {
             // 已迁移过
         }
+
+        // ── v11：缓存命中 token（问题记录 #4）──
+        // 只增列：旧行 NULL 表示"当时没采集"，不等于 0 命中。
+        try
+        {
+            await ExecuteAsync(conn, "ALTER TABLE CallMetrics ADD COLUMN CachedInputTokens INTEGER;", ct).ConfigureAwait(false);
+            _logger.Information("已应用迁移：CallMetrics.CachedInputTokens");
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        {
+            // 已迁移过
+        }
+
+        // 会话维度筛选要按 (SessionId, 时间) 查；旧库也要补上这个索引
+        await ExecuteAsync(conn,
+            "CREATE INDEX IF NOT EXISTS IX_CallMetrics_Session_Time ON CallMetrics (SessionId, CreatedAtMs);",
+            ct).ConfigureAwait(false);
 
         // 版本记录必须**与真实 schema 一致**：这里每次都核对，而不是"只写一次"。
         //
@@ -258,16 +275,20 @@ public sealed class DatabaseInitializer
     /// </remarks>
     private const string CallMetricsTable = """
         CREATE TABLE IF NOT EXISTS CallMetrics (
-            Id           INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-            SessionId    TEXT,
-            Kind         TEXT    NOT NULL,
-            ElapsedMs    REAL    NOT NULL,
-            InputTokens  INTEGER,
-            OutputTokens INTEGER,
-            CreatedAtMs  INTEGER NOT NULL
+            Id               INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            SessionId        TEXT,
+            Kind             TEXT    NOT NULL,
+            ElapsedMs        REAL    NOT NULL,
+            InputTokens      INTEGER,
+            OutputTokens     INTEGER,
+            CachedInputTokens INTEGER,
+            CreatedAtMs      INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS IX_CallMetrics_Kind_Time
             ON CallMetrics (Kind, CreatedAtMs);
+
+        CREATE INDEX IF NOT EXISTS IX_CallMetrics_Session_Time
+            ON CallMetrics (SessionId, CreatedAtMs);
         """;
 
     private const string SchemaVersionTable = """

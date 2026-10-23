@@ -208,11 +208,36 @@ public sealed class StatsDto
     [JsonPropertyName("windowHours")]
     public int WindowHours { get; set; }
 
+    /// <summary>本次统计的会话口径；<c>null</c> = 全部会话。</summary>
+    [JsonPropertyName("sessionId")]
+    public string? SessionId { get; set; }
+
+    /// <summary>有指标记录的会话（下拉用）。</summary>
+    [JsonPropertyName("sessions")]
+    public List<SessionStatsDto> Sessions { get; set; } = [];
+
     [JsonPropertyName("last24h")]
     public StatsWindowDto Last24h { get; set; } = new();
 
     [JsonPropertyName("allTime")]
     public StatsWindowDto AllTime { get; set; } = new();
+}
+
+/// <summary>一个会话的指标概况（数据页筛选下拉）。</summary>
+public sealed class SessionStatsDto
+{
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    [JsonPropertyName("calls")]
+    public long Calls { get; set; }
+
+    [JsonPropertyName("lastAt")]
+    public long LastAt { get; set; }
+
+    /// <summary>下拉显示用（B3 起会换成昵称）。</summary>
+    [JsonIgnore]
+    public string Display => SessionId;
 }
 
 public sealed class StatsWindowDto
@@ -246,6 +271,14 @@ public sealed class LlmStatsDto
 
     [JsonPropertyName("outputTokens")]
     public long OutputTokens { get; set; }
+
+    /// <summary>命中缓存的输入 token。</summary>
+    [JsonPropertyName("cachedInputTokens")]
+    public long CachedInputTokens { get; set; }
+
+    /// <summary>缓存命中率（0~1）。</summary>
+    [JsonPropertyName("cacheHitRate")]
+    public double CacheHitRate { get; set; }
 
     [JsonPropertyName("avgMs")]
     public double AvgMs { get; set; }
@@ -319,6 +352,10 @@ public sealed class KindStatsDto
     [JsonPropertyName("kind")]
     public string Kind { get; set; } = string.Empty;
 
+    /// <summary>中文名（#6：界面主显示；英文仍保留在 <see cref="Kind"/>）。</summary>
+    [JsonPropertyName("kindLabel")]
+    public string KindLabel { get; set; } = string.Empty;
+
     [JsonPropertyName("count")]
     public long Count { get; set; }
 
@@ -337,7 +374,13 @@ public sealed class KindStatsDto
     [JsonPropertyName("outputTokens")]
     public long OutputTokens { get; set; }
 
+    [JsonPropertyName("cachedInputTokens")]
+    public long CachedInputTokens { get; set; }
+
     /// <summary>给界面直接用（x:Bind 不做数值→字符串转换）。</summary>
+    [JsonIgnore]
+    public string KindTitle => string.IsNullOrWhiteSpace(KindLabel) ? Kind : KindLabel;
+
     [JsonIgnore]
     public string CountText => Count.ToString("N0");
 

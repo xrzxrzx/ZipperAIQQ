@@ -795,13 +795,14 @@ public sealed class ChatAgent : IChatAgent
         llmActivity?.SetTag("llm.input.tokens", response.Usage?.InputTokenCount);
         llmActivity?.SetTag("llm.output.tokens", response.Usage?.OutputTokenCount);
 
-        // token 用量与耗时落库 —— 客户端要能看「哪类调用最慢 / token 烧多快」
+        // token 用量与耗时落库 —— 客户端要能看「哪类调用最慢 / token 烧多快 / 缓存命中多少」
         await _metrics.RecordAsync(new MetricEntry(
             SessionId,
             metricKind,
             sw.Elapsed.TotalMilliseconds,
             response.Usage?.InputTokenCount,
-            response.Usage?.OutputTokenCount), ct).ConfigureAwait(false);
+            response.Usage?.OutputTokenCount,
+            response.Usage?.CachedInputTokenCount), ct).ConfigureAwait(false);
 
         return response;
     }

@@ -588,8 +588,10 @@ public partial class MainViewModel : ObservableObject
     private Task LoadAuditAsync() => GuardAsync("读取审计", async () =>
     {
         var list = await _api.CallAsync<List<AuditDto>>("getAudit", new { limit = 50 }).ConfigureAwait(true);
+
+        // 服务端按 Id 倒序返回（最新在前）；界面要「旧→新」+ 滚到底看最新（#7）
         Audits.Clear();
-        foreach (var item in list ?? [])
+        foreach (var item in (list ?? []).OrderBy(a => a.At))
         {
             Audits.Add(item);
         }
@@ -804,7 +806,7 @@ public partial class MainViewModel : ObservableObject
         }
 
         Audits.Clear();
-        foreach (var item in list)
+        foreach (var item in list.OrderBy(a => a.At))
         {
             Audits.Add(item);
         }
