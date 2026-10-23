@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Server.Contacts;
 using ZipperAIQQ.Server.Dto;
 using ZipperAIQQ.Storage.Settings;
 
@@ -69,19 +70,23 @@ public sealed class SetOwnerAction : IApiAction
 {
     private readonly IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
+    private readonly IOwnerScope _ownerScope;
     private readonly Storage.Config.IConfigStore _configs;
 
     public SetOwnerAction(
         IRuntimeSettingsStore settings,
         IRoleResolver roles,
+        IOwnerScope ownerScope,
         Storage.Config.IConfigStore configs)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(roles);
+        ArgumentNullException.ThrowIfNull(ownerScope);
         ArgumentNullException.ThrowIfNull(configs);
 
         _settings = settings;
         _roles = roles;
+        _ownerScope = ownerScope;
         _configs = configs;
     }
 
@@ -113,6 +118,10 @@ public sealed class SetOwnerAction : IApiAction
         await _configs
             .AppendAuditAsync("setOwner", "http-client", $"owner={userId}", ct)
             .ConfigureAwait(false);
+
+        // 主人变了 → 放行范围也要跟着变（私聊 + 主人所在的群）。
+        // 不 await：解析群成员可能是几千毫秒，别让保存主人卡住；后台服务失败会自己重试。
+        _ = _ownerScope.RefreshAsync();
 
         return new { ownerId = userId, ownerName = nickname, effective = "immediate" };
     }

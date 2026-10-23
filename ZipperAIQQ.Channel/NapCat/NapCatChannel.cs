@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Serilog;
+using ZipperAIQQ.Channel.Audio;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Transport.Client;
@@ -26,12 +27,14 @@ namespace ZipperAIQQ.Channel.NapCat;
 /// 两者**不能用同一条路**：事件是 1:N 广播，API 响应是 1:1 定向。
 /// </para>
 /// </remarks>
-public sealed class NapCatChannel : IMessageChannel, IContactDirectory
+public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechTranscriber
 {
     private readonly IClientTransport _transport;
     private readonly IChatFilter _filter;
     private readonly NapCatOptions _options;
     private readonly ILogger _logger;
+    private readonly SpeechOptions _speechOptions;
+    private readonly NapCatPttTextTranscriber _speech;
 
     private readonly System.Threading.Channels.Channel<InboundEvent> _queue =
         System.Threading.Channels.Channel.CreateUnbounded<InboundEvent>(new UnboundedChannelOptions
@@ -48,7 +51,8 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
         IClientTransport transport,
         IChatFilter filter,
         NapCatOptions options,
-        ILogger logger)
+        ILogger logger,
+        SpeechOptions? speechOptions = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(filter);
@@ -59,7 +63,19 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
         _filter = filter;
         _options = options;
         _logger = logger;
+        _speechOptions = speechOptions ?? new SpeechOptions();
+
+        // 转写器复用本通道的 API 管道（`fetch_ptt_text` 是平台扩展 action）
+        _speech = new NapCatPttTextTranscriber(CallApiNodeAsync, _speechOptions, logger);
     }
+
+    /// <summary>语音转写器（供 DI 暴露；通道内部也用它）。</summary>
+    public ISpeechTranscriber SpeechTranscriber => _speech;
+
+    bool ISpeechTranscriber.IsAvailable => _speech.IsAvailable;
+
+    Task<string?> ISpeechTranscriber.TranscribeAsync(AudioClip clip, CancellationToken ct) =>
+        _speech.TranscribeAsync(clip, ct);
 
     
     // ══════════════════════════════════════════════════════════════════
@@ -185,6 +201,27 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
             ReadString(obj, "group_name"),
             ReadInt(obj, "member_count"),
             ReadInt(obj, "max_member_count"));
+    }
+
+    public async Task<IReadOnlyList<GroupInfo>> GetGroupsAsync(CancellationToken ct = default)
+    {
+        var data = await CallApiNodeAsync("get_group_list", null, ct).ConfigureAwait(false);
+
+        if (data is not JsonArray array)
+        {
+            throw new InvalidOperationException(
+                "查询群列表失败：NapCat 没有返回有效数据（可能超时或通道异常）。");
+        }
+
+        return array
+            .OfType<JsonObject>()
+            .Select(o => new GroupInfo(
+                ReadString(o, "group_id"),
+                ReadString(o, "group_name"),
+                ReadInt(o, "member_count"),
+                ReadInt(o, "max_member_count")))
+            .Where(g => g.GroupId.Length > 0)
+            .ToList();
     }
 
     public async Task<IReadOnlyList<GroupMemberInfo>> GetGroupMembersAsync(
@@ -321,8 +358,10 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
 
         await _transport.ConnectAsync(uri, _options.AccessToken, linked.Token).ConfigureAwait(false);
 
-        _logger.Information("NapCat 通道已连接：{Url}（名单模式 {Mode}，条目 {Count} 条）",
-            uri, _filter.Mode, _filter.Count);
+        _logger.Information(
+            "NapCat 通道已连接：{Url}（白名单 {White} 条 / 黑名单 {Black} 条 / 主人放行 {Allow} 条；语音转写 {Stt}）",
+            uri, _filter.WhitelistCount, _filter.BlacklistCount, _filter.AlwaysAllow.Count,
+            _speechOptions.Enabled ? "启用" : "关闭");
     }
 
     public async IAsyncEnumerable<InboundEvent> ReceiveAsync(
@@ -391,11 +430,11 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
         }
     }
 
-    private ValueTask OnTransportFrame(JsonNode json)
+    private async ValueTask OnTransportFrame(JsonNode json)
     {
         if (json is not JsonObject obj)
         {
-            return ValueTask.CompletedTask;
+            return;
         }
 
         // ① API 响应对号入座（有 echo 且有人在等）
@@ -404,14 +443,14 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
             && _pending.TryRemove(echo, out var tcs))
         {
             tcs.TrySetResult(obj);
-            return ValueTask.CompletedTask;
+            return;
         }
 
         // ② 其余按事件处理
         var evt = OneBotEventMapper.Map(obj, Platform);
         if (evt is null)
         {
-            return ValueTask.CompletedTask;
+            return;
         }
 
         // 记录机器人自身账号（心跳/生命周期事件里带 self_id），用于过滤自激
@@ -420,25 +459,81 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory
             Interlocked.Exchange(ref _selfId, selfId);
         }
 
-        // 自激过滤：自己发出的消息也会作为 message 事件回来
+        // 自激过滤（消息）：自己发出的消息也会作为 message 事件回来
         if (evt is IncomingMessage msg && msg.Sender.UserId == SelfId.ToString())
         {
-            return ValueTask.CompletedTask;
+            return;
+        }
+
+        // 自激过滤（通知）：自己入群 / 自己是被操作者 / 自己触发的操作都不该触发响应（问题记录 #39）。
+        // 只有通道层拿得到**动态** SelfId；路由层只能用配置里的自 ID 再兜一次。
+        if (evt is IncomingNotice notice && IsSelfRelated(notice))
+        {
+            _logger.Debug("丢弃自身相关通知：{Type}（Actor={Actor}, Target={Target}）",
+                notice.Type, notice.Actor?.UserId, notice.Target?.UserId);
+            return;
         }
 
         // 接收过滤（FR-17.3）：不在名单内 → 不落库、不进模型
         if (!_filter.IsAllowed(evt.Chat))
         {
             Interlocked.Increment(ref _blockedCount);
-            return ValueTask.CompletedTask;
+            return;
+        }
+
+        // 语音转写（FR-1.5，通道层完成）：放在过滤之后 —— 被过滤的聊天不必花一次转写
+        if (evt is IncomingMessage message)
+        {
+            evt = await EnrichRecordsAsync(message).ConfigureAwait(false);
         }
 
         if (!_queue.Writer.TryWrite(evt))
         {
             _logger.Warning("事件队列写入失败，已丢弃一条事件");
         }
+    }
 
-        return ValueTask.CompletedTask;
+    /// <summary>这条通知是不是「自己相关」（自己触发 / 自己是被操作者）。</summary>
+    private bool IsSelfRelated(IncomingNotice notice)
+    {
+        var self = SelfId.ToString();
+        return !string.IsNullOrEmpty(self) && self != "0"
+            && (notice.Actor?.UserId == self || notice.Target?.UserId == self);
+    }
+
+    /// <summary>把语音段补齐成转写文本；转写不可用时原样返回。</summary>
+    private async Task<IncomingMessage> EnrichRecordsAsync(IncomingMessage message)
+    {
+        if (!_speechOptions.Enabled || !_speech.IsAvailable)
+        {
+            return message;
+        }
+
+        List<MessageSegment>? replaced = null;
+        for (var i = 0; i < message.Segments.Count; i++)
+        {
+            if (message.Segments[i] is not RecordSegment record ||
+                string.IsNullOrWhiteSpace(record.FileId))
+            {
+                continue;
+            }
+
+            var text = await _speech
+                .TranscribeAsync(new AudioClip(record.FileId, record.Url))
+                .ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            replaced ??= message.Segments.ToList();
+            replaced[i] = record with { Text = text, Transcriber = NapCatPttTextTranscriber.ActionName };
+
+            _logger.Information("语音已转写：file={File} 长度 {Length}", record.FileId, text.Length);
+        }
+
+        return replaced is null ? message : message with { Segments = replaced };
     }
 
     private static JsonArray BuildMessageArray(OutgoingMessage message)

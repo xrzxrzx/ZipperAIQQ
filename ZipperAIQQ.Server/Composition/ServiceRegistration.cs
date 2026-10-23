@@ -8,6 +8,7 @@ using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Audio;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.NapCat;
 using ZipperAIQQ.Channel.Throttling;
@@ -17,6 +18,7 @@ using ZipperAIQQ.Server.Api;
 using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
+using ZipperAIQQ.Server.Contacts;
 using ZipperAIQQ.Server.Notices;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Server.Reply;
@@ -153,9 +155,18 @@ public static class ServiceRegistration
                 WebSocketUrl = options.NapCatWebSocketUrl,
                 AccessToken = options.NapCatAccessToken,
             },
-            sp.GetRequiredService<ILogger>()));
+            sp.GetRequiredService<ILogger>(),
+            new SpeechOptions { Enabled = options.SttEnabled }));
 
         services.AddSingleton<IContactDirectory>(sp => sp.GetRequiredService<NapCatChannel>());
+
+        // 语音转写：契约在 Channel，实现是 NapCat 的 fetch_ptt_text（Q5：不接本地模型）
+        services.AddSingleton<ISpeechTranscriber>(sp => sp.GetRequiredService<NapCatChannel>().SpeechTranscriber);
+
+        // 主人放行范围（私聊 + 主人所在的群）：后台刷新，失败自动重试
+        services.AddSingleton<OwnerScopeResolver>();
+        services.AddSingleton<IOwnerScope>(sp => sp.GetRequiredService<OwnerScopeResolver>());
+        services.AddHostedService(sp => sp.GetRequiredService<OwnerScopeResolver>());
 
         services.AddSingleton<IMessageChannel>(sp =>
             // 所有出站消息都过这里：全局最短间隔 + 连发冷却，跨会话共享
@@ -236,9 +247,9 @@ public static class ServiceRegistration
     private static ChatFilterOptions BuildFilterOptions(ServerOptions options) =>
         options.Whitelist.Count > 0
             // 配了白名单：只收这些会话
-            ? new ChatFilterOptions { Mode = ChatListMode.Whitelist, Entries = options.Whitelist }
-            // 没配：黑名单 + 空 = 全放行（首次跑通方便；生产请显式配白名单）
-            : new ChatFilterOptions { Mode = ChatListMode.Blacklist, Entries = [] };
+            ? new ChatFilterOptions { Whitelist = options.Whitelist }
+            // 没配：两份名单都空 = 全放行（首次跑通方便；生产请显式配名单）
+            : new ChatFilterOptions();
 
     private static ChatAgentOptions BuildAgentOptions(ServerOptions options) => new()
     {

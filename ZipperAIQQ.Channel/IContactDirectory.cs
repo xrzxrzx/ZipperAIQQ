@@ -45,6 +45,14 @@ public interface IContactDirectory
     /// <summary>好友列表（用于「选择主人」这类配置）。</summary>
     Task<IReadOnlyList<ContactInfo>> GetFriendsAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// 群列表（用于名单候选 / 解析「主人所在的群」）。
+    /// </summary>
+    /// <remarks>
+    /// 与好友列表同口径：查询失败**抛异常**，不能返回空列表冒充「一个群都没有」。
+    /// </remarks>
+    Task<IReadOnlyList<GroupInfo>> GetGroupsAsync(CancellationToken ct = default);
+
     // ────────────────────────────────────────────────────────────
     //  写操作（**必须经权限门禁**，不能走通用的 InvokeApiAsync）
     // ────────────────────────────────────────────────────────────

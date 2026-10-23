@@ -81,6 +81,14 @@ public sealed class MessageRouter : BackgroundService
 
                     case IncomingNotice notice:
                         // M2-E：落库 + 按配置决定是否响应（默认只记录，FR-18.3）
+                        // 自激兜底：通道层已按动态 SelfId 过滤过；这里再用配置里的自 ID 拦一次，
+                        // 以防换成别的通道实现时漏判（问题记录 #39）
+                        if (IsSelfNotice(notice))
+                        {
+                            _logger.Debug("丢弃自身相关通知（路由层兜底）：{Type}", notice.Type);
+                            break;
+                        }
+
                         await _noticeResponder.HandleAsync(notice, stoppingToken).ConfigureAwait(false);
                         break;
                 }
@@ -99,6 +107,14 @@ public sealed class MessageRouter : BackgroundService
 
 /// <summary>同一会话的收集窗口（毫秒）：这段时间内到达的消息合并成一批。</summary>
     private const int CollectWindowMs = 600;
+
+    /// <summary>这条通知是不是自己触发的（配置里的自 ID 兜底判断）。</summary>
+    private bool IsSelfNotice(IncomingNotice notice)
+    {
+        var self = _options.SelfId;
+        return !string.IsNullOrWhiteSpace(self)
+            && (notice.Actor?.UserId == self || notice.Target?.UserId == self);
+    }
 
     private sealed class SessionBuffer
     {

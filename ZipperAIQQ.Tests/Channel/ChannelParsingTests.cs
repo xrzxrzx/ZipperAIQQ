@@ -132,7 +132,6 @@ public sealed class OneBotEventMapperTests
     }
 
     [Theory]
-    [InlineData("record", "[语音]")]
     [InlineData("video", "[视频]")]
     [InlineData("file", "[文件]")]
     [InlineData("forward", "[合并转发]")]
@@ -144,6 +143,64 @@ public sealed class OneBotEventMapperTests
 
         var text = Assert.Single(msg.Segments.OfType<TextSegment>());
         Assert.Contains(expected, text.Text);
+    }
+
+    [Fact]
+    public void Record_segment_keeps_file_id_instead_of_placeholder()
+    {
+        // 语音不再降级成字面量「[语音]」：通道层要拿 file 去转写（问题记录 #1）
+        var msg = MapPrivate(
+            """[ { "type": "record", "data": { "file": "abc.amr", "url": "https://x/abc.amr" } } ]""");
+
+        var record = Assert.Single(msg.Segments.OfType<RecordSegment>());
+        Assert.Equal("abc.amr", record.FileId);
+        Assert.Equal("https://x/abc.amr", record.Url);
+        Assert.Null(record.Text);
+        Assert.Null(record.Transcriber);
+    }
+
+    [Fact]
+    public void Group_increase_without_target_id_uses_user_id_as_target()
+    {
+        // 群成员增减事件没有 target_id：不补这一步，文案会退化成「某人」、
+        // 自激过滤也没有靶子（问题记录 #39）
+        var raw = """
+            {
+              "post_type": "notice",
+              "notice_type": "group_increase",
+              "sub_type": "approve",
+              "group_id": 20001,
+              "user_id": 10001,
+              "operator_id": 30001,
+              "time": 1700000000
+            }
+            """;
+
+        var notice = Assert.IsType<IncomingNotice>(OneBotEventMapper.Map(JsonNode.Parse(raw), "qq"));
+        Assert.Equal(NoticeType.GroupIncrease, notice.Type);
+        Assert.Equal("10001", notice.Target?.UserId);
+        Assert.Equal("30001", notice.Actor?.UserId);
+    }
+
+    [Fact]
+    public void Group_increase_without_operator_does_not_pretend_user_is_actor()
+    {
+        // 自己入群时没有 operator_id：不能把 user_id 同时当操作者（否则「谁入群」和
+        // 「谁操作的」混成一个，自激过滤也没法只看 Target）
+        var raw = """
+            {
+              "post_type": "notice",
+              "notice_type": "group_increase",
+              "sub_type": "invite",
+              "group_id": 20001,
+              "user_id": 30001,
+              "time": 1700000000
+            }
+            """;
+
+        var notice = Assert.IsType<IncomingNotice>(OneBotEventMapper.Map(JsonNode.Parse(raw), "qq"));
+        Assert.Null(notice.Actor);
+        Assert.Equal("30001", notice.Target?.UserId);
     }
 
     [Fact]

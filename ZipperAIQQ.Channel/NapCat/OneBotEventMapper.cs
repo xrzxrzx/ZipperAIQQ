@@ -106,10 +106,18 @@ public static class OneBotEventMapper
         var targetId = GetString(obj, "target_id");
         var operatorId = GetString(obj, "operator_id");
 
+        // 群成员增减事件**没有 target_id**：被操作者就是 user_id。
+        // 不补这一步 → Target 恒为 null → 文案退化成「某人」、自激过滤也没有靶子（问题记录 #39）。
+        var isMemberChange = noticeType is "group_increase" or "group_decrease";
+        var resolvedTargetId = targetId ?? (isMemberChange ? userId : null);
+
         // 操作者 / 被操作者分开记（FR-18.4）：戳一戳是「A 戳 B」，不是「发生了一次戳一戳」
-        var actorId = !string.IsNullOrEmpty(operatorId) && operatorId != "0" ? operatorId : userId;
+        // 成员增减缺 operator_id 时不要拿 user_id 顶替 —— 那会把「新成员」同时记成操作者
+        var actorId = !string.IsNullOrEmpty(operatorId) && operatorId != "0"
+            ? operatorId
+            : (isMemberChange ? null : userId);
         var actor = actorId is null ? null : new SenderInfo { UserId = actorId };
-        var target = targetId is null ? null : new SenderInfo { UserId = targetId };
+        var target = resolvedTargetId is null ? null : new SenderInfo { UserId = resolvedTargetId };
 
         var type = MapNoticeType(noticeType, subType);
 
@@ -228,6 +236,16 @@ public static class OneBotEventMapper
                     {
                         segments.Add(new FaceSegment(faceId));
                     }
+                    break;
+
+                case "record":
+                    // 语音：先保留文件标识，**转写由通道层补齐**（FR-1.5）。
+                    // 以前这里落进 default 直接变成 "[语音]"，音频内容从未被获取（问题记录 #1）。
+                    segments.Add(new RecordSegment(
+                        FileId: GetNonEmpty(data, "file"),
+                        Url: GetNonEmpty(data, "url"),
+                        Text: null,
+                        Transcriber: null));
                     break;
 
                 default:

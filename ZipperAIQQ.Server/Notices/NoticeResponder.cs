@@ -102,8 +102,9 @@ public sealed class NoticeResponder
     public static string Describe(IncomingNotice notice) => notice.Type switch
     {
         NoticeType.Poke => $"[戳一戳] {Who(notice.Actor)} 戳了 {Who(notice.Target)}",
-        NoticeType.GroupIncrease => $"[入群] {Who(notice.Target)} 加入了群",
-        NoticeType.GroupDecrease => $"[退群] {Who(notice.Target)} 离开了群",
+        // 成员增减事件没有 target_id 时，被操作者就是 user_id（映射层已补；这里再兜一次）
+        NoticeType.GroupIncrease => $"[入群] {Who(notice.Target ?? notice.Actor)} 加入了群",
+        NoticeType.GroupDecrease => $"[退群] {Who(notice.Target ?? notice.Actor)} 离开了群",
         NoticeType.GroupAdminChanged => $"[管理员变动] {Who(notice.Target)} 的管理员身份发生变化（操作者：{Who(notice.Actor)}）",
         NoticeType.GroupBan => $"[禁言] {Who(notice.Target)} 被 {Who(notice.Actor)} 禁言",
         NoticeType.MessageRecalled => $"[撤回] {Who(notice.Actor)} 撤回了一条消息",
