@@ -11,11 +11,11 @@ public sealed partial class StatusPage : Page
     public StatusPage()
     {
         // x:Bind 需要，必须在 InitializeComponent 之前赋值
-        Vm = App.Services.GetRequiredService<MainViewModel>();
+        Vm = App.Services.GetRequiredService<StatusViewModel>();
         InitializeComponent();
     }
 
-    public MainViewModel Vm { get; }
+    public StatusViewModel Vm { get; }
 
     private void TokenBox_PasswordChanged(object sender, RoutedEventArgs e)
     {
@@ -41,3 +41,4 @@ public sealed partial class StatusPage : Page
         }
     }
 }
+

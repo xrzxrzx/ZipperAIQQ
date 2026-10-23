@@ -14,13 +14,13 @@ public sealed partial class AuditPage : Page
 {
     public AuditPage()
     {
-        Vm = App.Services.GetRequiredService<MainViewModel>();
+        Vm = App.Services.GetRequiredService<AuditViewModel>();
         InitializeComponent();
 
         Vm.Audits.CollectionChanged += OnAuditsChanged;
     }
 
-    public MainViewModel Vm { get; }
+    public AuditViewModel Vm { get; }
 
     private void OnAuditsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -45,3 +45,4 @@ public sealed partial class AuditPage : Page
         });
     }
 }
+

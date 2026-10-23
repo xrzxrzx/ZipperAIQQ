@@ -20,7 +20,7 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private bool _restoringPane = true;
 
-    public MainWindow(MainViewModel vm)
+    public MainWindow(ShellViewModel vm)
     {
         ArgumentNullException.ThrowIfNull(vm);
 
@@ -71,7 +71,7 @@ public sealed partial class MainWindow : Window
         Vm.StartAutoRefresh();
 
         // 启动即尝试连接（地址有默认值；连不上就在状态条上提示，不影响界面）
-        _ = Vm.ConnectCommand.ExecuteAsync(null);
+        _ = Vm.Status.ConnectCommand.ExecuteAsync(null);
 
         // 窗口关掉：记录侧栏状态（初始化期间的事件不可靠，这里才准）+ 停掉定时器
         Closed += (_, _) =>
@@ -81,7 +81,7 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    public MainViewModel Vm { get; }
+    public ShellViewModel Vm { get; }
 
     /// <summary>隐藏系统标题栏，内容扩展到标题栏区域，系统按钮透明化。</summary>
     private void InitializeTitleBar()
@@ -184,3 +184,4 @@ public sealed partial class MainWindow : Window
         _ => typeof(StatusPage),
     };
 }
+

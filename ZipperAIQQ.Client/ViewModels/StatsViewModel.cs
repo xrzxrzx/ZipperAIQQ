@@ -10,7 +10,7 @@ namespace ZipperAIQQ.Client.ViewModels;
 /// 数据页的视图模型：Token 用量（含缓存命中）/ 检索命中率 / JEV 判断 / 会话维度。
 /// </summary>
 /// <remarks>
-/// 从 <see cref="MainViewModel"/> 抽出来（原本 819 行，这块占约 100 行且**只被 DataPage 使用**）。
+/// 从 原 MainViewModel 抽出来（原本 819 行，这块占约 100 行且**只被 DataPage 使用**）。
 /// 2026-10-23 起支持按会话筛选（问题记录 #5）与缓存命中率（#4）。
 /// </remarks>
 public sealed partial class StatsViewModel : ObservableObject
@@ -252,3 +252,4 @@ public sealed partial class StatsViewModel : ObservableObject
         }
     }
 }
+

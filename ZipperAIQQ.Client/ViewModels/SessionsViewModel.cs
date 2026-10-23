@@ -11,8 +11,8 @@ namespace ZipperAIQQ.Client.ViewModels;
 /// 会话页的视图模型：会话列表 / 消息 / 搜索 / 区间导出。
 /// </summary>
 /// <remarks>
-/// 从 <see cref="MainViewModel"/> 抽出来（#35 的第一刀）：这块只被会话页使用。
-/// 心跳由 Shell（MainViewModel）按页分频调用 <see cref="RefreshIncrementalAsync"/>。
+/// 从 原 MainViewModel 抽出来（#35 的第一刀）：这块只被会话页使用。
+/// 心跳由 Shell（ShellViewModel）按页分频调用 <see cref="RefreshIncrementalAsync"/>。
 /// </remarks>
 public sealed partial class SessionsViewModel : ObservableObject
 {
@@ -232,3 +232,4 @@ public sealed partial class SessionsViewModel : ObservableObject
         return file;
     }
 }
+

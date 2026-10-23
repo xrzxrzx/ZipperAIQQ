@@ -21,13 +21,15 @@ public partial class App : Application
         services.AddSingleton<ServerApiClient>();
         services.AddSingleton<StatsViewModel>();
         services.AddSingleton<SessionsViewModel>();
+        services.AddSingleton<StatusViewModel>();
+        services.AddSingleton<AuditViewModel>();
         services.AddSingleton<EndpointsViewModel>();
         services.AddSingleton<RuntimeViewModel>();
         services.AddSingleton<PersonaViewModel>();
         services.AddSingleton<AccessViewModel>();
         services.AddSingleton<ToolsViewModel>();
         services.AddSingleton<LogsViewModel>();
-        services.AddSingleton<MainViewModel>();
+        services.AddSingleton<ShellViewModel>();
 
         Services = services.BuildServiceProvider();
     }
@@ -37,7 +39,7 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow(Services.GetRequiredService<MainViewModel>());
+        _window = new MainWindow(Services.GetRequiredService<ShellViewModel>());
         _window.Activate();
     }
 }
