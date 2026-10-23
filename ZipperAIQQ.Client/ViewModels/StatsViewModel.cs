@@ -90,6 +90,10 @@ public sealed partial class StatsViewModel : ObservableObject
 
     public ObservableCollection<KindStatsDto> KindRows { get; } = [];
 
+    /// <summary>「各类调用」为空时的提示（近 24 小时没调用是正常现象，不是坏了）。</summary>
+    [ObservableProperty]
+    public partial string KindEmptyText { get; set; } = string.Empty;
+
     /// <summary>是否已经拉过一次（心跳靠它判断要不要后台刷新）。</summary>
     public bool Loaded => Stats is not null;
 
@@ -197,6 +201,10 @@ public sealed partial class StatsViewModel : ObservableObject
         {
             KindRows.Add(row);
         }
+
+        KindEmptyText = KindRows.Count == 0
+            ? "近 24 小时没有调用记录（不是坏了；有对话/检索后这里会出现明细）"
+            : string.Empty;
     }
 
     /// <summary>

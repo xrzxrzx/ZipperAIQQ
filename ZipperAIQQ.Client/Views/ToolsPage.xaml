@@ -35,7 +35,7 @@
     </Page.Resources>
 
     <ScrollViewer Padding="32">
-        <StackPanel Spacing="16" MaxWidth="1200" HorizontalAlignment="Left">
+        <StackPanel Spacing="16" HorizontalAlignment="Stretch">
 
             <TextBlock Text="工具管理" Style="{StaticResource PageTitleStyle}" />
             <TextBlock Text="工具 / 命令 / NapCat API 的开关与最低角色；保存后立即生效"

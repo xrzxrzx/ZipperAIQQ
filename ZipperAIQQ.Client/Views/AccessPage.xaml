@@ -7,7 +7,7 @@
     mc:Ignorable="mc">
 
     <ScrollViewer Padding="32">
-        <StackPanel Spacing="16" MaxWidth="1200" HorizontalAlignment="Left">
+        <StackPanel Spacing="16" HorizontalAlignment="Stretch">
 
             <TextBlock Text="人员与名单" Style="{StaticResource PageTitleStyle}" />
             <TextBlock Text="人员管「谁能指挥它动手」，名单管「它愿意理谁」—— 两张卡分开保存"

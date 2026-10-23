@@ -131,6 +131,26 @@ public sealed partial class MainWindow : Window
         ]);
     }
 
+    private void NavView_PaneOpened(NavigationView sender, object args)
+    {
+        if (_restoringPane)
+        {
+            return;
+        }
+
+        Vm.IsPaneOpen = true;
+    }
+
+    private void NavView_PaneClosed(NavigationView sender, object args)
+    {
+        if (_restoringPane)
+        {
+            return;
+        }
+
+        Vm.IsPaneOpen = false;
+    }
+
     private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         if (args.SelectedItem is not NavigationViewItem item || item.Tag?.ToString() is not { } tag)

@@ -6,56 +6,66 @@
     mc:Ignorable="mc">
 
     <ScrollViewer Padding="32">
-        <StackPanel Spacing="16" MaxWidth="1200" HorizontalAlignment="Left">
+        <StackPanel Spacing="16" HorizontalAlignment="Stretch">
 
             <TextBlock Text="模型配置" Style="{StaticResource PageTitleStyle}" />
             <TextBlock Text="两个固定端点：普通 LLM（primary）与判断模型 JEV（judge）；端点名不可改"
                        Style="{StaticResource CaptionStyle}" Margin="0,-8,0,4" />
 
-            <!-- 普通 LLM -->
-            <Border Style="{StaticResource CardStyle}">
-                <StackPanel Spacing="10">
-                    <TextBlock Text="普通 LLM（primary）" Style="{StaticResource SectionHeaderStyle}" />
-                    <TextBlock Text="负责正常对话与工具调用"
-                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+            <!-- 两个端点左右并列（窄窗口时每列最小 380） -->
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MinWidth="380" />
+                    <ColumnDefinition Width="*" MinWidth="380" />
+                </Grid.ColumnDefinitions>
 
-                    <TextBox Header="BaseUrl" Text="{x:Bind Vm.LlmBaseUrl, Mode=TwoWay}" />
-                    <TextBox Header="模型" Text="{x:Bind Vm.LlmModel, Mode=TwoWay}" />
-                    <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="LlmKey_PasswordChanged" />
+                <!-- 普通 LLM -->
+                <Border Grid.Column="0" Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="普通 LLM（primary）" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="负责正常对话与工具调用"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Button Content="保存普通 LLM" Style="{StaticResource JpAccentButtonStyle}"
-                                Command="{x:Bind Vm.SaveLlmCommand}" />
-                        <TextBlock Text="{x:Bind Vm.LlmStatus, Mode=OneWay}"
-                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                        <TextBox Header="BaseUrl" Text="{x:Bind Vm.LlmBaseUrl, Mode=TwoWay}" />
+                        <TextBox Header="模型" Text="{x:Bind Vm.LlmModel, Mode=TwoWay}" />
+                        <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="LlmKey_PasswordChanged" />
+
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Content="保存普通 LLM" Style="{StaticResource JpAccentButtonStyle}"
+                                    Command="{x:Bind Vm.SaveLlmCommand}" />
+                            <TextBlock Text="{x:Bind Vm.LlmStatus, Mode=OneWay}"
+                                       Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                        </StackPanel>
                     </StackPanel>
-                </StackPanel>
-            </Border>
+                </Border>
 
-            <!-- JEV -->
-            <Border Style="{StaticResource CardStyle}">
-                <StackPanel Spacing="10">
-                    <TextBlock Text="JEV 判断模型（judge）" Style="{StaticResource SectionHeaderStyle}" />
-                    <TextBlock Text="只在「回复模式 = jev」时使用，判断此刻该不该开口"
-                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                <!-- JEV -->
+                <Border Grid.Column="1" Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="JEV 判断模型（judge）" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="只在「回复模式 = jev」时使用，判断此刻该不该开口"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
-                    <TextBox Header="BaseUrl" Text="{x:Bind Vm.JudgeBaseUrl, Mode=TwoWay}" />
-                    <TextBox Header="模型" Text="{x:Bind Vm.JudgeModel, Mode=TwoWay}" />
-                    <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="JudgeKey_PasswordChanged" />
+                        <TextBox Header="BaseUrl" Text="{x:Bind Vm.JudgeBaseUrl, Mode=TwoWay}" />
+                        <TextBox Header="模型" Text="{x:Bind Vm.JudgeModel, Mode=TwoWay}" />
+                        <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="JudgeKey_PasswordChanged" />
 
-                    <StackPanel Orientation="Horizontal" Spacing="12">
-                        <NumberBox Header="判断灵敏度" Minimum="0.05" Maximum="0.95"
-                                   SmallChange="0.05" Value="{x:Bind Vm.JudgeThreshold, Mode=TwoWay}" />
-                        <Button Content="保存 JEV" Style="{StaticResource JpAccentButtonStyle}"
-                                Command="{x:Bind Vm.SaveJudgeCommand}" VerticalAlignment="Bottom" />
-                        <Button Content="只保存灵敏度" Style="{StaticResource JpButtonStyle}"
-                                Command="{x:Bind Vm.SaveThresholdCommand}" VerticalAlignment="Bottom" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <NumberBox Header="判断灵敏度" Minimum="0.05" Maximum="0.95"
+                                       SmallChange="0.05" Value="{x:Bind Vm.JudgeThreshold, Mode=TwoWay}" />
+                            <Button Content="保存 JEV" Style="{StaticResource JpAccentButtonStyle}"
+                                    Command="{x:Bind Vm.SaveJudgeCommand}" VerticalAlignment="Bottom" />
+                            <Button Content="只保存灵敏度" Style="{StaticResource JpButtonStyle}"
+                                    Command="{x:Bind Vm.SaveThresholdCommand}" VerticalAlignment="Bottom" />
+                        </StackPanel>
+                        <Slider Minimum="0.05" Maximum="0.95" StepFrequency="0.05"
+                                Value="{x:Bind Vm.JudgeThreshold, Mode=TwoWay}" />
+
+                        <TextBlock Text="{x:Bind Vm.JudgeStatus, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
                     </StackPanel>
-
-                    <TextBlock Text="{x:Bind Vm.JudgeStatus, Mode=OneWay}"
-                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-                </StackPanel>
-            </Border>
+                </Border>
+            </Grid>
         </StackPanel>
     </ScrollViewer>
 </Page>

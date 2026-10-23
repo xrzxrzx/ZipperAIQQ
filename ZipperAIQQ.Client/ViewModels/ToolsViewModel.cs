@@ -22,10 +22,13 @@ public sealed partial class ToolPolicyRow : ObservableObject
     [ObservableProperty]
     public partial bool Enabled { get; set; } = true;
 
+    /// <summary>角色（界面显示中文，保存时映射回英文枚举）。</summary>
     [ObservableProperty]
-    public partial string Role { get; set; } = "Normal";
+    public partial string Role { get; set; } = "普通";
 
-    public string Subtitle => $"{Key} · 默认 {Role}";
+    public string DefaultRoleDisplay { get; init; } = "普通";
+
+    public string Subtitle => $"{Key} · 默认 {DefaultRoleDisplay}";
 }
 
 /// <summary>
@@ -33,7 +36,18 @@ public sealed partial class ToolPolicyRow : ObservableObject
 /// </summary>
 public sealed partial class ToolsViewModel : ObservableObject
 {
-    public static readonly string[] Roles = ["Normal", "Whitelist", "Admin", "Owner"];
+    public static readonly string[] Roles = ["普通", "白名单", "管理员", "主人"];
+
+    private static readonly Dictionary<string, string> ToChinese = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Normal"] = "普通",
+        ["Whitelist"] = "白名单",
+        ["Admin"] = "管理员",
+        ["Owner"] = "主人",
+    };
+
+    private static readonly Dictionary<string, string> ToEnglish = ToChinese
+        .ToDictionary(kv => kv.Value, kv => kv.Key, StringComparer.Ordinal);
 
     /// <summary>角色下拉的选项（x:Bind 需要实例属性）。</summary>
     public IReadOnlyList<string> RoleOptions => Roles;
@@ -84,7 +98,8 @@ public sealed partial class ToolsViewModel : ObservableObject
                     Label = item.Label,
                     HardFloor = item.HardFloor,
                     Enabled = item.Enabled,
-                    Role = item.Role,
+                    Role = ToChinese.GetValueOrDefault(item.Role, "普通"),
+                    DefaultRoleDisplay = ToChinese.GetValueOrDefault(item.DefaultRole, "普通"),
                 };
 
                 switch (item.Category)
@@ -143,7 +158,7 @@ public sealed partial class ToolsViewModel : ObservableObject
                     category = r.Category,
                     key = r.Key,
                     enabled = r.Enabled,
-                    role = r.Role,
+                    role = ToEnglish.GetValueOrDefault(r.Role, "Normal"),
                 })
                 .ToList();
 

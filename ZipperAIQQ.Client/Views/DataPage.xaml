@@ -7,7 +7,7 @@
     mc:Ignorable="mc">
 
     <ScrollViewer Padding="32">
-        <StackPanel Spacing="16" MaxWidth="1200" HorizontalAlignment="Left">
+        <StackPanel Spacing="16" HorizontalAlignment="Stretch">
 
             <TextBlock Text="数据" Style="{StaticResource PageTitleStyle}" />
             <TextBlock Text="Token 用量 / 缓存命中 / 检索命中率 / JEV 判断 —— 总量 + 近 24 小时"
@@ -202,6 +202,9 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+
+                    <TextBlock Text="{x:Bind Stats.KindEmptyText, Mode=OneWay}"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
                     <Button Content="刷新统计" Style="{StaticResource JpButtonStyle}"
                             Command="{x:Bind Stats.LoadCommand}" HorizontalAlignment="Left" />
