@@ -3,10 +3,17 @@ namespace ZipperAIQQ.Channel.Audio;
 /// <summary>
 /// 一段待转写的语音。
 /// </summary>
-/// <param name="FileId">平台文件标识（NapCat 的 <c>get_record</c> / <c>fetch_ptt_text</c> 都用它）。</param>
+/// <param name="FileId">平台文件标识（如 <c>abc.amr</c>）。</param>
 /// <param name="Url">音频地址（平台可能不给）。</param>
 /// <param name="Format">格式（如 <c>amr</c> / <c>silk</c>），未知为 <c>null</c>。</param>
-public sealed record AudioClip(string? FileId, string? Url, string? Format = null);
+/// <param name="MessageId">
+/// 所属消息 ID。NapCat 的 <c>fetch_ptt_text</c> **必填**这一项（实测：只给 file 会报 schema 错）。
+/// </param>
+public sealed record AudioClip(
+    string? FileId,
+    string? Url,
+    string? Format = null,
+    string? MessageId = null);
 
 /// <summary>
 /// 语音转文字（FR-1.5：**必须发生在通道层**，上层只读结果）。

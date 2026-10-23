@@ -2,59 +2,59 @@
 
 > **时间**：2026-10-23
 > **目的**：确定 #1「无法读取用户语音」的落地路径 —— NapCat 是否自带语音转文字
-> **方式**：只读探测（WebSocket 调 API，不发消息、不改配置）
+> **方式**：只读探测（WebSocket 调 API，不发消息、不改配置、不写文件）
 > **相关**：需求 §8.3 U12；问题记录 #1；实现方案 T1.1
 
 ## 一、结论先行
 
-| 问题 | 结论 | 置信度 |
+| 问题 | 结论 | 依据 |
 |---|---|---|
-| NapCat 有取语音文件的 API | **有**（`get_record`，官方文档列出） | 高（外部文档） |
-| NapCat 有语音转文字 API | **很可能有**（`fetch_ptt_text`，社区整理的扩展 Action 列表列出） | 中（未获运行期确认） |
-| 本项目能否直接调通 | **暂不能验证**：测试口要求独立 token，当前未取得 | — |
+| NapCat 有取语音文件的 API | **有**（`get_record`） | 官方文档 + 运行期不再是 1404 |
+| NapCat 有语音转文字 API | **有**（`fetch_ptt_text`） | **运行期实测**：不存在会返回 `1404 不支持的API` |
+| `fetch_ptt_text` 的必填参数 | **`message_id`**（不是 `file`） | 实测：只给 `file` → `1400 Schema compilation error`；给 `message_id` → `1200 消息不存在` |
+| 能否拿到转写文本 | **尚未验证** | 最近 8 个群各 50 条里没有语音段，缺一条真实语音 |
 
 ## 二、实测记录
 
-### 2.1 测试口连通性
+### 2.1 鉴权
 
-- 测试口（15001）**TCP/WS 可连通**（握手成功，`state=Open`）。
-- 调 `get_login_info` 返回：
+- 测试口（15001）WS 可连通；无 token / 用主配置（17011）的 token 均返回 `1403 token验证失败`。
+- 使用测试口专用 token 后：`get_login_info` → `status=ok retcode=0`。
+- 注意：同一 WS 连接上事件帧与 API 响应帧会交错，**必须按 `echo` 匹配**，否则会把 lifecycle 事件当成 API 响应（首次探测就踩了这个坑，结论作废重测）。
 
-  ```json
-  { "status": "failed", "retcode": 1403, "message": "token验证失败" }
-  ```
+### 2.2 `fetch_ptt_text` 参数契约（关键发现）
 
-- 用**服务端主配置里的 token**（对应 WS 端口 17011）以两种方式重试：
-  - URL 查询参数 `?access_token=…` → 仍然 `1403`
-  - 请求头 `Authorization: Bearer …` → 仍然 `1403`
-- 结论：**15001 使用与主配置不同的 token**，需单独取得后才能做运行期探测。
+| 传入 | 返回 |
+|---|---|
+| `{"file":"probe.amr"}` | `1400 Schema compilation error: Expected required property` |
+| `{"file_id":"probe.amr"}` | `1400`（同上） |
+| `{"file":{"file":"probe.amr"}}` | `1400`（同上） |
+| `{"message_id":"1"}` | `1200 消息不存在` ✅ **schema 通过** |
+| `{"file":"probe.amr","message_id":"1"}` | `1200 消息不存在` ✅ schema 通过 |
 
-### 2.2 主配置端口
+对照：不存在的 action 返回 **`1404 不支持的API`**，因此 `1400` 说明「action 存在、参数不对」。
 
-- 服务端 `run-server.local.ps1` 里配置的 WS 端口是 **17011**。
-- 从服务器本机连 `ws://127.0.0.1:17011` **连接失败**（NapCat 当时未监听该端口）。
-- 不影响结论：探测只需要测试口 + 正确 token。
+### 2.3 `get_record`
 
-## 三、外部资料（未在本项目运行期验证）
+- `{"file":...}` / `{"file_id":...}` / `{"file":{...}}` 均为 `1400 Schema compilation error`。
+- 本项目**不需要**它（转写只需 `message_id`），后续要下载音频本体时再单独查参数。
 
-| 能力 | 说明 | 来源 |
-|---|---|---|
-| `get_record` | 获取指定语音文件信息，支持 `out_format` 转换（mp3 / amr / wav / silk 等） | [NapCat 推荐框架最佳实践](https://napneko.pages.dev/develop/file) |
-| `fetch_ptt_text` | 语音转文字（列在「NapCat 扩展 Action」清单中） | [NapCat-MCP（LobeHub）](https://lobehub.com/zh/mcp/haoan33-omniqq-mcp#1) |
+### 2.4 真实语音扫描
 
-> 外部资料只作方向判断；**是否可用以运行期实测为准**。
+- `get_group_list` → 8 个群。
+- 对每个群调 `get_group_msg_history`（`count=50, message_seq=0`，不带 `message_seq` 会报「消息undefined不存在」）。
+- 段类型统计：`at` / `face` / `image` / `json` / `text` —— **没有 `record`**。
+- 结论：需要一条**真实语音**才能验证 `data.text` 的返回形状。
 
-## 四、对本项目的影响
+## 三、对本项目的影响
 
-1. 代码已按「**接口 + 单实现 + 熔断**」落地（T1.2–T1.5）：
-   - 语音段保留 `file`，通道层调 `fetch_ptt_text`，失败 3 次自动禁用并记日志；
-   - 不可用时语音降级为 `[语音]` 占位，**不阻塞消息接收**。
-2. 不引入本地 ASR 模型（Q5 定稿）。
-3. 待补：拿到 15001 的 token 后，用一条真实语音做端到端验证（B1-A1/A2）。
+1. 代码已按实测契约调整：`AudioClip.MessageId`，调用参数为
+   `{"message_id": "...", "file": "..."}`；没有 `message_id` 时**不发请求**。
+2. 转写失败 / 连续 3 次失败 → 熔断禁用，语音降级为 `[语音]` 占位，**不阻塞消息**。
+3. 不引入本地 ASR 模型（Q5 定稿）。
 
-## 五、待办
+## 四、待办
 
-- [ ] 取得测试口 token（用户提供，或指出存放位置）
-- [ ] 探测 `fetch_ptt_text` 是否存在（真实语音一条）
-- [ ] 若不存在：确认 NapCat 版本是否过旧，或在方案里登记「#1 降级为占位」
-- [ ] 若存在：补测 `get_record` 的 `out_format` 行为（是否需要额外解码）
+- [ ] 在测试群/私聊发一条语音，取该消息 `message_id` 调 `fetch_ptt_text`，确认返回形状（预期 `data.text`）
+- [ ] 若返回形状不同（如 `data` 为字符串），调整 `NapCatPttTextTranscriber.ExtractText`
+- [ ] 端到端：服务端运行时收到语音 → 日志出现「语音已转写」→ `SegmentsJson` 里 `text` 非空

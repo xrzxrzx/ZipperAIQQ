@@ -519,7 +519,10 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
             }
 
             var text = await _speech
-                .TranscribeAsync(new AudioClip(record.FileId, record.Url))
+                .TranscribeAsync(new AudioClip(
+                    record.FileId,
+                    record.Url,
+                    MessageId: message.EventId))
                 .ConfigureAwait(false);
 
             if (string.IsNullOrWhiteSpace(text))

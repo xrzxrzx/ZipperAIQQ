@@ -49,17 +49,26 @@ public sealed class NapCatPttTextTranscriber : ISpeechTranscriber
 
     public async Task<string?> TranscribeAsync(AudioClip clip, CancellationToken ct = default)
     {
-        if (!IsAvailable || clip is null || string.IsNullOrWhiteSpace(clip.FileId))
+        // message_id 是 NapCat 的必填项：没有它连 schema 都过不了（1400），
+        // 所以直接跳过，不浪费一次往返。
+        if (!IsAvailable || clip is null || string.IsNullOrWhiteSpace(clip.MessageId))
         {
             return null;
         }
 
+        var parameters = new JsonObject
+        {
+            ["message_id"] = clip.MessageId,
+        };
+
+        if (!string.IsNullOrWhiteSpace(clip.FileId))
+        {
+            parameters["file"] = clip.FileId;
+        }
+
         try
         {
-            var data = await _callApi(
-                ActionName,
-                new JsonObject { ["file"] = clip.FileId },
-                ct).ConfigureAwait(false);
+            var data = await _callApi(ActionName, parameters, ct).ConfigureAwait(false);
 
             var text = ExtractText(data);
             if (text is null)
@@ -78,7 +87,7 @@ public sealed class NapCatPttTextTranscriber : ISpeechTranscriber
         }
         catch (Exception ex)
         {
-            _logger.Warning(ex, "语音转写异常（file={File}）", clip.FileId);
+            _logger.Warning(ex, "语音转写异常（message={MessageId}）", clip.MessageId);
             OnFailure();
             return null;
         }

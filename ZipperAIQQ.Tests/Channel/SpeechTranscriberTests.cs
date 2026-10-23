@@ -9,12 +9,16 @@ namespace ZipperAIQQ.Tests.Channel;
 /// NapCat 语音转写（<c>fetch_ptt_text</c>）的容错行为。
 /// </summary>
 /// <remarks>
-/// 真实 action 是否存在要等 NapCat 在线才能验；这里测的是**失败不拖垮接收**：
-/// 返回 null、连续失败后熔断、成功会重置计数。
+/// 参数契约来自 2026-10-23 的实测：该 action 的必填项是 <c>message_id</c>（只给 file 会报
+/// <c>Schema compilation error</c>）；这里测的是**失败不拖垮接收**：返回 null、
+/// 连续失败后熔断、成功会重置计数。
 /// </remarks>
 public sealed class SpeechTranscriberTests
 {
     private static readonly ILogger Logger = new LoggerConfiguration().CreateLogger();
+
+    private static AudioClip Clip(string? messageId = "m1", string? fileId = "a.amr") =>
+        new(fileId, null, MessageId: messageId);
 
     private static NapCatPttTextTranscriber Create(
         Func<string, JsonObject?, CancellationToken, Task<JsonNode?>> callApi,
@@ -27,7 +31,7 @@ public sealed class SpeechTranscriberTests
         var transcriber = Create((_, _, _) =>
             Task.FromResult<JsonNode?>(JsonNode.Parse("""{ "text": "你好呀" }""")));
 
-        var text = await transcriber.TranscribeAsync(new AudioClip("a.amr", null));
+        var text = await transcriber.TranscribeAsync(Clip());
 
         Assert.Equal("你好呀", text);
         Assert.True(transcriber.IsAvailable);
@@ -39,12 +43,30 @@ public sealed class SpeechTranscriberTests
         var transcriber = Create((_, _, _) =>
             Task.FromResult<JsonNode?>(JsonValue.Create("直接是字符串")));
 
-        Assert.Equal("直接是字符串", await transcriber.TranscribeAsync(new AudioClip("a.amr", null)));
+        Assert.Equal("直接是字符串", await transcriber.TranscribeAsync(Clip()));
     }
 
     [Fact]
-    public async Task Missing_file_id_does_not_call_api()
+    public async Task Sends_message_id_and_file()
     {
+        JsonObject? captured = null;
+        var transcriber = Create((_, parameters, _) =>
+        {
+            captured = parameters;
+            return Task.FromResult<JsonNode?>(JsonNode.Parse("""{ "text": "ok" }"""));
+        });
+
+        await transcriber.TranscribeAsync(Clip("m-42", "voice.amr"));
+
+        Assert.NotNull(captured);
+        Assert.Equal("m-42", captured!["message_id"]?.GetValue<string>());
+        Assert.Equal("voice.amr", captured["file"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Missing_message_id_does_not_call_api()
+    {
+        // message_id 是必填项：没有它连 schema 都过不了，不该白跑一次往返
         var calls = 0;
         var transcriber = Create((_, _, _) =>
         {
@@ -52,7 +74,8 @@ public sealed class SpeechTranscriberTests
             return Task.FromResult<JsonNode?>(null);
         });
 
-        Assert.Null(await transcriber.TranscribeAsync(new AudioClip(null, "https://x/a.amr")));
+        Assert.Null(await transcriber.TranscribeAsync(Clip(messageId: null)));
+        Assert.Null(await transcriber.TranscribeAsync(new AudioClip("a.amr", "https://x/a.amr")));
         Assert.Equal(0, calls);
     }
 
@@ -69,7 +92,7 @@ public sealed class SpeechTranscriberTests
             new SpeechOptions { Enabled = false });
 
         Assert.False(transcriber.IsAvailable);
-        Assert.Null(await transcriber.TranscribeAsync(new AudioClip("a.amr", null)));
+        Assert.Null(await transcriber.TranscribeAsync(Clip()));
         Assert.Equal(0, calls);
     }
 
@@ -87,7 +110,7 @@ public sealed class SpeechTranscriberTests
 
         for (var i = 0; i < 5; i++)
         {
-            Assert.Null(await transcriber.TranscribeAsync(new AudioClip("a.amr", null)));
+            Assert.Null(await transcriber.TranscribeAsync(Clip()));
         }
 
         // 第 3 次失败后熔断，后两次不再发起调用（否则每条语音都白等一次超时）
@@ -109,9 +132,9 @@ public sealed class SpeechTranscriberTests
             },
             new SpeechOptions { MaxConsecutiveFailures = 2 });
 
-        Assert.Null(await transcriber.TranscribeAsync(new AudioClip("a.amr", null))); // 失败 1
-        Assert.Equal("恢复", await transcriber.TranscribeAsync(new AudioClip("a.amr", null))); // 成功，清零
-        Assert.Null(await transcriber.TranscribeAsync(new AudioClip("a.amr", null))); // 失败 1（重新计）
+        Assert.Null(await transcriber.TranscribeAsync(Clip())); // 失败 1
+        Assert.Equal("恢复", await transcriber.TranscribeAsync(Clip())); // 成功，清零
+        Assert.Null(await transcriber.TranscribeAsync(Clip())); // 失败 1（重新计）
 
         Assert.True(transcriber.IsAvailable);
     }
@@ -122,6 +145,6 @@ public sealed class SpeechTranscriberTests
         var transcriber = Create((_, _, _) =>
             throw new InvalidOperationException("boom"));
 
-        Assert.Null(await transcriber.TranscribeAsync(new AudioClip("a.amr", null)));
+        Assert.Null(await transcriber.TranscribeAsync(Clip()));
     }
 }
