@@ -606,6 +606,19 @@ public sealed class GroupCandidateDto
     public string Display => $"群 · {Name}（{SessionId}）";
 }
 
+/// <summary>系统提示词（与人设分开）。</summary>
+public sealed class SystemPromptDto
+{
+    [JsonPropertyName("text")]
+    public string Text { get; set; } = string.Empty;
+
+    [JsonPropertyName("isDefault")]
+    public bool IsDefault { get; set; }
+
+    [JsonPropertyName("defaultText")]
+    public string DefaultText { get; set; } = string.Empty;
+}
+
 /// <summary>保存类 action 的统一结果（#10 幂等）。</summary>
 public sealed class SaveResultDto
 {

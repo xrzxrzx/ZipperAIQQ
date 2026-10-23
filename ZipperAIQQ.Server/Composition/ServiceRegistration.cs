@@ -121,6 +121,11 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, GetToolCatalogAction>();
         services.AddSingleton<IApiAction, SetToolPolicyAction>();
 
+        // 系统提示词（与人设分开的基础行为规则）
+        services.AddSingleton<IApiAction, GetSystemPromptAction>();
+        services.AddSingleton<IApiAction, SetSystemPromptAction>();
+        services.AddSingleton<IApiAction, ResetSystemPromptAction>();
+
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
 

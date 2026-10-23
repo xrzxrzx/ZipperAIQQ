@@ -278,6 +278,13 @@ public sealed class ChatAgent : IChatAgent
         // 摘要并进这里而不是单独占一条 system —— D4 要求人设 system 恰好两条，
         // 多一条会让人分不清哪个才是"角色设定"。
         var summary = await _summaryStore.GetAsync(SessionId, ct).ConfigureAwait(false);
+
+        // 系统提示词（与人设分开）：客户端可改；没配就用内置默认
+        var configuredPrompt = await _settings.GetAsync(SystemPrompts.StorageKey, ct).ConfigureAwait(false);
+        var systemPrompt = string.IsNullOrWhiteSpace(configuredPrompt)
+            ? SystemPrompts.Default
+            : configuredPrompt.Trim();
+
         var reinject = new StringBuilder(personaText);
         if (summary is not null && !string.IsNullOrWhiteSpace(summary.Summary))
         {
@@ -296,8 +303,9 @@ public sealed class ChatAgent : IChatAgent
             reinject.AppendLine().AppendLine(capabilityNote);
         }
 
-        // 基础运行说明（发消息/表情/记忆）：以前在 persona.md 里，和人设混在一起
-        reinject.AppendLine().AppendLine(RuntimeGuideNote);
+        // 基础行为规则（发消息 / 表情 / 记忆 / 工具 / 主动行为 / 语气）：
+        // 统一由「系统提示词」提供，客户端可改写，默认值见 SystemPrompts.Default
+        reinject.AppendLine().AppendLine(systemPrompt);
 
         // 关系段：光有"主人是 10001"这个号码，模型认不出这个人是谁
         // （实测它只会照着念号码，不会联想到"这是拉链"）—— 所以把**昵称 + 当前身份**都给出来
@@ -307,9 +315,6 @@ public sealed class ChatAgent : IChatAgent
         // 人设守卫（第 20 项）：每次重注入都带，位置紧贴当前消息 ——
         // 长对话里人设会被上下文稀释，靠这一条把它拉回来。
         reinject.AppendLine().AppendLine(PersonaGuardNote);
-
-        // 工具使用指引：明确"该用工具时别猜"（实测模型会跳过工具直接编）
-        reinject.AppendLine().AppendLine(ToolUsageNote);
 
         var messages = new List<ChatMessage>
         {
