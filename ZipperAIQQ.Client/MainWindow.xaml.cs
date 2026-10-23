@@ -180,6 +180,7 @@ public sealed partial class MainWindow : Window
         "access" => typeof(AccessPage),
         "tools" => typeof(ToolsPage),
         "audit" => typeof(AuditPage),
+        "logs" => typeof(LogsPage),
         _ => typeof(StatusPage),
     };
 }

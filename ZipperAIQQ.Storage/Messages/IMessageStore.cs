@@ -85,6 +85,8 @@ public interface IMessageStore
         string sessionId,
         string keyword,
         int limit,
+        DateTimeOffset? from = null,
+        DateTimeOffset? to = null,
         CancellationToken ct = default);
 
     /// <summary>

@@ -606,9 +606,30 @@ public sealed class GroupCandidateDto
     public string Display => $"群 · {Name}（{SessionId}）";
 }
 
-/// <summary>系统提示词（与人设分开）。</summary>
-public sealed class SystemPromptDto
+/// <summary>一条服务端日志（#31）。</summary>
+public sealed class LogLineDto
 {
+    [JsonPropertyName("at")]
+    public long At { get; set; }
+
+    [JsonPropertyName("level")]
+    public string Level { get; set; } = string.Empty;
+
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    [JsonPropertyName("file")]
+    public string File { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    public string TimeText => DateTimeOffset.FromUnixTimeMilliseconds(At).LocalDateTime.ToString("MM-dd HH:mm:ss");
+
+    [JsonIgnore]
+    public string Display => $"[{TimeText} {Level}] {Message}";
+}
+
+/// <summary>系统提示词（与人设分开）。</summary>
+public sealed class SystemPromptDto{
     [JsonPropertyName("text")]
     public string Text { get; set; } = string.Empty;
 

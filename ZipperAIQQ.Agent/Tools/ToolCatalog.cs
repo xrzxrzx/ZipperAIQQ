@@ -38,6 +38,8 @@ public static class ToolCatalog
         Item(ContactTools.ToolName, "查询 NapCat API", null),
         Item(ProfileTools.SetSignatureToolName, "修改个性签名", ToolCapability.WriteProfile),
         Item(ProfileTools.PokeToolName, "戳一戳", ToolCapability.SendPoke),
+        Item(Search.WebSearchTool.SearchToolName, "网页搜索", null),
+        Item(Search.WebSearchTool.FetchToolName, "抓取网页", null),
     ];
 
     private static PolicyItem Item(string key, string label, ToolCapability? capability)

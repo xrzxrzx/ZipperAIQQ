@@ -514,6 +514,20 @@ public partial class MainViewModel : ObservableObject
         StatusLine = $"审计 {Audits.Count} 条";
     });
 
+    [RelayCommand]
+    private async Task RestartServerAsync()
+    {
+        try
+        {
+            await _api.CallAsync<object>("restartServer").ConfigureAwait(true);
+            StatusLine = "已请求重启服务端：约 0.5 秒后停止，由守护脚本重新拉起。";
+        }
+        catch (Exception ex)
+        {
+            StatusLine = $"重启失败：{ex.Message}";
+        }
+    }
+
     /// <summary>读取行为设置（回复模式 + 通知开关）。</summary>
     [RelayCommand]
     private Task LoadBehaviorAsync() => GuardAsync("读取行为设置", async () =>

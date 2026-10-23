@@ -7,6 +7,7 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
+using ZipperAIQQ.Agent.Search;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Apis;
@@ -21,9 +22,12 @@ using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Contacts;
+using ZipperAIQQ.Server.Logs;
 using ZipperAIQQ.Server.Notices;
 using ZipperAIQQ.Server.Orchestration;
+using ZipperAIQQ.Server.Process;
 using ZipperAIQQ.Server.Reply;
+using ZipperAIQQ.Server.Search;
 using ZipperAIQQ.Server.Scheduler;
 using ZipperAIQQ.Storage.Config;
 using ZipperAIQQ.Storage.Settings;
@@ -125,6 +129,23 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, GetSystemPromptAction>();
         services.AddSingleton<IApiAction, SetSystemPromptAction>();
         services.AddSingleton<IApiAction, ResetSystemPromptAction>();
+
+        // #31：服务端日志检索（只读 logs/zipper-*.log）
+        services.AddSingleton<ILogQuery>(sp => new FileLogQuery("logs", sp.GetRequiredService<ILogger>()));
+        services.AddSingleton<IApiAction, QueryLogsAction>();
+
+        // #36：重启（优雅停止 + 外部守护拉起）
+        services.AddSingleton<IServerRestartService, ServerRestartService>();
+        services.AddSingleton<IApiAction, RestartServerAction>();
+
+        // #38：网页搜索（DeepSeek 原生 Search/Fetch；形态待实测，失败即不可用）
+        services.AddHttpClient();
+        services.AddSingleton<IWebSearchProvider>(sp => new DeepSeekWebSearchProvider(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(DeepSeekWebSearchProvider)),
+            sp.GetRequiredService<IConfigStore>(),
+            sp.GetRequiredService<ISecretProtector>(),
+            Environment.GetEnvironmentVariable("ZIPPER_SEARCH_BASEURL"),
+            sp.GetRequiredService<ILogger>()));
 
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
@@ -260,6 +281,7 @@ public static class ServiceRegistration
                 Events = sp.GetRequiredService<IEventBus>(),
                 PermissionGate = sp.GetRequiredService<IPermissionGate>(),
                 Policy = sp.GetRequiredService<IExecutionPolicy>(),
+                WebSearch = sp.GetService<IWebSearchProvider>(),
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
                 FileMaxBytes = options.FileMaxBytes,

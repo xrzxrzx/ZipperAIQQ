@@ -5,6 +5,7 @@ using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
+using ZipperAIQQ.Agent.Search;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
@@ -47,6 +48,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly IEventBus _events;
     private readonly IPermissionGate _permissionGate;
     private readonly IExecutionPolicy _policy;
+    private readonly Search.IWebSearchProvider? _webSearch;
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
@@ -91,6 +93,7 @@ public sealed class ChatAgent : IChatAgent
         _events = deps.Events;
         _permissionGate = deps.PermissionGate;
         _policy = deps.Policy;
+        _webSearch = deps.WebSearch;
         _configs = configs;
         _settings = settings;
         _roles = deps.Roles;
@@ -561,6 +564,11 @@ public sealed class ChatAgent : IChatAgent
 
         // 策略过滤（#28）：关掉的工具不给 schema；角色不够的也不给。
         // 可见性不是唯一防线 —— 每个工具执行前仍会再过一次门禁。
+        if (_webSearch is { IsAvailable: true })
+        {
+            tools.AddRange(WebSearchTool.Create(_webSearch));
+        }
+
         var allowed = new List<AITool>(tools.Count);
         foreach (var tool in tools)
         {
