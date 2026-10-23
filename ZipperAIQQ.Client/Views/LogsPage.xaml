@@ -35,10 +35,53 @@
             <ListView ItemsSource="{x:Bind Vm.Lines}" SelectionMode="None">
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="dto:LogLineDto">
-                        <StackPanel Padding="4,2">
-                            <TextBlock Text="{x:Bind Display}" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
-                            <TextBlock Text="{x:Bind File}" Style="{StaticResource CaptionStyle}" FontSize="10" />
-                        </StackPanel>
+                        <Grid ColumnSpacing="8" Padding="4,3">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="44" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0"
+                                       Text="{x:Bind TimeText}"
+                                       Foreground="#8A7A85"
+                                       FontSize="12"
+                                       VerticalAlignment="Top" />
+
+                            <!-- 等级高亮：错误红 / 警告黄 / 普通青 -->
+                            <TextBlock x:Name="ErrorLevel"
+                                       x:Load="{x:Bind IsError}"
+                                       Grid.Column="1"
+                                       Text="{x:Bind Level}"
+                                       Foreground="#FF6B81"
+                                       FontWeight="SemiBold"
+                                       FontSize="12"
+                                       VerticalAlignment="Top" />
+                            <TextBlock x:Name="WarningLevel"
+                                       x:Load="{x:Bind IsWarning}"
+                                       Grid.Column="1"
+                                       Text="{x:Bind Level}"
+                                       Foreground="#FFC857"
+                                       FontWeight="SemiBold"
+                                       FontSize="12"
+                                       VerticalAlignment="Top" />
+                            <TextBlock x:Name="InfoLevel"
+                                       x:Load="{x:Bind IsInfo}"
+                                       Grid.Column="1"
+                                       Text="{x:Bind Level}"
+                                       Foreground="#7FD3C7"
+                                       FontSize="12"
+                                       VerticalAlignment="Top" />
+
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="{x:Bind Message}"
+                                           TextWrapping="Wrap"
+                                           IsTextSelectionEnabled="True" />
+                                <TextBlock Text="{x:Bind File}"
+                                           Style="{StaticResource CaptionStyle}"
+                                           FontSize="10" />
+                            </StackPanel>
+                        </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>
             </ListView>

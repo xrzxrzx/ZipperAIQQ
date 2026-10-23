@@ -625,6 +625,15 @@ public sealed class LogLineDto
     public string TimeText => DateTimeOffset.FromUnixTimeMilliseconds(At).LocalDateTime.ToString("MM-dd HH:mm:ss");
 
     [JsonIgnore]
+    public bool IsError => Level is "ERR" or "FTL";
+
+    [JsonIgnore]
+    public bool IsWarning => Level == "WRN";
+
+    [JsonIgnore]
+    public bool IsInfo => !IsError && !IsWarning;
+
+    [JsonIgnore]
     public string Display => $"[{TimeText} {Level}] {Message}";
 }
 
