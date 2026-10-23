@@ -86,10 +86,18 @@ public sealed partial class FileLogQuery : ILogQuery
             {
                 ct.ThrowIfCancellationRequested();
 
-                var lines = File.ReadLines(file);
+                // Serilog 正持有该文件（写）；必须用 ReadWrite 共享模式打开，
+                // 默认的 File.ReadLines 会请求独占式共享，直接 IOException（实测 500）。
+                using var stream = new FileStream(
+                    file,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+
                 var buffer = new List<LogLine>();
 
-                foreach (var line in lines)
+                while (reader.ReadLine() is { } line)
                 {
                     var match = LineRegex().Match(line);
                     if (!match.Success)
