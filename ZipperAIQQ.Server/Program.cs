@@ -83,20 +83,31 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     var app = builder.Build();
 
     // 第 17 项：把库里记的主人灌进权限解析器（否则重启后主人身份丢失）
+    // 顺带灌管理员：setAccess 写的管理员在重启后也要生效，否则「配置里有、权限里没有」
     try
     {
         var settingsStore = app.Services.GetRequiredService<ZipperAIQQ.Storage.Settings.IRuntimeSettingsStore>();
         var ownerId = await settingsStore.GetAsync(ZipperAIQQ.Server.Api.Handlers.GetOwnerAction.OwnerKey);
-        if (!string.IsNullOrWhiteSpace(ownerId) &&
-            app.Services.GetRequiredService<ZipperAIQQ.Agent.Security.IRoleResolver>() is ZipperAIQQ.Agent.Security.ConfiguredRoleResolver resolver)
+        var resolver = app.Services.GetRequiredService<ZipperAIQQ.Agent.Security.IRoleResolver>()
+            as ZipperAIQQ.Agent.Security.ConfiguredRoleResolver;
+
+        if (!string.IsNullOrWhiteSpace(ownerId) && resolver is not null)
         {
             resolver.SetOwner(ownerId);
             Log.Logger.Information("主人已加载：{Owner}", ownerId);
         }
+
+        var adminsRaw = await settingsStore.GetAsync(ZipperAIQQ.Server.Api.Handlers.GetAccessAction.AdminsKey);
+        if (!string.IsNullOrWhiteSpace(adminsRaw) && resolver is not null)
+        {
+            var admins = adminsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            resolver.SetAdmins(admins);
+            Log.Logger.Information("管理员已加载：{Count} 人", admins.Length);
+        }
     }
     catch (Exception ex)
     {
-        Log.Logger.Warning(ex, "加载主人失败（不影响启动）");
+        Log.Logger.Warning(ex, "加载主人 / 管理员失败（不影响启动）");
     }
 
     // 强制解析鉴权策略：非 loopback 又没 token → 这里直接抛，拒绝启动（不裸奔）

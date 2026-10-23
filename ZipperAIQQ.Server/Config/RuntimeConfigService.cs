@@ -27,6 +27,11 @@ public sealed class RuntimeConfigService
 {
     private const string ChatRole = "Chat";
 
+    /// <summary>
+    /// 端点名是**固定的几个**（问题记录 #12）：服务端以 name 为键，允许用户随便改等于允许边生成新端点。
+    /// </summary>
+    public static readonly IReadOnlyList<string> AllowedEndpointNames = ["primary", "judge"];
+
     private readonly IConfigStore _store;
     private readonly ISecretProtector _protector;
     private readonly IChatClientProvider _clients;
@@ -108,11 +113,15 @@ public sealed class RuntimeConfigService
                 .ToList(),
             roles = roles.ToDictionary(r => r.Role, r => r.EndpointName, StringComparer.OrdinalIgnoreCase),
             hasClient = _clients.HasClient,
+
+            // #12：端点名只读，界面直接用它建下拉
+            endpointNames = AllowedEndpointNames,
         };
     }
 
     /// <summary>写端点：校验 → 加密 → 落库 → 审计 → 热更新。</summary>
-    public async Task SetEndpointAsync(EndpointInput input, string actor, CancellationToken ct = default)
+    /// <returns>是否真的发生了变更（全等时跳过写库与审计，问题记录 #10）。</returns>
+    public async Task<bool> SetEndpointAsync(EndpointInput input, string actor, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(input);
 
@@ -122,6 +131,14 @@ public sealed class RuntimeConfigService
         }
 
         var name = input.Name.Trim();
+
+        // #12：端点名固定，改个名字不该等于「新建一个端点」
+        if (!AllowedEndpointNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ApiException(
+                ApiResponse.BadRequest,
+                $"端点名是固定的：{string.Join(" / ", AllowedEndpointNames)}。不能新建或改名。");
+        }
 
         // 更新已有端点时，没给的字段沿用库里的值
         var existing = await _store.GetEndpointAsync(name, ct).ConfigureAwait(false);
@@ -181,6 +198,16 @@ public sealed class RuntimeConfigService
             KeyCipher: cipher,
             UpdatedAt: DateTimeOffset.UtcNow);
 
+        // #10：值完全一致 → 不写库、不写审计、不触发重载
+        if (existing is not null &&
+            existing.BaseUrl == setting.BaseUrl &&
+            existing.Model == setting.Model &&
+            existing.ApiKind == setting.ApiKind &&
+            !keyChanged)
+        {
+            return false;
+        }
+
         await _store.UpsertEndpointAsync(setting, ct).ConfigureAwait(false);
         await _store
             .AppendAuditAsync(keyChanged ? "setEndpoint(+key)" : "setEndpoint", actor, name, ct)
@@ -189,10 +216,12 @@ public sealed class RuntimeConfigService
         await _clients.ReloadAsync(ct).ConfigureAwait(false);
 
         _logger.Information("运行配置已更新：端点={Name}（key {KeyState}）", name, keyChanged ? "已更新" : "未变");
+        return true;
     }
 
     /// <summary>改角色映射（<c>chat</c> / <c>judge</c>）→ 触发热更新。</summary>
-    public async Task SetRoleAsync(string role, string endpointName, string actor, CancellationToken ct = default)
+    /// <returns>是否真的发生了变更。</returns>
+    public async Task<bool> SetRoleAsync(string role, string endpointName, string actor, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(role) || string.IsNullOrWhiteSpace(endpointName))
         {
@@ -205,9 +234,18 @@ public sealed class RuntimeConfigService
             throw new ApiException(ApiResponse.BadRequest, $"端点不存在：{endpointName}");
         }
 
+        var roles = await _store.ListRolesAsync(ct).ConfigureAwait(false);
+        var current = roles.FirstOrDefault(r => string.Equals(r.Role, role, StringComparison.OrdinalIgnoreCase));
+        if (current is not null &&
+            string.Equals(current.EndpointName, endpointName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;   // #10：映射没变
+        }
+
         await _store.SetRoleAsync(role, endpointName, ct).ConfigureAwait(false);
         await _store.AppendAuditAsync("setRole", actor, $"{role}->{endpointName}", ct).ConfigureAwait(false);
         await _clients.ReloadAsync(ct).ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>掩码：<c>sk-****a1b2</c>。key 少于 8 位时整体打码。</summary>

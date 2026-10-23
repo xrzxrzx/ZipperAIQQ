@@ -100,6 +100,17 @@ public sealed class GetAccessAction : IApiAction
             friends = [];
         }
 
+        // 名单条目的候选需要群会话（#26）：好友填不了 qq:g…
+        IReadOnlyList<GroupInfo> groups;
+        try
+        {
+            groups = await _contacts.GetGroupsAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            groups = [];
+        }
+
         return new
         {
             ownerId,
@@ -120,6 +131,15 @@ public sealed class GetAccessAction : IApiAction
                 {
                     userId = f.UserId,
                     nickname = string.IsNullOrWhiteSpace(f.Remark) ? f.Nickname : $"{f.Nickname}（{f.Remark}）",
+                })
+                .ToList(),
+
+            groupCandidates = groups
+                .Select(g => new
+                {
+                    groupId = g.GroupId,
+                    name = g.Name,
+                    sessionId = $"qq:g{g.GroupId}",
                 })
                 .ToList(),
         };
@@ -283,38 +303,65 @@ public sealed class SetAccessAction : IApiAction
             }
             else
             {
-                await _settings.SetAsync(GetAccessAction.AdminsKey, string.Join(',', admins), ct)
-                    .ConfigureAwait(false);
+                // #10：与库里当前管理员一致 → 不写、不审计（但不要提前返回：名单可能还在后面要写）
+                var storedAdmins = GetAccessAction.SplitList(
+                    await _settings.GetAsync(GetAccessAction.AdminsKey, ct).ConfigureAwait(false));
 
-                if (_roles is ConfiguredRoleResolver resolver)
+                var currentAdmins = storedAdmins.Count > 0
+                    ? storedAdmins
+                    : ((_roles as ConfiguredRoleResolver)?.Admins ?? []).ToList();
+
+                if (!SameSet(admins, currentAdmins))
                 {
-                    resolver.SetAdmins(admins);
-                }
+                    await _settings.SetAsync(GetAccessAction.AdminsKey, string.Join(',', admins), ct)
+                        .ConfigureAwait(false);
 
-                changed.Add($"admins={admins.Count}");
+                    if (_roles is ConfiguredRoleResolver resolver)
+                    {
+                        resolver.SetAdmins(admins);
+                    }
+
+                    changed.Add($"admins={admins.Count}");
+                }
             }
         }
 
         // ── ④ 写名单 + 立即生效 ──
         if (whitelistInput is not null || blacklistInput is not null)
         {
-            await _settings.SetAsync(GetAccessAction.WhitelistKey, string.Join(',', nextWhitelist), ct)
-                .ConfigureAwait(false);
-            await _settings.SetAsync(GetAccessAction.BlacklistKey, string.Join(',', nextBlacklist), ct)
-                .ConfigureAwait(false);
+            // #10：运行中的名单与提交值一致 → 跳过（列表没变就不该每次写审计）
+            var listsUnchanged =
+                SameSet(nextWhitelist, _filter.Whitelist) &&
+                SameSet(nextBlacklist, _filter.Blacklist);
 
-            // 清掉旧键：否则下次读取会拿旧值做「惰性迁移」，看起来像名单自己变回来了
-            await _settings.SetAsync(GetAccessAction.LegacyModeKey, string.Empty, ct).ConfigureAwait(false);
-            await _settings.SetAsync(GetAccessAction.LegacyEntriesKey, string.Empty, ct).ConfigureAwait(false);
-
-            _filter.Update(new ChatFilterOptions
+            if (listsUnchanged)
             {
-                Whitelist = nextWhitelist,
-                Blacklist = nextBlacklist,
-                AlwaysAllow = _filter.AlwaysAllow.ToList(),
-            });
+                // 名单没变：跳过写库与审计，但仍要回落「有没有别的字段变更」
+                if (changed.Count == 0)
+                {
+                    return new { updated = 0, skipped = true, changed };
+                }
+            }
+            else
+            {
+                await _settings.SetAsync(GetAccessAction.WhitelistKey, string.Join(',', nextWhitelist), ct)
+                    .ConfigureAwait(false);
+                await _settings.SetAsync(GetAccessAction.BlacklistKey, string.Join(',', nextBlacklist), ct)
+                    .ConfigureAwait(false);
 
-            changed.Add($"whitelist={nextWhitelist.Count}/blacklist={nextBlacklist.Count}");
+                // 清掉旧键：否则下次读取会拿旧值做「惰性迁移」，看起来像名单自己变回来了
+                await _settings.SetAsync(GetAccessAction.LegacyModeKey, string.Empty, ct).ConfigureAwait(false);
+                await _settings.SetAsync(GetAccessAction.LegacyEntriesKey, string.Empty, ct).ConfigureAwait(false);
+
+                _filter.Update(new ChatFilterOptions
+                {
+                    Whitelist = nextWhitelist,
+                    Blacklist = nextBlacklist,
+                    AlwaysAllow = _filter.AlwaysAllow.ToList(),
+                });
+
+                changed.Add($"whitelist={nextWhitelist.Count}/blacklist={nextBlacklist.Count}");
+            }
         }
 
         if (changed.Count == 0)
@@ -327,8 +374,13 @@ public sealed class SetAccessAction : IApiAction
             .AppendAuditAsync("setAccess", "http-client", string.Join(",", changed), ct)
             .ConfigureAwait(false);
 
-        return new { updated = changed.Count, changed };
+        return new { updated = changed.Count, changed, skipped = false };
     }
+
+    /// <summary>两个集合是否等价（忽略顺序与大小写）。</summary>
+    private static bool SameSet(IEnumerable<string> a, IEnumerable<string> b) =>
+        new HashSet<string>(a, StringComparer.OrdinalIgnoreCase)
+            .SetEquals(b);
 
     /// <summary>条目是否是某账号的私聊会话（<c>qq:p123</c>）。</summary>
     private static bool IsPrivateSessionOf(string entry, string userId) =>

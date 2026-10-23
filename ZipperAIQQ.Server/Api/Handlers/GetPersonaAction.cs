@@ -28,6 +28,9 @@ public sealed class GetPersonaAction : IApiAction
         var (platform, chatType, chatId, sessionId) = PersonaHandlerHelper.ParseSession(payload);
 
         var persona = await _personas.GetAsync(platform, chatType, chatId, ct).ConfigureAwait(false);
+        var state = sessionId == "global"
+            ? new PersonaState(null, true)
+            : await _personas.GetStateAsync(sessionId, ct).ConfigureAwait(false);
 
         return new
         {
@@ -37,6 +40,10 @@ public sealed class GetPersonaAction : IApiAction
             personality = persona.Personality,
             content = persona.Content,
             split = persona.Image is not null || persona.Personality is not null,
+
+            // #16：会话级预设的启用状态；全局永远是「没有覆盖」
+            enabled = state.Enabled,
+            hasOverride = state.Override is not null,
         };
     }
 }

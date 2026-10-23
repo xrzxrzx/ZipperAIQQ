@@ -149,6 +149,10 @@ public sealed class ConfigDto
     [JsonPropertyName("hasClient")]
     public bool HasClient { get; set; }
 
+    /// <summary>固定端点名（#12：界面只读展示 + 下拉）。</summary>
+    [JsonPropertyName("endpointNames")]
+    public List<string> EndpointNames { get; set; } = [];
+
     public string Summary
     {
         get
@@ -465,6 +469,20 @@ public sealed class PersonaDto
 
     [JsonPropertyName("split")]
     public bool Split { get; set; }
+
+    /// <summary>会话级预设是否启用（#16）。</summary>
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>该会话是否有自己的预设（没有时开关禁用）。</summary>
+    [JsonPropertyName("hasOverride")]
+    public bool HasOverride { get; set; }
+
+    [JsonPropertyName("updated")]
+    public int Updated { get; set; }
+
+    [JsonPropertyName("skipped")]
+    public bool Skipped { get; set; }
 }
 
 /// <summary>人员与名单（<c>getAccess</c>）。</summary>
@@ -481,6 +499,20 @@ public sealed class AccessDto
 
     [JsonPropertyName("filterEntries")]
     public List<string> FilterEntries { get; set; } = [];
+
+    /// <summary>黑白双名单（#20）。</summary>
+    [JsonPropertyName("whitelist")]
+    public List<string> Whitelist { get; set; } = [];
+
+    [JsonPropertyName("blacklist")]
+    public List<string> Blacklist { get; set; } = [];
+
+    /// <summary>主人放行范围（私聊 + 主人所在的群）。</summary>
+    [JsonPropertyName("alwaysAllow")]
+    public List<string> AlwaysAllow { get; set; } = [];
+
+    [JsonPropertyName("groupCandidates")]
+    public List<GroupCandidateDto> GroupCandidates { get; set; } = [];
 
     [JsonPropertyName("filterCount")]
     public int FilterCount { get; set; }
@@ -500,4 +532,33 @@ public sealed class AccessCandidateDto
     /// <summary>下拉框显示用。</summary>
     [JsonIgnore]
     public string Display => $"{Nickname}（{UserId}）";
+}
+
+/// <summary>群候选（名单条目用）。</summary>
+public sealed class GroupCandidateDto
+{
+    [JsonPropertyName("groupId")]
+    public string GroupId { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("sessionId")]
+    public string SessionId { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    public string Display => $"群 · {Name}（{SessionId}）";
+}
+
+/// <summary>保存类 action 的统一结果（#10 幂等）。</summary>
+public sealed class SaveResultDto
+{
+    [JsonPropertyName("updated")]
+    public int Updated { get; set; }
+
+    [JsonPropertyName("skipped")]
+    public bool Skipped { get; set; }
+
+    [JsonPropertyName("changed")]
+    public List<string> Changed { get; set; } = [];
 }

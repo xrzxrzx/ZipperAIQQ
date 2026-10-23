@@ -110,7 +110,7 @@ public sealed class MetricsStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Old_database_is_migrated_to_v11()
+    public async Task Old_database_is_migrated_to_current_version()
     {
         // 造一个 v10 的库：CallMetrics 没有 CachedInputTokens
         var path = Path.Combine(Path.GetTempPath(), $"zipper-v10-{Guid.NewGuid():N}.db");
@@ -154,7 +154,7 @@ public sealed class MetricsStoreTests : IAsyncLifetime
             await using (var cmd = check.CreateCommand())
             {
                 cmd.CommandText = "SELECT Version FROM SchemaVersion LIMIT 1;";
-                Assert.Equal(11L, Convert.ToInt64(await cmd.ExecuteScalarAsync()));
+                Assert.Equal((long)DatabaseInitializer.CurrentSchemaVersion, Convert.ToInt64(await cmd.ExecuteScalarAsync()));
             }
 
             await using (var cmd = check.CreateCommand())

@@ -38,6 +38,7 @@ public sealed class SetConfigAction : IApiAction
         }
 
         var didSomething = false;
+        var updated = 0;
 
         if (payload.TryGetProperty("endpoint", out var endpoint) && endpoint.ValueKind == JsonValueKind.Object)
         {
@@ -48,7 +49,11 @@ public sealed class SetConfigAction : IApiAction
                 ApiKind: PayloadReader.GetString(endpoint, "apiKind"),
                 Key: PayloadReader.GetString(endpoint, "key"));
 
-            await _config.SetEndpointAsync(input, Actor, ct).ConfigureAwait(false);
+            if (await _config.SetEndpointAsync(input, Actor, ct).ConfigureAwait(false))
+            {
+                updated++;
+            }
+
             didSomething = true;
         }
 
@@ -61,7 +66,11 @@ public sealed class SetConfigAction : IApiAction
                     throw new ApiException(ApiResponse.BadRequest, $"roles.{role.Name} 必须是字符串。");
                 }
 
-                await _config.SetRoleAsync(role.Name, role.Value.GetString()!, Actor, ct).ConfigureAwait(false);
+                if (await _config.SetRoleAsync(role.Name, role.Value.GetString()!, Actor, ct).ConfigureAwait(false))
+                {
+                    updated++;
+                }
+
                 didSomething = true;
             }
         }
@@ -71,7 +80,7 @@ public sealed class SetConfigAction : IApiAction
             throw new ApiException(ApiResponse.BadRequest, "payload 里至少要给 endpoint 或 roles 之一。");
         }
 
-        // 回最新视图（掩码），客户端不用再调一次 getConfig
-        return await _config.GetViewAsync(ct).ConfigureAwait(false);
+        // #10：没变化时告诉客户端「跳过」，别把它显示成"已保存"
+        return new { updated, skipped = updated == 0 };
     }
 }

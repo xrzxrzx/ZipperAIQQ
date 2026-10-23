@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 11;
+    public const int CurrentSchemaVersion = 12;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -87,6 +87,18 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn,
             "CREATE INDEX IF NOT EXISTS IX_CallMetrics_Session_Time ON CallMetrics (SessionId, CreatedAtMs);",
             ct).ConfigureAwait(false);
+
+        // ── v12：会话人设「是否启用」（问题记录 #16）──
+        // 旧数据默认启用：升级后行为不变。
+        try
+        {
+            await ExecuteAsync(conn, "ALTER TABLE SessionPersonas ADD COLUMN Enabled INTEGER NOT NULL DEFAULT 1;", ct).ConfigureAwait(false);
+            _logger.Information("已应用迁移：SessionPersonas.Enabled");
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        {
+            // 已迁移过
+        }
 
         // 版本记录必须**与真实 schema 一致**：这里每次都核对，而不是"只写一次"。
         //
@@ -257,6 +269,7 @@ public sealed class DatabaseInitializer
             SessionId   TEXT NOT NULL PRIMARY KEY,
             Name        TEXT NOT NULL,
             Content     TEXT NOT NULL,
+            Enabled     INTEGER NOT NULL DEFAULT 1,
             UpdatedAtMs INTEGER NOT NULL
         );
         """;

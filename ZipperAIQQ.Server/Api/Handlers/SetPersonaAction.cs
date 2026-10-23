@@ -51,9 +51,41 @@ public sealed class SetPersonaAction : IApiAction
             image,
             personality);
 
+        // #16：enabled 可单独提交（只切开关时不必重传正文）
+        var state = await _personas.GetStateAsync(sessionId, ct).ConfigureAwait(false);
+        var enabled = payload.TryGetProperty("enabled", out var enabledElement) &&
+                      enabledElement.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? enabledElement.GetBoolean()
+            : state.Enabled;
+
+        // #10：内容与开关都没变 → 不写库、不写审计
+        var unchanged = state.Override is not null &&
+                        state.Override.Content == persona.Content &&
+                        state.Override.Name == persona.Name &&
+                        state.Enabled == enabled;
+
+        if (unchanged)
+        {
+            return new
+            {
+                sessionId,
+                name = persona.Name,
+                image = persona.Image,
+                personality = persona.Personality,
+                content = persona.Content,
+                split = true,
+                enabled,
+                hasOverride = true,
+                updated = 0,
+                skipped = true,
+            };
+        }
+
         await _personas.SetAsync(sessionId, persona, ct).ConfigureAwait(false);
+        await _personas.SetEnabledAsync(sessionId, enabled, ct).ConfigureAwait(false);
+
         await _configs
-            .AppendAuditAsync("setPersona", Actor, $"{sessionId}（形象 {image?.Length ?? 0} 字 / 性格 {personality?.Length ?? 0} 字）", ct)
+            .AppendAuditAsync("setPersona", Actor, $"{sessionId}（形象 {image?.Length ?? 0} 字 / 性格 {personality?.Length ?? 0} 字 / 启用 {enabled}）", ct)
             .ConfigureAwait(false);
 
         return new
@@ -64,6 +96,10 @@ public sealed class SetPersonaAction : IApiAction
             personality = persona.Personality,
             content = persona.Content,
             split = true,
+            enabled,
+            hasOverride = true,
+            updated = 1,
+            skipped = false,
         };
     }
 }

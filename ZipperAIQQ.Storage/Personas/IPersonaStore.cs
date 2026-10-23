@@ -86,6 +86,13 @@ public sealed record Persona(string Name, string Content)
 }
 
 /// <summary>
+/// 会话级人设的状态（问题记录 #16）。
+/// </summary>
+/// <param name="Override">会话级人设；没有覆盖时为 <c>null</c>。</param>
+/// <param name="Enabled">是否启用这份覆盖（关闭时回落全局）。</param>
+public sealed record PersonaState(Persona? Override, bool Enabled);
+
+/// <summary>
 /// 人设存储：**全局默认 + 每会话覆盖**。
 /// </summary>
 /// <remarks>
@@ -107,4 +114,13 @@ public interface IPersonaStore
 
     /// <summary>清除会话级人设，回落到全局。</summary>
     Task ClearAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>会话级人设的覆盖与启用状态。</summary>
+    Task<PersonaState> GetStateAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>是否启用会话级预设（无覆盖时返回 <c>true</c>，由"没有覆盖自然回落全局"保证行为）。</summary>
+    Task<bool> IsEnabledAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>开关会话级预设；没有覆盖记录时不做任何事。</summary>
+    Task SetEnabledAsync(string sessionId, bool enabled, CancellationToken ct = default);
 }

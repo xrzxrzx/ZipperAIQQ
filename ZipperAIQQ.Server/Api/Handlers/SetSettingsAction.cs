@@ -60,16 +60,41 @@ public sealed class SetSettingsAction : IApiAction
             pending.Add((item.Name, value));
         }
 
+        // #10：与库里一致的值不写、不审计
+        var changed = new List<(string Key, double Value)>();
         foreach (var (key, value) in pending)
+        {
+            var raw = await _settings.GetAsync(key, ct).ConfigureAwait(false);
+            var same = double.TryParse(
+                raw,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var stored) && Math.Abs(stored - value) < 1e-9;
+
+            if (!same)
+            {
+                changed.Add((key, value));
+            }
+        }
+
+        foreach (var (key, value) in changed)
         {
             await _settings.SetAsync(key, value.ToString(System.Globalization.CultureInfo.InvariantCulture), ct)
                 .ConfigureAwait(false);
         }
 
-        await _configs
-            .AppendAuditAsync("setSettings", Actor, string.Join(",", pending.Select(p => p.Key)), ct)
-            .ConfigureAwait(false);
+        if (changed.Count > 0)
+        {
+            await _configs
+                .AppendAuditAsync("setSettings", Actor, string.Join(",", changed.Select(p => p.Key)), ct)
+                .ConfigureAwait(false);
+        }
 
-        return new { updated = pending.Count, keys = pending.Select(p => p.Key).ToList() };
+        return new
+        {
+            updated = changed.Count,
+            skipped = changed.Count == 0,
+            keys = changed.Select(p => p.Key).ToList(),
+        };
     }
 }

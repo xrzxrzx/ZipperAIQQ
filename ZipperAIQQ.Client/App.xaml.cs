@@ -21,6 +21,9 @@ public partial class App : Application
         services.AddSingleton<ServerApiClient>();
         services.AddSingleton<StatsViewModel>();
         services.AddSingleton<SessionsViewModel>();
+        services.AddSingleton<EndpointsViewModel>();
+        services.AddSingleton<PersonaViewModel>();
+        services.AddSingleton<AccessViewModel>();
         services.AddSingleton<MainViewModel>();
 
         Services = services.BuildServiceProvider();

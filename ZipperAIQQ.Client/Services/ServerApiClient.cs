@@ -63,11 +63,23 @@ public sealed class ServerApiClient
 
         if (result.Code != 0)
         {
-            throw new InvalidOperationException($"服务端返回 {result.Code}：{result.Message}");
+            throw new ApiCallException(result.Code, result.Message);
         }
 
         return result.Data;
     }
 
     private static string Truncate(string text) => text.Length <= 200 ? text : text[..200] + "…";
+}
+
+/// <summary>服务端返回了非 0 code（参数错、冲突等），保留 code 供调用方分支处理。</summary>
+public sealed class ApiCallException : InvalidOperationException
+{
+    public ApiCallException(int code, string message)
+        : base($"服务端返回 {code}：{message}")
+    {
+        Code = code;
+    }
+
+    public int Code { get; }
 }
