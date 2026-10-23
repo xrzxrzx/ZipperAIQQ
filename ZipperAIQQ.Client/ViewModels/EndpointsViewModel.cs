@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ZipperAIQQ.Client.Dto;
@@ -7,11 +6,11 @@ using ZipperAIQQ.Client.Services;
 namespace ZipperAIQQ.Client.ViewModels;
 
 /// <summary>
-/// 端点与参数页：模型端点 / 运行参数 / 行为设置 / JEV 判断模型。
+/// 模型配置页：**普通 LLM（primary）与 JEV（judge）两个固定块**。
 /// </summary>
 /// <remarks>
-/// 2026-10-23 从 <see cref="MainViewModel"/> 拆出（#8 #9 #11 #12 #13 #18 #27）：
-/// 只服务于这一页，状态自己管，保存结果就地显示。
+/// 2026-10-23 按用户反馈重构：之前用「端点下拉 + 单独 JEV 卡」表达同一件事，
+/// 既重复又容易误解。端点名本来就是固定的两个，直接做成两块。
 /// </remarks>
 public sealed partial class EndpointsViewModel : ObservableObject
 {
@@ -23,78 +22,21 @@ public sealed partial class EndpointsViewModel : ObservableObject
         _api = api;
     }
 
-    public ObservableCollection<string> EndpointNames { get; } = [];
-
-    public ObservableCollection<SettingItem> Settings { get; } = [];
-
-    public ObservableCollection<string> ReplyModes { get; } = [];
-
-    public ObservableCollection<NoticeToggleItem> NoticeToggles { get; } = [];
-
-    /// <summary>常用通知（#34：单独一组）。</summary>
-    public ObservableCollection<NoticeToggleItem> CommonNotices { get; } = [];
-
-    /// <summary>其他通知。</summary>
-    public ObservableCollection<NoticeToggleItem> OtherNotices { get; } = [];
+    // ── 普通 LLM（primary）──
 
     [ObservableProperty]
-    public partial string NoticeSearch { get; set; } = string.Empty;
-
-    private readonly List<NoticeToggleItem> _allNotices = [];
-
-    partial void OnNoticeSearchChanged(string value) => ApplyNoticeFilter();
-
-    private void ApplyNoticeFilter()
-    {
-        var keyword = NoticeSearch.Trim();
-
-        bool Match(NoticeToggleItem item) =>
-            string.IsNullOrEmpty(keyword) ||
-            item.Label.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
-            item.Type.Contains(keyword, StringComparison.OrdinalIgnoreCase);
-
-        CommonNotices.Clear();
-        OtherNotices.Clear();
-
-        foreach (var item in _allNotices.Where(Match))
-        {
-            if (item.Group == "common")
-            {
-                CommonNotices.Add(item);
-            }
-            else
-            {
-                OtherNotices.Add(item);
-            }
-        }
-    }
+    public partial string LlmBaseUrl { get; set; } = string.Empty;
 
     [ObservableProperty]
-    public partial string SelectedEndpointName { get; set; } = "primary";
+    public partial string LlmModel { get; set; } = string.Empty;
 
     [ObservableProperty]
-    public partial string EndpointBaseUrl { get; set; } = string.Empty;
+    public partial string LlmKey { get; set; } = string.Empty;
 
     [ObservableProperty]
-    public partial string EndpointModel { get; set; } = string.Empty;
+    public partial string LlmStatus { get; set; } = string.Empty;
 
-    [ObservableProperty]
-    public partial string EndpointKey { get; set; } = string.Empty;
-
-    /// <summary>端点名是固定的（#12）：界面只读展示。</summary>
-    public string EndpointNameReadOnly => SelectedEndpointName;
-
-    [ObservableProperty]
-    public partial string EndpointStatus { get; set; } = string.Empty;
-
-    [ObservableProperty]
-    public partial string SettingsStatus { get; set; } = string.Empty;
-
-    [ObservableProperty]
-    public partial string BehaviorStatus { get; set; } = string.Empty;
-
-    [ObservableProperty]
-    public partial string ReplyMode { get; set; } = "every";
+    // ── JEV（judge）──
 
     [ObservableProperty]
     public partial string JudgeBaseUrl { get; set; } = string.Empty;
@@ -111,64 +53,39 @@ public sealed partial class EndpointsViewModel : ObservableObject
     [ObservableProperty]
     public partial string JudgeStatus { get; set; } = string.Empty;
 
-    private ConfigDto? _config;
-
-    partial void OnSelectedEndpointNameChanged(string value)
-    {
-        EndpointNameReadOnlyOnChange();
-        ApplyEndpoint(value);
-    }
-
-    private void EndpointNameReadOnlyOnChange() => OnPropertyChanged(nameof(EndpointNameReadOnly));
-
     [RelayCommand]
     private async Task LoadAsync()
     {
         try
         {
-            _config = await _api.CallAsync<ConfigDto>("getConfig").ConfigureAwait(true);
+            var config = await _api.CallAsync<ConfigDto>("getConfig").ConfigureAwait(true);
 
-            EndpointNames.Clear();
-            var names = _config?.EndpointNames is { Count: > 0 }
-                ? _config.EndpointNames
-                : ["primary", "judge"];
+            var primary = config?.Endpoints.FirstOrDefault(e =>
+                string.Equals(e.Name, "primary", StringComparison.OrdinalIgnoreCase));
+            LlmBaseUrl = primary?.BaseUrl ?? string.Empty;
+            LlmModel = primary?.Model ?? string.Empty;
+            LlmKey = string.Empty;
 
-            foreach (var name in names)
-            {
-                EndpointNames.Add(name);
-            }
+            var judge = config?.Endpoints.FirstOrDefault(e =>
+                string.Equals(e.Name, "judge", StringComparison.OrdinalIgnoreCase));
+            JudgeBaseUrl = judge?.BaseUrl ?? string.Empty;
+            JudgeModel = judge?.Model ?? string.Empty;
+            JudgeKey = string.Empty;
 
-            // #11：按角色映射选默认端点，不再取 Endpoints[0]（那恒为字母序最前的 judge）
-            var chat = _config?.Roles.TryGetValue("Chat", out var chatName) == true ? chatName : "primary";
-            SelectedEndpointName = EndpointNames.Contains(chat) ? chat : EndpointNames.FirstOrDefault() ?? "primary";
+            var settings = await _api.CallAsync<List<SettingDto>>("getSettings").ConfigureAwait(true) ?? [];
+            JudgeThreshold = settings.FirstOrDefault(s => s.Key == "judge.threshold")?.Value ?? 0.55;
 
-            ApplyEndpoint(SelectedEndpointName);
-            ApplyJudge();
-
-            await LoadSettingsAsync().ConfigureAwait(true);
-            await LoadBehaviorAsync().ConfigureAwait(true);
-
-            EndpointStatus = "已加载";
+            LlmStatus = "已加载";
+            JudgeStatus = "已加载";
         }
         catch (Exception ex)
         {
-            EndpointStatus = $"加载失败：{ex.Message}";
+            LlmStatus = $"加载失败：{ex.Message}";
         }
     }
 
-    private void ApplyEndpoint(string name)
-    {
-        var endpoint = _config?.Endpoints.FirstOrDefault(e =>
-            string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase));
-
-        EndpointBaseUrl = endpoint?.BaseUrl ?? string.Empty;
-        EndpointModel = endpoint?.Model ?? string.Empty;
-        EndpointKey = string.Empty;
-        EndpointStatus = string.Empty;
-    }
-
     [RelayCommand]
-    private async Task SaveEndpointAsync()
+    private async Task SaveLlmAsync()
     {
         try
         {
@@ -176,134 +93,20 @@ public sealed partial class EndpointsViewModel : ObservableObject
             {
                 endpoint = new
                 {
-                    name = SelectedEndpointName,
-                    baseUrl = EndpointBaseUrl.Trim(),
-                    model = EndpointModel.Trim(),
-                    key = string.IsNullOrWhiteSpace(EndpointKey) ? null : EndpointKey,
+                    name = "primary",
+                    baseUrl = LlmBaseUrl.Trim(),
+                    model = LlmModel.Trim(),
+                    key = string.IsNullOrWhiteSpace(LlmKey) ? null : LlmKey,
                 },
             }).ConfigureAwait(true);
 
-            EndpointStatus = result?.Skipped == true ? "无变化" : "端点已保存";
-            EndpointKey = string.Empty;
-            _config = await _api.CallAsync<ConfigDto>("getConfig").ConfigureAwait(true);
+            LlmStatus = result?.Skipped == true ? "无变化" : "普通 LLM 已保存";
+            LlmKey = string.Empty;
         }
         catch (Exception ex)
         {
-            EndpointStatus = $"保存失败：{ex.Message}";
+            LlmStatus = $"保存失败：{ex.Message}";
         }
-    }
-
-    private async Task LoadSettingsAsync()
-    {
-        var items = await _api.CallAsync<List<SettingDto>>("getSettings").ConfigureAwait(true) ?? [];
-
-        Settings.Clear();
-        foreach (var item in items)
-        {
-            Settings.Add(new SettingItem
-            {
-                Key = item.Key,
-                Label = item.Label,
-                Min = item.Min,
-                Max = item.Max,
-                Unit = item.Unit,
-                Stored = item.Stored,
-                Value = item.Value,
-            });
-        }
-
-        JudgeThreshold = Settings.FirstOrDefault(s => s.Key == "judge.threshold")?.Value ?? 0.55;
-    }
-
-    [RelayCommand]
-    private async Task SaveSettingsAsync()
-    {
-        try
-        {
-            var outOfRange = Settings.FirstOrDefault(s => s.IsOutOfRange);
-            if (outOfRange is not null)
-            {
-                SettingsStatus = $"「{outOfRange.Label}」超出范围（{outOfRange.Hint}）";
-                return;
-            }
-
-            var payload = Settings.ToDictionary(s => s.Key, s => s.Value);
-            var result = await _api.CallAsync<SaveResultDto>("setSettings", new { settings = payload })
-                .ConfigureAwait(true);
-
-            SettingsStatus = result?.Skipped == true ? "无变化" : $"已保存 {result?.Updated ?? 0} 项";
-            await LoadSettingsAsync().ConfigureAwait(true);
-        }
-        catch (Exception ex)
-        {
-            SettingsStatus = $"保存失败：{ex.Message}";
-        }
-    }
-
-    private async Task LoadBehaviorAsync()
-    {
-        var data = await _api.CallAsync<BehaviorDto>("getBehavior").ConfigureAwait(true);
-        if (data is null)
-        {
-            return;
-        }
-
-        ReplyModes.Clear();
-        foreach (var mode in data.ReplyModes)
-        {
-            ReplyModes.Add(mode);
-        }
-
-        ReplyMode = data.ReplyMode;
-
-        NoticeToggles.Clear();
-        _allNotices.Clear();
-        foreach (var item in data.Notices)
-        {
-            var toggle = new NoticeToggleItem
-            {
-                Type = item.Type,
-                Label = item.Label,
-                Group = item.Group,
-                Enabled = item.Enabled,
-            };
-
-            _allNotices.Add(toggle);
-            NoticeToggles.Add(toggle);
-        }
-
-        ApplyNoticeFilter();
-    }
-
-    [RelayCommand]
-    private async Task SaveBehaviorAsync()
-    {
-        try
-        {
-            // 用 _allNotices（不受搜索过滤影响）：否则搜索状态下保存会把看不见的开关写成默认值
-            var notice = _allNotices.ToDictionary(n => n.Type, n => n.Enabled);
-            var result = await _api.CallAsync<SaveResultDto>("setBehavior", new
-            {
-                replyMode = ReplyMode,
-                notice,
-            }).ConfigureAwait(true);
-
-            BehaviorStatus = result?.Skipped == true ? "无变化" : "行为设置已保存";
-        }
-        catch (Exception ex)
-        {
-            BehaviorStatus = $"保存失败：{ex.Message}";
-        }
-    }
-
-    private void ApplyJudge()
-    {
-        var judge = _config?.Endpoints.FirstOrDefault(e =>
-            string.Equals(e.Name, "judge", StringComparison.OrdinalIgnoreCase));
-
-        JudgeBaseUrl = judge?.BaseUrl ?? string.Empty;
-        JudgeModel = judge?.Model ?? string.Empty;
-        JudgeKey = string.Empty;
     }
 
     [RelayCommand]
@@ -324,7 +127,6 @@ public sealed partial class EndpointsViewModel : ObservableObject
 
             JudgeStatus = result?.Skipped == true ? "无变化" : "JEV 端点已保存";
             JudgeKey = string.Empty;
-            _config = await _api.CallAsync<ConfigDto>("getConfig").ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -343,7 +145,6 @@ public sealed partial class EndpointsViewModel : ObservableObject
             }).ConfigureAwait(true);
 
             JudgeStatus = result?.Skipped == true ? "无变化" : $"判断灵敏度已保存（{JudgeThreshold:F2}）";
-            await LoadSettingsAsync().ConfigureAwait(true);
         }
         catch (Exception ex)
         {

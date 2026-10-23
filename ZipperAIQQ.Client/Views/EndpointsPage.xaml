@@ -2,158 +2,53 @@
     x:Class="ZipperAIQQ.Client.Views.EndpointsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:controls="using:ZipperAIQQ.Client.Controls"
-    xmlns:vm="using:ZipperAIQQ.Client.ViewModels"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="mc">
 
     <ScrollViewer Padding="32">
         <StackPanel Spacing="16" MaxWidth="1200" HorizontalAlignment="Left">
 
-            <TextBlock Text="端点与参数" Style="{StaticResource PageTitleStyle}" />
-            <TextBlock Text="模型端点 / 运行参数 / 行为设置 / JEV 判断模型；保存没变化会提示「无变化」"
+            <TextBlock Text="模型配置" Style="{StaticResource PageTitleStyle}" />
+            <TextBlock Text="两个固定端点：普通 LLM（primary）与判断模型 JEV（judge）；端点名不可改"
                        Style="{StaticResource CaptionStyle}" Margin="0,-8,0,4" />
 
-            <!-- 端点（#11 #12） -->
+            <!-- 普通 LLM -->
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="10">
-                    <TextBlock Text="模型端点" Style="{StaticResource SectionHeaderStyle}" />
-
-                    <ComboBox Header="端点"
-                              MinWidth="240"
-                              ItemsSource="{x:Bind Vm.EndpointNames}"
-                              SelectedItem="{x:Bind Vm.SelectedEndpointName, Mode=TwoWay}" />
-
-                    <TextBlock Text="端点名是固定的，不能改名（改名等于新建端点）"
+                    <TextBlock Text="普通 LLM（primary）" Style="{StaticResource SectionHeaderStyle}" />
+                    <TextBlock Text="负责正常对话与工具调用"
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
-                    <TextBox Header="BaseUrl" Text="{x:Bind Vm.EndpointBaseUrl, Mode=TwoWay}" />
-                    <TextBox Header="模型" Text="{x:Bind Vm.EndpointModel, Mode=TwoWay}" />
-                    <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="EndpointKey_PasswordChanged" />
+                    <TextBox Header="BaseUrl" Text="{x:Bind Vm.LlmBaseUrl, Mode=TwoWay}" />
+                    <TextBox Header="模型" Text="{x:Bind Vm.LlmModel, Mode=TwoWay}" />
+                    <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="LlmKey_PasswordChanged" />
 
                     <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Button Content="保存端点" Style="{StaticResource JpAccentButtonStyle}"
-                                Command="{x:Bind Vm.SaveEndpointCommand}" />
-                        <TextBlock Text="{x:Bind Vm.EndpointStatus, Mode=OneWay}"
+                        <Button Content="保存普通 LLM" Style="{StaticResource JpAccentButtonStyle}"
+                                Command="{x:Bind Vm.SaveLlmCommand}" />
+                        <TextBlock Text="{x:Bind Vm.LlmStatus, Mode=OneWay}"
                                    Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
                     </StackPanel>
                 </StackPanel>
             </Border>
 
-            <!-- 运行参数 -->
+            <!-- JEV -->
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="10">
-                    <TextBlock Text="运行参数" Style="{StaticResource SectionHeaderStyle}" />
-
-                    <ItemsControl ItemsSource="{x:Bind Vm.Settings}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:SettingItem">
-                                <Grid ColumnSpacing="12" Padding="0,6">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="220" />
-                                        <ColumnDefinition Width="160" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="{x:Bind Label}"
-                                               VerticalAlignment="Center" TextWrapping="Wrap" />
-                                    <NumberBox Grid.Column="1"
-                                               Value="{x:Bind Value, Mode=TwoWay}"
-                                               Minimum="{x:Bind Min}"
-                                               Maximum="{x:Bind Max}"
-                                               SpinButtonPlacementMode="Compact" />
-                                    <TextBlock Grid.Column="2" Text="{x:Bind Hint}"
-                                               Style="{StaticResource CaptionStyle}" VerticalAlignment="Center"
-                                               TextWrapping="Wrap" />
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Button Content="保存运行参数" Style="{StaticResource JpAccentButtonStyle}"
-                                Command="{x:Bind Vm.SaveSettingsCommand}" />
-                        <TextBlock Text="{x:Bind Vm.SettingsStatus, Mode=OneWay}"
-                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
-                    </StackPanel>
-                </StackPanel>
-            </Border>
-
-            <!-- 行为设置（#13：三组分开，不再混在一个两列格子里） -->
-            <Border Style="{StaticResource CardStyle}">
-                <StackPanel Spacing="10">
-                    <TextBlock Text="行为设置" Style="{StaticResource SectionHeaderStyle}" />
-
-                    <TextBlock Text="回复模式" FontWeight="SemiBold" />
-                    <ComboBox MinWidth="240"
-                              ItemsSource="{x:Bind Vm.ReplyModes}"
-                              SelectedItem="{x:Bind Vm.ReplyMode, Mode=TwoWay}" />
-                    <TextBlock Text="every = 每条都回；mention = 只有 @ 才回；jev = 交给判断模型决定"
+                    <TextBlock Text="JEV 判断模型（judge）" Style="{StaticResource SectionHeaderStyle}" />
+                    <TextBlock Text="只在「回复模式 = jev」时使用，判断此刻该不该开口"
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-
-                    <TextBlock Text="通知响应" FontWeight="SemiBold" Margin="0,8,0,0" />
-                    <TextBox PlaceholderText="搜索通知类型…" MinWidth="260" HorizontalAlignment="Left"
-                             Text="{x:Bind Vm.NoticeSearch, Mode=TwoWay}" />
-
-                    <TextBlock Text="常用" Style="{StaticResource CaptionStyle}" Margin="0,6,0,0" />
-                    <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{x:Bind Vm.CommonNotices}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:NoticeToggleItem">
-                                    <Grid ColumnSpacing="12" Padding="0,3">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="220" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="{x:Bind Label}" VerticalAlignment="Center" />
-                                        <ToggleSwitch Grid.Column="1" IsOn="{x:Bind Enabled, Mode=TwoWay}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-
-                    <TextBlock Text="其他" Style="{StaticResource CaptionStyle}" Margin="0,6,0,0" />
-                    <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{x:Bind Vm.OtherNotices}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:NoticeToggleItem">
-                                    <Grid ColumnSpacing="12" Padding="0,3">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="220" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="{x:Bind Label}" VerticalAlignment="Center" />
-                                        <ToggleSwitch Grid.Column="1" IsOn="{x:Bind Enabled, Mode=TwoWay}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Button Content="保存行为设置" Style="{StaticResource JpAccentButtonStyle}"
-                                Command="{x:Bind Vm.SaveBehaviorCommand}" />
-                        <TextBlock Text="{x:Bind Vm.BehaviorStatus, Mode=OneWay}"
-                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
-                    </StackPanel>
-                </StackPanel>
-            </Border>
-
-            <!-- JEV 判断模型 -->
-            <Border Style="{StaticResource CardStyle}">
-                <StackPanel Spacing="10">
-                    <TextBlock Text="JEV 判断模型" Style="{StaticResource SectionHeaderStyle}" />
 
                     <TextBox Header="BaseUrl" Text="{x:Bind Vm.JudgeBaseUrl, Mode=TwoWay}" />
                     <TextBox Header="模型" Text="{x:Bind Vm.JudgeModel, Mode=TwoWay}" />
                     <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="JudgeKey_PasswordChanged" />
 
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Button Content="保存 JEV 端点" Style="{StaticResource JpAccentButtonStyle}"
-                                Command="{x:Bind Vm.SaveJudgeCommand}" />
+                    <StackPanel Orientation="Horizontal" Spacing="12">
                         <NumberBox Header="判断灵敏度" Minimum="0.05" Maximum="0.95"
                                    SmallChange="0.05" Value="{x:Bind Vm.JudgeThreshold, Mode=TwoWay}" />
-                        <Button Content="保存灵敏度" Style="{StaticResource JpButtonStyle}"
+                        <Button Content="保存 JEV" Style="{StaticResource JpAccentButtonStyle}"
+                                Command="{x:Bind Vm.SaveJudgeCommand}" VerticalAlignment="Bottom" />
+                        <Button Content="只保存灵敏度" Style="{StaticResource JpButtonStyle}"
                                 Command="{x:Bind Vm.SaveThresholdCommand}" VerticalAlignment="Bottom" />
                     </StackPanel>
 

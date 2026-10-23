@@ -18,6 +18,16 @@ public sealed partial class FilterableComboBox : UserControl
     public FilterableComboBox()
     {
         InitializeComponent();
+
+        // 聚焦时恢复完整候选：选中一次后 ItemsSource 会被搜成只剩一项，
+        // 不重置的话第二次点开就"下拉不了"（用户实测反馈）。
+        Box.GotFocus += (_, _) => ResetItems();
+        Box.Loaded += (_, _) => ResetItems();
+    }
+
+    private void ResetItems()
+    {
+        Box.ItemsSource = _all.Take(100).ToList();
     }
 
     public static readonly DependencyProperty ItemsSourceProperty = DependencyProperty.Register(
@@ -54,7 +64,7 @@ public sealed partial class FilterableComboBox : UserControl
     {
         var control = (FilterableComboBox)d;
         control._all = e.NewValue is IList<string> list ? list.ToList() : [];
-        control.Box.ItemsSource = control._all.Take(100).ToList();
+        control.ResetItems();
     }
 
     private static void OnSelectedChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -97,6 +107,7 @@ public sealed partial class FilterableComboBox : UserControl
         {
             SelectedItem = value;
             sender.Text = value;
+            ResetItems();
         }
         finally
         {

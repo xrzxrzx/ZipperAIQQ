@@ -5,7 +5,7 @@ using ZipperAIQQ.Client.ViewModels;
 
 namespace ZipperAIQQ.Client.Views;
 
-/// <summary>端点与参数页：进入即自动加载（#10），保存结果就地显示（#27）。</summary>
+/// <summary>模型配置页：普通 LLM 与 JEV 两个固定块。</summary>
 public sealed partial class EndpointsPage : Page
 {
     public EndpointsPage()
@@ -18,8 +18,8 @@ public sealed partial class EndpointsPage : Page
 
     public EndpointsViewModel Vm { get; }
 
-    private void EndpointKey_PasswordChanged(object sender, RoutedEventArgs e)
-        => Vm.EndpointKey = ((PasswordBox)sender).Password;
+    private void LlmKey_PasswordChanged(object sender, RoutedEventArgs e)
+        => Vm.LlmKey = ((PasswordBox)sender).Password;
 
     private void JudgeKey_PasswordChanged(object sender, RoutedEventArgs e)
         => Vm.JudgeKey = ((PasswordBox)sender).Password;
