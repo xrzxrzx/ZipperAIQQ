@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Serilog;
+using ZipperAIQQ.Channel.Apis;
 using ZipperAIQQ.Channel.Audio;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
@@ -88,31 +89,14 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
     /// <remarks>
     /// 只放**只读查询**。发送消息、退群、禁言这类写操作**不在名单里** ——
     /// 那些必须走有权限门禁的工具，不能被"一个通用 API 调用"绕过去。
+    /// 清单来自 <see cref="ChannelApiCatalog"/>（唯一来源）。
     /// </remarks>
-    public static readonly IReadOnlySet<string> ActionAllowlist = new HashSet<string>(StringComparer.Ordinal)
-    {
-        "get_friend_list",
-        "get_group_list",
-        "get_group_info",
-        "get_group_member_list",
-        "get_group_member_info",
-        "get_stranger_info",
-        "get_login_info",
-        "get_version_info",
-    };
+    public static readonly IReadOnlySet<string> ActionAllowlist = ChannelApiCatalog.ReadActions;
 
     /// <summary>
     /// **写操作**白名单（比只读严格得多，且只能由有权限门禁的工具调到）。
     /// </summary>
-    /// <remarks>
-    /// 目前只放两条最不容易造成后果的：改自己签名、戳一戳。
-    /// 退群 / 禁言 / 改群名片一律不放 —— 那些错了没法收拾。
-    /// </remarks>
-    private static readonly IReadOnlySet<string> WriteActionAllowlist = new HashSet<string>(StringComparer.Ordinal)
-    {
-        "set_self_longnick",
-        "send_poke",
-    };
+    private static readonly IReadOnlySet<string> WriteActionAllowlist = ChannelApiCatalog.WriteActions;
 
     /// <summary>改自己的个性签名（NapCat <c>set_self_longnick</c>）。</summary>
     /// <remarks>

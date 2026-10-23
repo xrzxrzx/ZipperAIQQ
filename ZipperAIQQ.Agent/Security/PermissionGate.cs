@@ -98,6 +98,14 @@ public sealed class PermissionGate : IPermissionGate
     private Role MinRoleOf(ToolCapability capability) =>
         _minRoles.TryGetValue(capability, out var value) ? value : Role.Admin;
 
+    /// <summary>代码里的默认最低角色（策略层未配置时用它）。</summary>
+    public static Role DefaultRoleOf(ToolCapability capability) =>
+        Defaults.TryGetValue(capability, out var role) ? role : Role.Admin;
+
+    /// <summary>不可突破的硬底线（策略写入时校验）。</summary>
+    public static Role HardFloorOf(ToolCapability capability) =>
+        HardFloor.TryGetValue(capability, out var role) ? role : Role.Admin;
+
     private static string Describe(ToolCapability capability) => capability switch
     {
         ToolCapability.ReadFile => "读文件",

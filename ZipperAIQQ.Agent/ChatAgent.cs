@@ -46,6 +46,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly IMetricsStore _metrics;
     private readonly IEventBus _events;
     private readonly IPermissionGate _permissionGate;
+    private readonly IExecutionPolicy _policy;
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
@@ -89,6 +90,7 @@ public sealed class ChatAgent : IChatAgent
         _metrics = deps.Metrics;
         _events = deps.Events;
         _permissionGate = deps.PermissionGate;
+        _policy = deps.Policy;
         _configs = configs;
         _settings = settings;
         _roles = deps.Roles;
@@ -545,14 +547,35 @@ public sealed class ChatAgent : IChatAgent
         // 通道实现了 IContactDirectory 才给工具，否则模型会去调一个不存在的能力
         if (_channel is Channel.IContactDirectory contacts)
         {
-            tools.AddRange(ContactTools.Create(contacts));
+            tools.AddRange(ContactTools.Create(contacts, context, _policy));
 
             // 写操作（改自己签名 / 戳别人）：同样是"通道支持才给"，
             // 内部再按权限门禁逐个判断 —— 没权限就连工具都不给模型看
             tools.AddRange(ProfileTools.Create(contacts, context, _permissionGate, _configs));
         }
 
-        return tools;
+        // 策略过滤（#28）：关掉的工具不给 schema；角色不够的也不给。
+        // 可见性不是唯一防线 —— 每个工具执行前仍会再过一次门禁。
+        var allowed = new List<AITool>(tools.Count);
+        foreach (var tool in tools)
+        {
+            var capability = ToolCatalog.CapabilityOf(tool.Name);
+            var fallback = capability is null ? Role.Normal : PermissionGate.DefaultRoleOf(capability.Value);
+
+            if (!_policy.IsEnabled(PolicyCategory.Tool, tool.Name))
+            {
+                continue;
+            }
+
+            if (context.Role < _policy.MinRole(PolicyCategory.Tool, tool.Name, fallback))
+            {
+                continue;
+            }
+
+            allowed.Add(tool);
+        }
+
+        return allowed;
     }
 
     /// <summary>

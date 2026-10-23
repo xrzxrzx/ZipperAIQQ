@@ -31,6 +31,44 @@ public sealed partial class EndpointsViewModel : ObservableObject
 
     public ObservableCollection<NoticeToggleItem> NoticeToggles { get; } = [];
 
+    /// <summary>常用通知（#34：单独一组）。</summary>
+    public ObservableCollection<NoticeToggleItem> CommonNotices { get; } = [];
+
+    /// <summary>其他通知。</summary>
+    public ObservableCollection<NoticeToggleItem> OtherNotices { get; } = [];
+
+    [ObservableProperty]
+    public partial string NoticeSearch { get; set; } = string.Empty;
+
+    private readonly List<NoticeToggleItem> _allNotices = [];
+
+    partial void OnNoticeSearchChanged(string value) => ApplyNoticeFilter();
+
+    private void ApplyNoticeFilter()
+    {
+        var keyword = NoticeSearch.Trim();
+
+        bool Match(NoticeToggleItem item) =>
+            string.IsNullOrEmpty(keyword) ||
+            item.Label.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
+            item.Type.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+
+        CommonNotices.Clear();
+        OtherNotices.Clear();
+
+        foreach (var item in _allNotices.Where(Match))
+        {
+            if (item.Group == "common")
+            {
+                CommonNotices.Add(item);
+            }
+            else
+            {
+                OtherNotices.Add(item);
+            }
+        }
+    }
+
     [ObservableProperty]
     public partial string SelectedEndpointName { get; set; } = "primary";
 
@@ -219,15 +257,22 @@ public sealed partial class EndpointsViewModel : ObservableObject
         ReplyMode = data.ReplyMode;
 
         NoticeToggles.Clear();
+        _allNotices.Clear();
         foreach (var item in data.Notices)
         {
-            NoticeToggles.Add(new NoticeToggleItem
+            var toggle = new NoticeToggleItem
             {
                 Type = item.Type,
                 Label = item.Label,
+                Group = item.Group,
                 Enabled = item.Enabled,
-            });
+            };
+
+            _allNotices.Add(toggle);
+            NoticeToggles.Add(toggle);
         }
+
+        ApplyNoticeFilter();
     }
 
     [RelayCommand]
@@ -235,7 +280,8 @@ public sealed partial class EndpointsViewModel : ObservableObject
     {
         try
         {
-            var notice = NoticeToggles.ToDictionary(n => n.Type, n => n.Enabled);
+            // 用 _allNotices（不受搜索过滤影响）：否则搜索状态下保存会把看不见的开关写成默认值
+            var notice = _allNotices.ToDictionary(n => n.Type, n => n.Enabled);
             var result = await _api.CallAsync<SaveResultDto>("setBehavior", new
             {
                 replyMode = ReplyMode,

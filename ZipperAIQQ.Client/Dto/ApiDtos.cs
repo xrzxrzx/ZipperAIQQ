@@ -445,8 +445,43 @@ public sealed class NoticeToggleDto
     [JsonPropertyName("label")]
     public string Label { get; set; } = string.Empty;
 
+    /// <summary>common / other（#34：常用单独一组）。</summary>
+    [JsonPropertyName("group")]
+    public string Group { get; set; } = "other";
+
+    [JsonPropertyName("groupLabel")]
+    public string GroupLabel { get; set; } = "其他";
+
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; }
+}
+
+/// <summary>工具 / 命令 / NapCat API 策略项（#28）。</summary>
+public sealed class ToolCatalogItemDto
+{
+    [JsonPropertyName("category")]
+    public string Category { get; set; } = string.Empty;
+
+    [JsonPropertyName("categoryLabel")]
+    public string CategoryLabel { get; set; } = string.Empty;
+
+    [JsonPropertyName("key")]
+    public string Key { get; set; } = string.Empty;
+
+    [JsonPropertyName("label")]
+    public string Label { get; set; } = string.Empty;
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+
+    [JsonPropertyName("role")]
+    public string Role { get; set; } = "Normal";
+
+    [JsonPropertyName("defaultRole")]
+    public string DefaultRole { get; set; } = "Normal";
+
+    [JsonPropertyName("hardFloor")]
+    public string? HardFloor { get; set; }
 }
 
 /// <summary>人设（<c>getPersona</c>）：形象 / 性格分开。</summary>

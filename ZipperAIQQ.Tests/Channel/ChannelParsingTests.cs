@@ -260,4 +260,49 @@ public sealed class OneBotEventMapperTests
         Assert.NotNull(map);
         Assert.IsNotType<IncomingMessage>(map);
     }
+
+    [Theory]
+    [InlineData("group_card", null, "GroupCardChanged")]
+    [InlineData("essence", "add", "EssenceChanged")]
+    [InlineData("group_msg_emoji_like", null, "MessageEmojiLike")]
+    [InlineData("bot_offline", null, "BotOffline")]
+    public void Extended_notice_types_are_mapped(string noticeType, string? subType, string expected)
+    {
+        var sub = subType is null ? string.Empty : $"\"sub_type\": \"{subType}\",";
+        var raw = "{ \"post_type\": \"notice\", \"notice_type\": \"" + noticeType + "\", " + sub +
+                  "\"group_id\": 20001, \"user_id\": 10001, \"time\": 1700000000 }";
+
+        var notice = Assert.IsType<IncomingNotice>(OneBotEventMapper.Map(JsonNode.Parse(raw), "qq"));
+        Assert.Equal(expected, notice.Type.ToString());
+    }
+
+    [Theory]
+    [InlineData("group_name", "GroupNameChanged")]
+    [InlineData("title", "GroupTitleChanged")]
+    [InlineData("gray_tip", "GroupGrayTip")]
+    [InlineData("profile_like", "ProfileLike")]
+    public void Notify_subtypes_are_mapped(string subType, string expected)
+    {
+        var raw = "{ \"post_type\": \"notice\", \"notice_type\": \"notify\", \"sub_type\": \"" + subType +
+                  "\", \"group_id\": 20001, \"user_id\": 10001, \"time\": 1700000000 }";
+
+        var notice = Assert.IsType<IncomingNotice>(OneBotEventMapper.Map(JsonNode.Parse(raw), "qq"));
+        Assert.Equal(expected, notice.Type.ToString());
+    }
+
+    [Fact]
+    public void Request_events_map_to_record_only_types()
+    {
+        var friend = Assert.IsType<IncomingNotice>(OneBotEventMapper.Map(
+            JsonNode.Parse("""{ "post_type":"request","request_type":"friend","user_id":10001,"time":1700000000 }"""),
+            "qq"));
+        Assert.Equal(NoticeType.FriendRequest, friend.Type);
+        Assert.Equal("request.friend", friend.RawType);
+
+        var group = Assert.IsType<IncomingNotice>(OneBotEventMapper.Map(
+            JsonNode.Parse("""{ "post_type":"request","request_type":"group","group_id":20001,"user_id":10001,"time":1700000000 }"""),
+            "qq"));
+        Assert.Equal(NoticeType.GroupRequest, group.Type);
+        Assert.Equal("qq:g20001", group.Chat.SessionId);
+    }
 }

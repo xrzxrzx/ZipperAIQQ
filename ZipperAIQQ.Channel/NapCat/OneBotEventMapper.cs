@@ -36,7 +36,41 @@ public static class OneBotEventMapper
         {
             "message" => MapMessage(obj, platform),
             "notice" => MapNotice(obj, platform),
+            "request" => MapRequest(obj, platform),
             _ => null,
+        };
+    }
+
+    /// <summary>
+    /// 请求事件（加好友 / 加群）：**只映射用于记录**，上层默认不响应。
+    /// </summary>
+    private static IncomingNotice? MapRequest(JsonObject obj, string platform)
+    {
+        var requestType = GetString(obj, "request_type");
+        if (requestType is not ("friend" or "group"))
+        {
+            return null;
+        }
+
+        var userId = GetString(obj, "user_id");
+        var groupId = GetString(obj, "group_id");
+
+        var chat = new ChatRef
+        {
+            Platform = platform,
+            Type = requestType == "group" ? ChatType.Group : ChatType.Private,
+            Id = requestType == "group" ? groupId ?? "unknown" : userId ?? "unknown",
+        };
+
+        return new IncomingNotice
+        {
+            Chat = chat,
+            Type = requestType == "group" ? NoticeType.GroupRequest : NoticeType.FriendRequest,
+            RawType = "request." + requestType,
+            Actor = userId is null ? null : new SenderInfo { UserId = userId },
+            Target = null,
+            OccurredAt = ParseTime(obj),
+            Extra = BuildNoticeExtra(obj),
         };
     }
 
@@ -138,6 +172,11 @@ public static class OneBotEventMapper
     private static NoticeType MapNoticeType(string? noticeType, string? subType) => (noticeType, subType) switch
     {
         ("notify", "poke") => NoticeType.Poke,
+        ("notify", "group_name") => NoticeType.GroupNameChanged,
+        ("notify", "title") => NoticeType.GroupTitleChanged,
+        ("notify", "gray_tip") => NoticeType.GroupGrayTip,
+        ("notify", "profile_like") => NoticeType.ProfileLike,
+        ("notify", "input_status") => NoticeType.InputStatus,
         ("notify", _) => NoticeType.Unknown,
         ("group_increase", _) => NoticeType.GroupIncrease,
         ("group_decrease", _) => NoticeType.GroupDecrease,
@@ -147,6 +186,10 @@ public static class OneBotEventMapper
         ("friend_recall", _) => NoticeType.MessageRecalled,
         ("friend_add", _) => NoticeType.FriendAdd,
         ("group_upload", _) => NoticeType.GroupFileUpload,
+        ("group_card", _) => NoticeType.GroupCardChanged,
+        ("essence", _) => NoticeType.EssenceChanged,
+        ("group_msg_emoji_like", _) => NoticeType.MessageEmojiLike,
+        ("bot_offline", _) => NoticeType.BotOffline,
         _ => NoticeType.Unknown,
     };
 

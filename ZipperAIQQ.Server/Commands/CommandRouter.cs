@@ -29,6 +29,7 @@ public sealed class CommandRouter
     private readonly IMessageChannel _channel;
     private readonly IMessageStore _store;
     private readonly IChatAgentPool _agents;
+    private readonly IExecutionPolicy _policy;
     private readonly ILogger _logger;
 
     public CommandRouter(
@@ -36,18 +37,21 @@ public sealed class CommandRouter
         IMessageChannel channel,
         IMessageStore store,
         IChatAgentPool agents,
+        IExecutionPolicy policy,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(commands);
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(agents);
+        ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(logger);
 
         _commands = commands.ToDictionary(c => c.Name.ToLowerInvariant(), StringComparer.OrdinalIgnoreCase);
         _channel = channel;
         _store = store;
         _agents = agents;
+        _policy = policy;
         _logger = logger;
     }
 
@@ -101,10 +105,13 @@ public sealed class CommandRouter
         string response;
         byte[]? imagePng = null;
 
-        if (role < command.MinRole)
+        // #29：命令最低角色可在客户端配置；没配置时用命令自己的 MinRole
+        var required = _policy.MinRole(PolicyCategory.Command, command.Name, command.MinRole);
+
+        if (role < required)
         {
             // 命令语法已被识别，但角色不够：明确告诉用户，不回给模型瞎猜
-            response = $"权限不足：`/{command.Name}` 需要 {command.MinRole} 及以上角色，当前是 {role}。";
+            response = $"权限不足：`/{command.Name}` 需要 {required} 及以上角色，当前是 {role}。";
         }
         else
         {

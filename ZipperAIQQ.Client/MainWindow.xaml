@@ -112,6 +112,11 @@
                         <FontIcon Glyph="&#xE716;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem Content="工具管理" Tag="tools">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE90F;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <NavigationViewItem Content="审计" Tag="audit">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE81C;" />

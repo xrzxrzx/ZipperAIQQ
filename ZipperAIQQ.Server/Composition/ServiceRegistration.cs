@@ -7,7 +7,9 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
+using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Apis;
 using ZipperAIQQ.Channel.Audio;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.NapCat;
@@ -92,6 +94,31 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, ProbeNapcatAction>();
         services.AddSingleton<IApiAction, GetAccessAction>();
         services.AddSingleton<IApiAction, SetAccessAction>();
+
+        // ── #28：工具 / 命令 / NapCat API 的策略目录与开关 ──
+        services.AddSingleton<IExecutionPolicy>(sp =>
+        {
+            var items = new List<PolicyItem>(ToolCatalog.All);
+
+            items.AddRange(CommandCatalog.All.Select(c =>
+                new PolicyItem(PolicyCategory.Command, c.Name, c.Name, c.MinRole)));
+
+            items.AddRange(ChannelApiCatalog.All.Select(a =>
+                new PolicyItem(
+                    PolicyCategory.ChannelApi,
+                    a.Action,
+                    a.Label,
+                    a.IsWrite ? Role.Admin : Role.Normal)));
+
+            return new ExecutionPolicy(
+                sp.GetRequiredService<IRuntimeSettingsStore>(),
+                items,
+                sp.GetRequiredService<ILogger>());
+        });
+        services.AddHostedService<PolicyRefreshService>();
+        services.AddSingleton<IApiAction, GetToolCatalogAction>();
+        services.AddSingleton<IApiAction, SetToolPolicyAction>();
+
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
 
@@ -225,6 +252,7 @@ public static class ServiceRegistration
                 Metrics = sp.GetRequiredService<IMetricsStore>(),
                 Events = sp.GetRequiredService<IEventBus>(),
                 PermissionGate = sp.GetRequiredService<IPermissionGate>(),
+                Policy = sp.GetRequiredService<IExecutionPolicy>(),
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
                 FileMaxBytes = options.FileMaxBytes,

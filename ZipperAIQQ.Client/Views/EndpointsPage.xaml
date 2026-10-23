@@ -91,8 +91,30 @@
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
                     <TextBlock Text="通知响应" FontWeight="SemiBold" Margin="0,8,0,0" />
+                    <TextBox PlaceholderText="搜索通知类型…" MinWidth="260" HorizontalAlignment="Left"
+                             Text="{x:Bind Vm.NoticeSearch, Mode=TwoWay}" />
+
+                    <TextBlock Text="常用" Style="{StaticResource CaptionStyle}" Margin="0,6,0,0" />
+                    <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{x:Bind Vm.CommonNotices}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:NoticeToggleItem">
+                                    <Grid ColumnSpacing="12" Padding="0,3">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="220" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{x:Bind Label}" VerticalAlignment="Center" />
+                                        <ToggleSwitch Grid.Column="1" IsOn="{x:Bind Enabled, Mode=TwoWay}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <TextBlock Text="其他" Style="{StaticResource CaptionStyle}" Margin="0,6,0,0" />
                     <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{x:Bind Vm.NoticeToggles}">
+                        <ItemsControl ItemsSource="{x:Bind Vm.OtherNotices}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:NoticeToggleItem">
                                     <Grid ColumnSpacing="12" Padding="0,3">

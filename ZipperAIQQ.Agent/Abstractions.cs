@@ -102,6 +102,9 @@ public sealed record ChatAgentDependencies
     /// <summary>权限门禁（接缝 C，FR-6）。</summary>
     public required Security.IPermissionGate PermissionGate { get; init; }
 
+    /// <summary>工具 / 命令 / 平台 API 的开关与最低角色（#28/#29）。</summary>
+    public required Security.IExecutionPolicy Policy { get; init; }
+
     /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
     public required Security.IRoleResolver Roles { get; init; }
 

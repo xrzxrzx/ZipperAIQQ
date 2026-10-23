@@ -157,6 +157,7 @@ public sealed partial class MainWindow : Window
         "endpoints" => typeof(EndpointsPage),
         "persona" => typeof(PersonaPage),
         "access" => typeof(AccessPage),
+        "tools" => typeof(ToolsPage),
         "audit" => typeof(AuditPage),
         _ => typeof(StatusPage),
     };
