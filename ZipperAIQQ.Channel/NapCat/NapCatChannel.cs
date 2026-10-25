@@ -468,7 +468,7 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
 
         // 自激过滤（通知）：自己触发 / 自己是被操作者 → 丢弃（问题记录 #39）。
         // 只有通道层拿得到**动态** SelfId；路由层用配置/持久化自 ID 再兜一次。
-        if (evt is IncomingNotice notice && NoticeSelfPolicy.IsAboutSelf(notice, self))
+        if (evt is IncomingNotice notice && NoticeSelfPolicy.ShouldDrop(notice, self))
         {
             _logger.Information(
                 "丢弃自身相关通知：{Type}（Actor={Actor}, Target={Target}, Self={Self}）",

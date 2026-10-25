@@ -84,7 +84,7 @@ public sealed class MessageRouter : BackgroundService
                         // M2-E：落库 + 按配置决定是否响应（默认只记录，FR-18.3）
                         // 自激兜底：通道层已按动态 SelfId 过滤过；这里再用配置里的自 ID 拦一次，
                         // 以防换成别的通道实现时漏判（问题记录 #39）
-                        if (NoticeSelfPolicy.IsAboutSelf(notice, _options.SelfId))
+                        if (NoticeSelfPolicy.ShouldDrop(notice, _options.SelfId))
                         {
                             _logger.Information(
                                 "丢弃自身相关通知（路由层兜底）：{Type}（Actor={Actor}, Target={Target}, Self={Self}）",

@@ -91,17 +91,6 @@ public sealed class NoticeResponder
         }
 
         var selfId = _channel.SelfId ?? _options.SelfId;
-        if (!NoticeSelfPolicy.ShouldRespond(notice, selfId))
-        {
-            _logger.Information(
-                "通知不响应（非本机相关）：{Type}（Actor={Actor}, Target={Target}, Self={Self}）",
-                notice.Type,
-                notice.Actor?.UserId,
-                notice.Target?.UserId,
-                selfId);
-            return;
-        }
-
         var text = Describe(notice, selfId);
 
         try
@@ -133,7 +122,7 @@ public sealed class NoticeResponder
     {
         NoticeType.Poke => string.Equals(notice.Target?.UserId, selfId, StringComparison.Ordinal)
             ? $"[戳一戳] {Who(notice.Actor)} 戳了你"
-            : $"[戳一戳] {Who(notice.Actor)} 戳了 {Who(notice.Target)}",
+            : $"[戳一戳] {Who(notice.Actor)} 戳了 {Who(notice.Target)}（不是你，别当成戳自己）",
         // 成员增减事件没有 target_id 时，被操作者就是 user_id（映射层已补；这里再兜一次）
         NoticeType.GroupIncrease => $"[入群] {Who(notice.Target ?? notice.Actor)} 加入了群",
         NoticeType.GroupDecrease => $"[退群] {Who(notice.Target ?? notice.Actor)} 离开了群",
