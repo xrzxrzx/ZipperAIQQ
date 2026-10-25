@@ -32,34 +32,32 @@ public sealed class DeepSeekWebSearchProvider : IWebSearchProvider
 
     private readonly HttpClient _http;
     private readonly Func<CancellationToken, Task<string?>> _keyProvider;
-    private readonly bool _enabled;
-    private readonly string _baseUrl;
+    private readonly Func<SearchSnapshot> _settings;
     private readonly ILogger _logger;
 
     public DeepSeekWebSearchProvider(
         HttpClient http,
         Func<CancellationToken, Task<string?>> keyProvider,
-        bool enabled,
-        string? baseUrl,
+        Func<SearchSnapshot> settings,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(keyProvider);
+        ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(logger);
 
         _http = http;
         _keyProvider = keyProvider;
-        _enabled = enabled;
-        _baseUrl = (string.IsNullOrWhiteSpace(baseUrl) ? "https://api.deepseek.com" : baseUrl).TrimEnd('/');
+        _settings = settings;
         _logger = logger;
     }
 
-    public bool IsAvailable => _enabled;
+    public bool IsAvailable => _settings().Enabled;
 
     public async Task<IReadOnlyList<WebSearchResult>> SearchAsync(
         string query, int topK, CancellationToken ct = default)
     {
-        if (!_enabled)
+        if (!_settings().Enabled)
         {
             throw new WebSearchException("网页搜索已被配置关闭");
         }
@@ -70,7 +68,7 @@ public sealed class DeepSeekWebSearchProvider : IWebSearchProvider
             throw new WebSearchException("没有可用的搜索 key（LLM 端点未配置）");
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}{SearchPath}")
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_settings().BaseUrl}{SearchPath}")
         {
             Content = JsonContent.Create(new
             {
@@ -132,7 +130,7 @@ public sealed class DeepSeekWebSearchProvider : IWebSearchProvider
             throw new WebSearchException($"不是合法的 http/https 地址：{url}");
         }
 
-        if (_enabled)
+        if (_settings().Enabled)
         {
             var official = await TryOfficialFetchAsync(uri, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(official))
@@ -154,7 +152,7 @@ public sealed class DeepSeekWebSearchProvider : IWebSearchProvider
                 return null;
             }
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}{FetchPath}")
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{_settings().BaseUrl}{FetchPath}")
             {
                 Content = JsonContent.Create(new { url = uri.ToString() }),
             };

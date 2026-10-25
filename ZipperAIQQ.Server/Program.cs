@@ -11,6 +11,7 @@ using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Api;
 using ZipperAIQQ.Server.External;
+using ZipperAIQQ.Server.Search;
 using ZipperAIQQ.Server.Composition;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Configuration;
@@ -139,6 +140,9 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
 
     // 外部 WS 配置（客户端可改）先读回 RuntimeSettings
     await app.Services.GetRequiredService<ExternalOptionsService>().InitializeAsync();
+
+    // 网页搜索配置（与模型独立）先读回库
+    await app.Services.GetRequiredService<SearchOptionsService>().InitializeAsync();
 
     // 按运行配置建（或重建）LLM 客户端；配置写错只会保留旧客户端，不会起不来
     await app.Services.GetRequiredService<IChatClientProvider>().ReloadAsync();

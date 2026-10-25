@@ -61,6 +61,27 @@
                     </StackPanel>
                 </Border>
             </Grid>
+
+            <!-- 网页搜索：独立于对话模型（自己的地址与 key） -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="网页搜索（独立配置）" Style="{StaticResource SectionHeaderStyle}" />
+                    <TextBlock Text="与对话模型分开：用自己的 BaseUrl 和 API Key，换搜索服务不影响 LLM。"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                    <ToggleSwitch Header="启用网页搜索" IsOn="{x:Bind Vm.SearchEnabled, Mode=TwoWay}" />
+                    <TextBox Header="BaseUrl" Text="{x:Bind Vm.SearchBaseUrl, Mode=TwoWay}" />
+                    <PasswordBox Header="API Key（留空 = 不改）" PasswordChanged="SearchKey_PasswordChanged" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button Content="保存网页搜索" Style="{StaticResource JpAccentButtonStyle}"
+                                Command="{x:Bind Vm.SaveSearchCommand}" />
+                        <TextBlock Text="{x:Bind Vm.SearchStatus, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </Page>

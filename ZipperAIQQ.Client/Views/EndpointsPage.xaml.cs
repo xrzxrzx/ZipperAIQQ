@@ -23,4 +23,7 @@ public sealed partial class EndpointsPage : Page
 
     private void JudgeKey_PasswordChanged(object sender, RoutedEventArgs e)
         => Vm.JudgeKey = ((PasswordBox)sender).Password;
+
+    private void SearchKey_PasswordChanged(object sender, RoutedEventArgs e)
+        => Vm.SearchApiKey = ((PasswordBox)sender).Password;
 }

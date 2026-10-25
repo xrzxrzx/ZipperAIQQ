@@ -50,6 +50,20 @@ public sealed partial class EndpointsViewModel : ObservableObject
     [ObservableProperty]
     public partial string JudgeStatus { get; set; } = string.Empty;
 
+    // ── 网页搜索（独立于模型：自己的 baseUrl + key）──
+
+    [ObservableProperty]
+    public partial bool SearchEnabled { get; set; } = true;
+
+    [ObservableProperty]
+    public partial string SearchBaseUrl { get; set; } = "https://api.deepseek.com";
+
+    [ObservableProperty]
+    public partial string SearchApiKey { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string SearchStatus { get; set; } = string.Empty;
+
     [RelayCommand]
     private async Task LoadAsync()
     {
@@ -68,6 +82,14 @@ public sealed partial class EndpointsViewModel : ObservableObject
             JudgeBaseUrl = judge?.BaseUrl ?? string.Empty;
             JudgeModel = judge?.Model ?? string.Empty;
             JudgeKey = string.Empty;
+
+            var search = await _api.CallAsync<SearchDto>("getSearch").ConfigureAwait(true);
+            SearchEnabled = search?.Enabled != false;
+            SearchBaseUrl = string.IsNullOrWhiteSpace(search?.BaseUrl)
+                ? "https://api.deepseek.com"
+                : search.BaseUrl;
+            SearchApiKey = string.Empty;
+            SearchStatus = search?.HasKey == true ? "已配置 key" : "未配置 key";
 
             LlmStatus = "已加载";
             JudgeStatus = "已加载";
@@ -125,6 +147,29 @@ public sealed partial class EndpointsViewModel : ObservableObject
         catch (Exception ex)
         {
             JudgeStatus = $"保存失败：{ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveSearchAsync()
+    {
+        try
+        {
+            var result = await _api.CallAsync<SearchDto>("setSearch", new
+            {
+                enabled = SearchEnabled,
+                baseUrl = SearchBaseUrl.Trim(),
+                apiKey = string.IsNullOrWhiteSpace(SearchApiKey) ? null : SearchApiKey,
+            }).ConfigureAwait(true);
+
+            SearchApiKey = string.Empty;
+            SearchStatus = result?.HasKey == true
+                ? "网页搜索已保存（已配置 key）"
+                : "网页搜索已保存（未配置 key）";
+        }
+        catch (Exception ex)
+        {
+            SearchStatus = $"保存失败：{ex.Message}";
         }
     }
 }

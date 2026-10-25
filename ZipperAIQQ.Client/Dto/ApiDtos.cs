@@ -637,6 +637,19 @@ public sealed class LogLineDto
     public string Display => $"[{TimeText} {Level}] {Message}";
 }
 
+/// <summary>网页搜索配置（与模型端点独立）。</summary>
+public sealed class SearchDto
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("baseUrl")]
+    public string BaseUrl { get; set; } = string.Empty;
+
+    [JsonPropertyName("hasKey")]
+    public bool HasKey { get; set; }
+}
+
 /// <summary>反向 WS 监听块（问题记录 03 #5）。</summary>
 public sealed class ReverseServerDto
 {

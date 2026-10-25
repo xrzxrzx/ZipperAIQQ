@@ -147,22 +147,19 @@ public static class ServiceRegistration
         services.AddHostedService<SelfIdRecorder>();
         services.AddSingleton<IApiAction, GetSelfInfoAction>();
 
-        // #38：网页搜索（DeepSeek 官方 /v1/tools/search + /v1/tools/fetch）
+        // #38：网页搜索（与模型端点独立：自己的 baseUrl + 加密 key）
         services.AddHttpClient();
+        services.AddSingleton<SearchOptionsService>();
+        services.AddSingleton<IApiAction, GetSearchAction>();
+        services.AddSingleton<IApiAction, SetSearchAction>();
         services.AddSingleton<IWebSearchProvider>(sp =>
         {
-            var configs = sp.GetRequiredService<IConfigStore>();
-            var protector = sp.GetRequiredService<ISecretProtector>();
+            var search = sp.GetRequiredService<SearchOptionsService>();
 
             return new DeepSeekWebSearchProvider(
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(DeepSeekWebSearchProvider)),
-                async ct =>
-                {
-                    var endpoint = await configs.GetEndpointAsync("primary", ct).ConfigureAwait(false);
-                    return endpoint is null ? null : protector.Unprotect(endpoint.KeyCipher);
-                },
-                options.SearchEnabled,
-                options.SearchBaseUrl,
+                ct => search.GetKeyAsync(ct),
+                () => search.Current,
                 sp.GetRequiredService<ILogger>());
         });
 
