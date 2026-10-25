@@ -98,7 +98,7 @@ public sealed class MessageDto
     public long OccurredAt { get; set; }
 
     public string TimeText =>
-        DateTimeOffset.FromUnixTimeMilliseconds(OccurredAt).LocalDateTime.ToString("HH:mm:ss");
+        DateTimeOffset.FromUnixTimeMilliseconds(OccurredAt).LocalDateTime.ToString("MM-dd HH:mm:ss");
 
     /// <summary>发送人显示名（AI 统一显示「AI」）。</summary>
     [JsonIgnore]
