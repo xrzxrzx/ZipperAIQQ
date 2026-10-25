@@ -167,7 +167,7 @@ public sealed partial class FileLogQuery : ILogQuery
                    CultureInfo.InvariantCulture,
                    DateTimeStyles.None,
                    out var date)
-            ? new DateTimeOffset(date, TimeSpan.FromHours(8))
+            ? new DateTimeOffset(date, TimeZoneInfo.Local.GetUtcOffset(date))
             : null;
     }
 }
