@@ -70,8 +70,12 @@ public sealed class LogQueryTests : IDisposable
             "[2026-10-25 10:00:00.000 INF] 三");
 
         var query = new FileLogQuery(_dir, _logger);
-        var from = new DateTimeOffset(2026, 10, 25, 8, 30, 0, TimeSpan.FromHours(8));
-        var to = new DateTimeOffset(2026, 10, 25, 9, 30, 0, TimeSpan.FromHours(8));
+
+        // 日志时间戳不带时区，FileLogQuery 按**本机本地时区**解析；
+        // 测试也必须用本机偏移，否则在 UTC 的 CI 上区间会整体错位。
+        var localOffset = TimeZoneInfo.Local.GetUtcOffset(new DateTime(2026, 10, 25, 8, 30, 0));
+        var from = new DateTimeOffset(2026, 10, 25, 8, 30, 0, localOffset);
+        var to = new DateTimeOffset(2026, 10, 25, 9, 30, 0, localOffset);
 
         var range = await query.QueryAsync(new LogQuery(from, to, null, null, 10, 0));
         Assert.Single(range);
