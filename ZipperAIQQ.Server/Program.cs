@@ -10,6 +10,7 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Api;
+using ZipperAIQQ.Server.External;
 using ZipperAIQQ.Server.Composition;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Configuration;
@@ -122,6 +123,7 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
 
     ApiEndpoint.Map(app);
     EventEndpoint.Map(app);
+    ExternalWsEndpoint.Map(app);
 
     SubscribeAgentEvents(app.Services);
 

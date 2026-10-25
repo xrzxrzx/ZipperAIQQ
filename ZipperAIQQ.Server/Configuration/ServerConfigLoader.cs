@@ -90,6 +90,11 @@ public static class ServerConfigLoader
             SelfId = s.Str("napcat", "selfId", o.SelfId),
             SearchEnabled = s.Bool("search", "enabled", o.SearchEnabled),
             SearchBaseUrl = s.Str("search", "baseUrl", o.SearchBaseUrl),
+            ExternalAllowSend = s.Bool("external", "allowSend", o.ExternalAllowSend),
+            ExternalAllowedSessions = (s.Str("external", "allowedSessions", string.Join(',', o.ExternalAllowedSessions)) ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            ExternalForwardUrl = s.Str("external", "forwardUrl", o.ExternalForwardUrl),
+            ExternalForwardToken = s.Str("external", "forwardToken", o.ExternalForwardToken),
 
             // ── llm ──
             LlmApiKey = s.Str("llm", "apiKey", o.LlmApiKey)!,

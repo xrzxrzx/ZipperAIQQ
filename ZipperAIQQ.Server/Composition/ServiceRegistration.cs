@@ -23,6 +23,7 @@ using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Contacts;
+using ZipperAIQQ.Server.External;
 using ZipperAIQQ.Server.Feedback;
 using ZipperAIQQ.Server.Identity;
 using ZipperAIQQ.Server.Logs;
@@ -179,6 +180,11 @@ public static class ServiceRegistration
         services.AddSingleton<OwnerFeedbackService>();
         services.AddSingleton<IApiAction, GetFeedbackAction>();
         services.AddSingleton<IApiAction, SetFeedbackAction>();
+
+        // 外部 WS（问题记录 03 #5）：反向连入 + 正向连出
+        services.AddSingleton<ExternalWsHub>();
+        services.AddSingleton<ExternalCommandHandler>();
+        services.AddHostedService<ForwardWsClient>();
 
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();

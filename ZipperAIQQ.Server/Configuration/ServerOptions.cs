@@ -99,6 +99,19 @@ public sealed record ServerOptions
     /// <summary>搜索服务基地址（默认 https://api.deepseek.com，可用环境变量覆盖）。</summary>
     public string? SearchBaseUrl { get; init; }
 
+    // ── 外部 WS（问题记录 03 #5）──
+    /// <summary>外部应用是否允许发消息（默认关）。</summary>
+    public bool ExternalAllowSend { get; init; }
+
+    /// <summary>允许外部发送的会话白名单（空 = 全部；支持 <c>qq:p*</c> 这类前缀）。</summary>
+    public IReadOnlyList<string> ExternalAllowedSessions { get; init; } = [];
+
+    /// <summary>正向 WS 目标地址（空 = 不连出）。</summary>
+    public string? ExternalForwardUrl { get; init; }
+
+    /// <summary>正向 WS 鉴权 token。</summary>
+    public string? ExternalForwardToken { get; init; }
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;
@@ -165,6 +178,11 @@ public sealed record ServerOptions
             NapCatAccessToken = Optional("ZIPPER_NAPCAT_TOKEN"),
             SearchEnabled = BoolOrDefault("ZIPPER_SEARCH_ENABLED", true),
             SearchBaseUrl = Optional("ZIPPER_SEARCH_BASEURL"),
+            ExternalAllowSend = BoolOrDefault("ZIPPER_EXTERNAL_ALLOWSEND", false),
+            ExternalAllowedSessions = (Optional("ZIPPER_EXTERNAL_ALLOWEDSESSIONS") ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            ExternalForwardUrl = Optional("ZIPPER_EXTERNAL_FORWARDURL"),
+            ExternalForwardToken = Optional("ZIPPER_EXTERNAL_FORWARDTOKEN"),
             Whitelist = (Optional("ZIPPER_WHITELIST") ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             SttEnabled = Optional("ZIPPER_STT_ENABLED") is not "0",
