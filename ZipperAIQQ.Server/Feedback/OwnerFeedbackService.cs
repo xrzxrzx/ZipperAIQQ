@@ -26,6 +26,9 @@ public sealed class OwnerFeedbackService
     public const string TargetKey = "feedback.target";
     public const string DefaultTypes = "MessageRecalled";
 
+    /// <summary>伪类型：外部接口发出的消息（不是 <see cref="NoticeType"/>）。</summary>
+    public const string ExternalMessageType = "ExternalMessage";
+
     private readonly IRuntimeSettingsStore _settings;
     private readonly IMessageStore _messages;
     private readonly IMessageChannel _channel;
@@ -58,7 +61,7 @@ public sealed class OwnerFeedbackService
         }
 
         var types = await GetTypesAsync(ct).ConfigureAwait(false);
-        if (!types.Contains(notice.Type))
+        if (!types.Contains(notice.Type.ToString()))
         {
             return;
         }
@@ -114,13 +117,53 @@ public sealed class OwnerFeedbackService
         }
     }
 
+    /// <summary>外部接口发消息后的反馈（伪类型 <see cref="ExternalMessageType"/>）。</summary>
+    public async Task NotifyExternalAsync(ChatRef chat, string text, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(chat);
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+
+        if (!await IsEnabledAsync(ct).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        var types = await GetTypesAsync(ct).ConfigureAwait(false);
+        if (!types.Contains(ExternalMessageType))
+        {
+            return;
+        }
+
+        var ownerId = await _settings.GetAsync("owner.userId", ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(ownerId))
+        {
+            return;
+        }
+
+        var target = await ResolveTargetAsync(ownerId, ct).ConfigureAwait(false);
+        try
+        {
+            await _channel.SendAsync(new OutgoingMessage
+            {
+                Chat = target,
+                Segments = [new TextSegment($"[外部接口] {chat.SessionId}：{text}")],
+            }, ct).ConfigureAwait(false);
+
+            _logger.Information("主人反馈已发送：ExternalMessage → {Session}", target.SessionId);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "主人反馈发送失败：ExternalMessage");
+        }
+    }
+
     public async Task<bool> IsEnabledAsync(CancellationToken ct = default)
     {
         var value = await _settings.GetAsync(EnabledKey, ct).ConfigureAwait(false);
         return value is "1" or "true" or "True";
     }
 
-    public async Task<IReadOnlySet<NoticeType>> GetTypesAsync(CancellationToken ct = default)
+    public async Task<IReadOnlySet<string>> GetTypesAsync(CancellationToken ct = default)
     {
         var raw = await _settings.GetAsync(TypesKey, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(raw))
@@ -128,13 +171,10 @@ public sealed class OwnerFeedbackService
             raw = DefaultTypes;
         }
 
-        var types = new HashSet<NoticeType>();
+        var types = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            if (Enum.TryParse<NoticeType>(item, ignoreCase: true, out var type) && Enum.IsDefined(type))
-            {
-                types.Add(type);
-            }
+            types.Add(item);
         }
 
         return types;

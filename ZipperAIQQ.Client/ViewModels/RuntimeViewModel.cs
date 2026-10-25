@@ -53,13 +53,31 @@ public sealed partial class RuntimeViewModel : ObservableObject
     public partial bool FeedbackEnabled { get; set; }
 
     [ObservableProperty]
-    public partial string FeedbackTypes { get; set; } = "MessageRecalled";
+    public partial bool FeedbackRecall { get; set; } = true;
+
+    [ObservableProperty]
+    public partial bool FeedbackExternal { get; set; }
 
     [ObservableProperty]
     public partial string FeedbackTarget { get; set; } = string.Empty;
 
     [ObservableProperty]
     public partial string FeedbackStatus { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial bool ExternalAllowSend { get; set; }
+
+    [ObservableProperty]
+    public partial string ExternalAllowedSessions { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string ExternalForwardUrl { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string ExternalForwardToken { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string ExternalStatus { get; set; } = string.Empty;
 
     partial void OnNoticeSearchChanged(string value) => ApplyNoticeFilter();
 
@@ -121,11 +139,20 @@ public sealed partial class RuntimeViewModel : ObservableObject
 
             var feedback = await _api.CallAsync<FeedbackDto>("getFeedback").ConfigureAwait(true);
             FeedbackEnabled = feedback?.Enabled == true;
-            FeedbackTypes = feedback?.Types is { Length: > 0 }
-                ? string.Join(", ", feedback.Types)
-                : "MessageRecalled";
+            var types = feedback?.Types ?? [];
+            FeedbackRecall = types.Contains("MessageRecalled", StringComparer.OrdinalIgnoreCase);
+            FeedbackExternal = types.Contains("ExternalMessage", StringComparer.OrdinalIgnoreCase);
             FeedbackTarget = feedback?.Target ?? string.Empty;
             FeedbackStatus = FeedbackEnabled ? "已开启" : "已关闭";
+
+            var external = await _api.CallAsync<ExternalDto>("getExternal").ConfigureAwait(true);
+            ExternalAllowSend = external?.AllowSend == true;
+            ExternalAllowedSessions = external?.AllowedSessions is { Length: > 0 }
+                ? string.Join(", ", external.AllowedSessions)
+                : string.Empty;
+            ExternalForwardUrl = external?.ForwardUrl ?? string.Empty;
+            ExternalForwardToken = string.Empty;
+            ExternalStatus = external?.HasForwardToken == true ? "已配置 token" : "未配置 token";
         }
         catch (Exception ex)
         {
@@ -210,8 +237,16 @@ public sealed partial class RuntimeViewModel : ObservableObject
     {
         try
         {
-            var types = FeedbackTypes
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var types = new List<string>();
+            if (FeedbackRecall)
+            {
+                types.Add("MessageRecalled");
+            }
+
+            if (FeedbackExternal)
+            {
+                types.Add("ExternalMessage");
+            }
 
             await _api.CallAsync<object>("setFeedback", new
             {
@@ -225,6 +260,33 @@ public sealed partial class RuntimeViewModel : ObservableObject
         catch (Exception ex)
         {
             FeedbackStatus = $"保存失败：{ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveExternalAsync()
+    {
+        try
+        {
+            var sessions = ExternalAllowedSessions
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            await _api.CallAsync<object>("setExternal", new
+            {
+                allowSend = ExternalAllowSend,
+                allowedSessions = sessions,
+                forwardUrl = ExternalForwardUrl.Trim(),
+                forwardToken = string.IsNullOrWhiteSpace(ExternalForwardToken)
+                    ? null
+                    : ExternalForwardToken.Trim(),
+            }).ConfigureAwait(true);
+
+            ExternalForwardToken = string.Empty;
+            ExternalStatus = "已保存（正向连接会立即重连）";
+        }
+        catch (Exception ex)
+        {
+            ExternalStatus = $"保存失败：{ex.Message}";
         }
     }
 }

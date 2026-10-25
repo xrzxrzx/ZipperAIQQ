@@ -11,20 +11,24 @@ namespace ZipperAIQQ.Server.External;
 public sealed class ExternalCommandHandler
 {
     private readonly IMessageChannel _channel;
-    private readonly ServerOptions _options;
+    private readonly ExternalOptionsService _external;
+    private readonly Feedback.OwnerFeedbackService _feedback;
     private readonly ILogger _logger;
 
     public ExternalCommandHandler(
         IMessageChannel channel,
-        ServerOptions options,
+        ExternalOptionsService external,
+        Feedback.OwnerFeedbackService feedback,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(external);
+        ArgumentNullException.ThrowIfNull(feedback);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
-        _options = options;
+        _external = external;
+        _feedback = feedback;
         _logger = logger;
     }
 
@@ -91,7 +95,7 @@ public sealed class ExternalCommandHandler
     {
         var requestId = ExternalProtocol.TryGetString(body, "requestId", out var rid) ? rid : null;
 
-        if (!_options.ExternalAllowSend)
+        if (!_external.Current.AllowSend)
         {
             session.Enqueue(ExternalProtocol.Ack(requestId, false, "外部发消息未开启（external.allowSend=false）。"));
             return;
@@ -132,6 +136,8 @@ public sealed class ExternalCommandHandler
 
             _logger.Information("外部应用已发送消息：{Session}", chat.SessionId);
             session.Enqueue(ExternalProtocol.Ack(requestId, true));
+
+            await _feedback.NotifyExternalAsync(chat, text, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -142,7 +148,7 @@ public sealed class ExternalCommandHandler
 
     private bool IsAllowed(string sessionId)
     {
-        var allowed = _options.ExternalAllowedSessions;
+        var allowed = _external.Current.AllowedSessions;
         if (allowed.Count == 0)
         {
             return true;

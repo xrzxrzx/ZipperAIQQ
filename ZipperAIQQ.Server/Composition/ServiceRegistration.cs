@@ -181,10 +181,13 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, GetFeedbackAction>();
         services.AddSingleton<IApiAction, SetFeedbackAction>();
 
-        // 外部 WS（问题记录 03 #5）：反向连入 + 正向连出
+        // 外部 WS（问题记录 03 #5）：反向连入 + 正向连出（配置可客户端热改）
+        services.AddSingleton<ExternalOptionsService>();
         services.AddSingleton<ExternalWsHub>();
         services.AddSingleton<ExternalCommandHandler>();
         services.AddHostedService<ForwardWsClient>();
+        services.AddSingleton<IApiAction, GetExternalAction>();
+        services.AddSingleton<IApiAction, SetExternalAction>();
 
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();

@@ -118,6 +118,9 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     var runtimeConfig = app.Services.GetRequiredService<RuntimeConfigService>();
     await runtimeConfig.SeedFromEnvironmentAsync(options);
 
+    // 外部 WS 配置（客户端可改）先读回 RuntimeSettings
+    await app.Services.GetRequiredService<ExternalOptionsService>().InitializeAsync();
+
     // 按运行配置建（或重建）LLM 客户端；配置写错只会保留旧客户端，不会起不来
     await app.Services.GetRequiredService<IChatClientProvider>().ReloadAsync();
 

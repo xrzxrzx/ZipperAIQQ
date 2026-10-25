@@ -637,6 +637,22 @@ public sealed class LogLineDto
     public string Display => $"[{TimeText} {Level}] {Message}";
 }
 
+/// <summary>外部 WS 配置（问题记录 03 #5）。</summary>
+public sealed class ExternalDto
+{
+    [JsonPropertyName("allowSend")]
+    public bool AllowSend { get; set; }
+
+    [JsonPropertyName("allowedSessions")]
+    public string[] AllowedSessions { get; set; } = [];
+
+    [JsonPropertyName("forwardUrl")]
+    public string ForwardUrl { get; set; } = string.Empty;
+
+    [JsonPropertyName("hasForwardToken")]
+    public bool HasForwardToken { get; set; }
+}
+
 /// <summary>主人反馈设置（问题记录 03 #4）。</summary>
 public sealed class FeedbackDto
 {

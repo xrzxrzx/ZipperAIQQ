@@ -148,8 +148,8 @@
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
                     <ToggleSwitch Header="启用主人反馈" IsOn="{x:Bind Vm.FeedbackEnabled, Mode=TwoWay}" />
-                    <TextBox Header="通知类型（逗号分隔，如 MessageRecalled, GroupIncrease）"
-                             Text="{x:Bind Vm.FeedbackTypes, Mode=TwoWay}" />
+                    <ToggleSwitch Header="撤回消息（带原文）" IsOn="{x:Bind Vm.FeedbackRecall, Mode=TwoWay}" />
+                    <ToggleSwitch Header="外部接口消息" IsOn="{x:Bind Vm.FeedbackExternal, Mode=TwoWay}" />
                     <TextBox Header="目标会话（留空 = 主人私聊；可填 qq:p123 / qq:g456）"
                              Text="{x:Bind Vm.FeedbackTarget, Mode=TwoWay}" />
 
@@ -157,6 +157,30 @@
                         <Button Content="保存主人反馈" Style="{StaticResource JpAccentButtonStyle}"
                                 Command="{x:Bind Vm.SaveFeedbackCommand}" />
                         <TextBlock Text="{x:Bind Vm.FeedbackStatus, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- 外部接口（WS）配置 -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="外部接口（WebSocket）" Style="{StaticResource SectionHeaderStyle}" />
+                    <TextBlock Text="反向端点：ws://服务端地址/ws/ext（Bearer token）。正向填外部应用地址后由服务端主动连出。"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                    <ToggleSwitch Header="允许外部应用发消息" IsOn="{x:Bind Vm.ExternalAllowSend, Mode=TwoWay}" />
+                    <TextBox Header="允许的会话（逗号分隔，留空=全部；支持 qq:p*）"
+                             Text="{x:Bind Vm.ExternalAllowedSessions, Mode=TwoWay}" />
+                    <TextBox Header="正向 WS 地址（ws:// 或 wss://，留空=不连出）"
+                             Text="{x:Bind Vm.ExternalForwardUrl, Mode=TwoWay}" />
+                    <TextBox Header="正向 WS token（留空=保持原值）"
+                             Text="{x:Bind Vm.ExternalForwardToken, Mode=TwoWay}" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button Content="保存外部接口" Style="{StaticResource JpAccentButtonStyle}"
+                                Command="{x:Bind Vm.SaveExternalCommand}" />
+                        <TextBlock Text="{x:Bind Vm.ExternalStatus, Mode=OneWay}"
                                    Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
                     </StackPanel>
                 </StackPanel>

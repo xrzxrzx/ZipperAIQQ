@@ -66,23 +66,35 @@ public sealed class SetFeedbackAction : IApiAction
         var enabled = payload.TryGetProperty("enabled", out var enabledElement) &&
                       enabledElement.ValueKind is JsonValueKind.True;
 
-        var types = new List<NoticeType>();
+        var types = new List<string>();
         if (payload.TryGetProperty("types", out var typesElement) &&
             typesElement.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in typesElement.EnumerateArray())
             {
-                var text = item.GetString();
-                if (string.IsNullOrWhiteSpace(text) ||
-                    !Enum.TryParse<NoticeType>(text, ignoreCase: true, out var type) ||
-                    !Enum.IsDefined(type))
+                var text = item.GetString()?.Trim();
+                if (string.IsNullOrWhiteSpace(text))
                 {
-                    throw new ApiException(ApiResponse.BadRequest, $"未知的通知类型：{text}");
+                    continue;
                 }
 
-                if (!types.Contains(type))
+                if (string.Equals(text, OwnerFeedbackService.ExternalMessageType, StringComparison.OrdinalIgnoreCase))
                 {
-                    types.Add(type);
+                    if (!types.Contains(OwnerFeedbackService.ExternalMessageType))
+                    {
+                        types.Add(OwnerFeedbackService.ExternalMessageType);
+                    }
+                }
+                else if (Enum.TryParse<NoticeType>(text, ignoreCase: true, out var type) && Enum.IsDefined(type))
+                {
+                    if (!types.Contains(type.ToString()))
+                    {
+                        types.Add(type.ToString());
+                    }
+                }
+                else
+                {
+                    throw new ApiException(ApiResponse.BadRequest, $"未知的通知类型：{text}");
                 }
             }
         }
@@ -118,8 +130,7 @@ public sealed class SetFeedbackAction : IApiAction
         return new
         {
             enabled,
-            types = types.Select(t => t.ToString()).ToList(),
-            target,
+            types = types.Select(t => t.ToString()).ToList(),            target,
         };
     }
 }
