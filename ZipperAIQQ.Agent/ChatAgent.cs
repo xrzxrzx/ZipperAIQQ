@@ -315,6 +315,15 @@ public sealed class ChatAgent : IChatAgent
         reinject.AppendLine();
         reinject.Append(await BuildRelationshipNoteAsync(request.Sender.UserId, ct).ConfigureAwait(false));
 
+        // 自我身份（问题记录 02 #3/#4）：模型不知道自己的 QQ 号，
+        // 就会把「A 戳了 B」当成「有人在戳我」。
+        var selfId = _channel.SelfId ?? _options.SelfId;
+        if (!string.IsNullOrWhiteSpace(selfId))
+        {
+            reinject.AppendLine().AppendLine()
+                    .AppendLine($"【你自己是谁】你的 QQ 号是 {selfId}；群里/消息里出现这个号，指的就是你本人。");
+        }
+
         // 人设守卫（第 20 项）：每次重注入都带，位置紧贴当前消息 ——
         // 长对话里人设会被上下文稀释，靠这一条把它拉回来。
         // 主人有例外（问题记录 02 #2）：主人要求改设定/称呼/扮演时照做。
@@ -346,7 +355,7 @@ public sealed class ChatAgent : IChatAgent
         var tool = SendMessageTool.Create(
             _channel,
             _store,
-            BotUserId,
+            selfId ?? BotUserId,
             request.Chat,
             _options.MaxMessagesPerCall,
             ct => _sendThrottle.WaitAsync(_options.MinSendIntervalMs, ct),
@@ -843,7 +852,7 @@ public sealed class ChatAgent : IChatAgent
 
         try
         {
-            await _store.AppendOutgoingAsync(outgoing, BotUserId, BeijingTime.Now, ct).ConfigureAwait(false);
+            await _store.AppendOutgoingAsync(outgoing, _channel.SelfId ?? _options.SelfId ?? BotUserId, BeijingTime.Now, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

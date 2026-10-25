@@ -27,6 +27,9 @@ public sealed record ChatAgentOptions
     /// </remarks>
     public int MinSendIntervalMs { get; init; } = 0;
 
+    /// <summary>机器人自身账号（配置兜底；运行时优先用通道动态 SelfId）。</summary>
+    public string? SelfId { get; init; }
+
     /// <summary>上下文里保留多少条历史消息（热窗，FR-3）。</summary>
     public int HotWindowMessages { get; init; } = 20;
 }

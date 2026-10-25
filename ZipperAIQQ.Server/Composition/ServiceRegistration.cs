@@ -22,6 +22,7 @@ using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Contacts;
+using ZipperAIQQ.Server.Identity;
 using ZipperAIQQ.Server.Logs;
 using ZipperAIQQ.Server.Notices;
 using ZipperAIQQ.Server.Orchestration;
@@ -137,6 +138,10 @@ public static class ServiceRegistration
         // #36：重启（优雅停止 + 外部守护拉起）
         services.AddSingleton<IServerRestartService, ServerRestartService>();
         services.AddSingleton<IApiAction, RestartServerAction>();
+
+        // 自我身份（问题记录 02 #3）：通道发现 self_id 后持久化，并提供只读诊断
+        services.AddHostedService<SelfIdRecorder>();
+        services.AddSingleton<IApiAction, GetSelfInfoAction>();
 
         // #38：网页搜索（DeepSeek 官方 /v1/tools/search + /v1/tools/fetch）
         services.AddHttpClient();
@@ -331,6 +336,7 @@ public static class ServiceRegistration
         // 也就是说「发送限速=300ms」只打印在启动日志里，实际根本没生效。
         MinSendIntervalMs = options.SendIntervalMs,
         HotWindowMessages = options.HotWindowMessages,
+        SelfId = options.SelfId,
     };
 
     /// <summary>读取全局人设文件；读不到就用兜底文案。</summary>

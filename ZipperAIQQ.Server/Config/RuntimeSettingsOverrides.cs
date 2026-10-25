@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Serilog;
 using ZipperAIQQ.Server.Configuration;
+using ZipperAIQQ.Server.Identity;
 
 namespace ZipperAIQQ.Server.Config;
 
@@ -57,6 +58,17 @@ public static class RuntimeSettingsOverrides
             var fileMax = await ReadAsync(NumericSettingsSchema.FileMaxBytesKey).ConfigureAwait(false);
             var hotWindow = await ReadAsync(NumericSettingsSchema.HotWindowKey).ConfigureAwait(false);
 
+            string? persistedSelfId = null;
+            await using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT Value FROM RuntimeSettings WHERE Key = @key;";
+                cmd.Parameters.AddWithValue("@key", SelfIdRecorder.StorageKey);
+                var value = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+                persistedSelfId = value is null or DBNull
+                    ? null
+                    : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+
             var merged = options with
             {
                 SendIntervalMs = (int)(interval ?? options.SendIntervalMs),
@@ -64,6 +76,7 @@ public static class RuntimeSettingsOverrides
                 CooldownMs = (int)(cooldown ?? options.CooldownMs),
                 FileMaxBytes = (int)(fileMax ?? options.FileMaxBytes),
                 HotWindowMessages = (int)(hotWindow ?? options.HotWindowMessages),
+                SelfId = string.IsNullOrWhiteSpace(options.SelfId) ? persistedSelfId : options.SelfId,
             };
 
             if (interval is not null || hotWindow is not null || fileMax is not null)

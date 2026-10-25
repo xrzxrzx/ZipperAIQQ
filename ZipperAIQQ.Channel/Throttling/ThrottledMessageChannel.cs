@@ -64,6 +64,14 @@ public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory
 
     public string Platform => _inner.Platform;
 
+    public string? SelfId => _inner.SelfId;
+
+    public event Action<string>? SelfIdChanged
+    {
+        add => _inner.SelfIdChanged += value;
+        remove => _inner.SelfIdChanged -= value;
+    }
+
     public ChannelCapabilities Capabilities => _inner.Capabilities;
 
     public Task StartAsync(CancellationToken ct = default) => _inner.StartAsync(ct);

@@ -20,6 +20,19 @@ public interface IMessageChannel
     string Platform { get; }
 
     /// <summary>
+    /// 机器人自身在该平台的账号；未知时为 <c>null</c>。
+    /// </summary>
+    /// <remarks>用于过滤自激通知，以及让模型知道「哪个号是自己」。</remarks>
+    string? SelfId => null;
+
+    /// <summary>首次发现 / 变更自身账号时触发（供持久化与日志）。</summary>
+    event Action<string>? SelfIdChanged
+    {
+        add { }
+        remove { }
+    }
+
+    /// <summary>
     /// 建立连接（若通道需要）。已连接的实现应幂等。
     /// </summary>
     Task StartAsync(CancellationToken ct = default);
