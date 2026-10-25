@@ -26,7 +26,17 @@ public sealed class ExternalWsHubTests
     }
 
     private static ExternalWsHub CreateHub() =>
-        new(new LoggerConfiguration().CreateLogger(), new FakeChannel());
+        new(
+            new LoggerConfiguration().CreateLogger(),
+            new FakeChannel(),
+            new ZipperAIQQ.Server.Configuration.ServerOptions
+            {
+                NapCatWebSocketUrl = "ws://test",
+                LlmApiKey = "test",
+                LlmBaseUrl = "https://test",
+                LlmModel = "test",
+                SelfId = "10001",
+            });
 
     private static IncomingMessage Message() => new()
     {

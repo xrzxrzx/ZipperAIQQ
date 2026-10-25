@@ -60,14 +60,15 @@ public sealed class ExternalWsHub
     private readonly ChannelCapabilities _capabilities;
     private readonly string? _selfId;
 
-    public ExternalWsHub(ILogger logger, IMessageChannel channel)
+    public ExternalWsHub(ILogger logger, IMessageChannel channel, Configuration.ServerOptions options)
     {
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(options);
 
         _logger = logger;
         _capabilities = channel.Capabilities;
-        _selfId = channel.SelfId;
+        _selfId = channel.SelfId ?? options.SelfId;
     }
 
     public int Count => _sessions.Count;
