@@ -26,20 +26,24 @@ public sealed class GetExternalAction : IApiAction
             allowedSessions = current.AllowedSessions,
             reverseServers = current.ReverseServers.Select(s => new
             {
+                name = s.Name,
                 host = s.Host,
                 port = s.Port,
-                hasToken = !string.IsNullOrWhiteSpace(s.Token),
+                token = s.Token ?? string.Empty,
+                enabled = s.Enabled,
             }),
             forwardServers = current.ForwardServers.Select(s => new
             {
+                name = s.Name,
                 url = s.Url,
-                hasToken = !string.IsNullOrWhiteSpace(s.Token),
+                token = s.Token ?? string.Empty,
+                enabled = s.Enabled,
             }),
         });
     }
 }
 
-/// <summary>保存外部 WS 配置；每块 token 留空表示沿用同 host:port / url 的旧值。</summary>
+/// <summary>保存外部 WS 配置（反向 / 正向都是列表，各自可启停）。</summary>
 public sealed class SetExternalAction : IApiAction
 {
     private readonly ExternalOptionsService _external;
@@ -83,18 +87,13 @@ public sealed class SetExternalAction : IApiAction
             }
         }
 
-        var existingReverse = _external.Current.ReverseServers;
         var reverse = new List<ExternalReverseServer>();
         if (payload.TryGetProperty("reverseServers", out var reverseElement) &&
             reverseElement.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in reverseElement.EnumerateArray())
             {
-                var host = item.TryGetProperty("host", out var hostElement) &&
-                           hostElement.ValueKind == JsonValueKind.String
-                    ? hostElement.GetString()?.Trim()
-                    : null;
-
+                var host = ReadString(item, "host") ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(host))
                 {
                     throw new ApiException(ApiResponse.BadRequest, "反向监听的主机不能为空。");
@@ -116,33 +115,24 @@ public sealed class SetExternalAction : IApiAction
                     throw new ApiException(ApiResponse.BadRequest, $"重复的监听：{host}:{port}");
                 }
 
-                var token = item.TryGetProperty("token", out var tokenElement) &&
-                            tokenElement.ValueKind == JsonValueKind.String
-                    ? tokenElement.GetString()?.Trim()
-                    : null;
-
-                if (string.IsNullOrWhiteSpace(token))
+                reverse.Add(new ExternalReverseServer
                 {
-                    token = existingReverse
-                        .FirstOrDefault(s => s.Host == host && s.Port == port)?.Token;
-                }
-
-                reverse.Add(new ExternalReverseServer(host, port, token));
+                    Name = ReadString(item, "name") ?? "反向监听",
+                    Host = host.Trim(),
+                    Port = port,
+                    Token = NullIfEmpty(ReadString(item, "token")),
+                    Enabled = ReadBool(item, "enabled", true),
+                });
             }
         }
 
-        var existingForward = _external.Current.ForwardServers;
         var forward = new List<ExternalForwardServer>();
         if (payload.TryGetProperty("forwardServers", out var forwardElement) &&
             forwardElement.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in forwardElement.EnumerateArray())
             {
-                var url = item.TryGetProperty("url", out var urlElement) &&
-                          urlElement.ValueKind == JsonValueKind.String
-                    ? urlElement.GetString()?.Trim()
-                    : null;
-
+                var url = ReadString(item, "url") ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(url) ||
                     !Uri.TryCreate(url, UriKind.Absolute, out var parsedUrl) ||
                     parsedUrl.Scheme is not ("ws" or "wss"))
@@ -155,18 +145,13 @@ public sealed class SetExternalAction : IApiAction
                     throw new ApiException(ApiResponse.BadRequest, $"重复的正向地址：{url}");
                 }
 
-                var token = item.TryGetProperty("token", out var tokenElement) &&
-                            tokenElement.ValueKind == JsonValueKind.String
-                    ? tokenElement.GetString()?.Trim()
-                    : null;
-
-                if (string.IsNullOrWhiteSpace(token))
+                forward.Add(new ExternalForwardServer
                 {
-                    token = existingForward
-                        .FirstOrDefault(s => string.Equals(s.Url, url, StringComparison.OrdinalIgnoreCase))?.Token;
-                }
-
-                forward.Add(new ExternalForwardServer(url, token));
+                    Name = ReadString(item, "name") ?? "正向连接",
+                    Url = url.Trim(),
+                    Token = NullIfEmpty(ReadString(item, "token")),
+                    Enabled = ReadBool(item, "enabled", true),
+                });
             }
         }
 
@@ -176,8 +161,22 @@ public sealed class SetExternalAction : IApiAction
         {
             allowSend,
             allowedSessions = sessions,
-            reverseServers = reverse.Select(s => new { host = s.Host, port = s.Port, hasToken = !string.IsNullOrWhiteSpace(s.Token) }),
-            forwardServers = forward.Select(s => new { url = s.Url, hasToken = !string.IsNullOrWhiteSpace(s.Token) }),
+            reverseServers = reverse.Select(s => new { name = s.Name, host = s.Host, port = s.Port, token = s.Token ?? string.Empty, enabled = s.Enabled }),
+            forwardServers = forward.Select(s => new { name = s.Name, url = s.Url, token = s.Token ?? string.Empty, enabled = s.Enabled }),
         };
     }
+
+    private static string? ReadString(JsonElement item, string name) =>
+        item.TryGetProperty(name, out var element) && element.ValueKind == JsonValueKind.String
+            ? element.GetString()?.Trim()
+            : null;
+
+    private static bool ReadBool(JsonElement item, string name, bool fallback) =>
+        item.TryGetProperty(name, out var element) &&
+        element.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? element.GetBoolean()
+            : fallback;
+
+    private static string? NullIfEmpty(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

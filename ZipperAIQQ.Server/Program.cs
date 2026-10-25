@@ -82,6 +82,11 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     var listenUrls = new List<string> { $"http://{options.HttpAddress}" };
     foreach (var server in options.ExternalReverseServers)
     {
+        if (!server.Enabled)
+        {
+            continue;
+        }
+
         if (System.Net.IPAddress.TryParse(server.Host, out _) ||
             string.Equals(server.Host, "localhost", StringComparison.OrdinalIgnoreCase))
         {

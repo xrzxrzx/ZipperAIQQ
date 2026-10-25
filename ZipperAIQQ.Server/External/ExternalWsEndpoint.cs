@@ -33,7 +33,7 @@ public static class ExternalWsEndpoint
 
             var token = ExtractToken(context.Request);
             var block = external.Current.ReverseServers
-                .FirstOrDefault(s => s.Port == context.Connection.LocalPort);
+                .FirstOrDefault(s => s.Enabled && s.Port == context.Connection.LocalPort);
             var tokenAllowed =
                 (!string.IsNullOrWhiteSpace(block?.Token) && string.Equals(block.Token, token, StringComparison.Ordinal));
 

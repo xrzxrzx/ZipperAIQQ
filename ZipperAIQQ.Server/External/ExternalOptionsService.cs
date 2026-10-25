@@ -45,7 +45,15 @@ public sealed class ExternalOptionsService
 
         IReadOnlyList<ExternalForwardServer> forward = string.IsNullOrWhiteSpace(bootstrap.ExternalForwardUrl)
             ? Array.Empty<ExternalForwardServer>()
-            : new[] { new ExternalForwardServer(bootstrap.ExternalForwardUrl, bootstrap.ExternalForwardToken) };
+            : new[]
+            {
+                new ExternalForwardServer
+                {
+                    Name = "启动配置",
+                    Url = bootstrap.ExternalForwardUrl,
+                    Token = bootstrap.ExternalForwardToken,
+                },
+            };
 
         _current = new ExternalSnapshot(
             bootstrap.ExternalAllowSend,

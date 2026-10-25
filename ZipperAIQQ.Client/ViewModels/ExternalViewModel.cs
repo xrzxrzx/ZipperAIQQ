@@ -6,9 +6,25 @@ using ZipperAIQQ.Client.Services;
 
 namespace ZipperAIQQ.Client.ViewModels;
 
-/// <summary>反向 WS 监听块（页面里可增删）。</summary>
-public sealed partial class ReverseServerItem : ObservableObject
+/// <summary>一个外部 WS 配置块（反向或正向）。</summary>
+public sealed partial class ExternalServerItem : ObservableObject
 {
+    public required string Kind { get; init; }
+
+    public bool IsReverse => Kind == "reverse";
+
+    public string TypeText => IsReverse ? "Websocket 服务器" : "Websocket 客户端";
+
+    public string EndpointText => IsReverse ? $"{Host}:{Port:0}" : Url;
+
+    public string TokenText => string.IsNullOrWhiteSpace(Token) ? "未设置 Token" : "已设置 Token";
+
+    [ObservableProperty]
+    public partial string Name { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial bool Enabled { get; set; } = true;
+
     [ObservableProperty]
     public partial string Host { get; set; } = "0.0.0.0";
 
@@ -16,23 +32,18 @@ public sealed partial class ReverseServerItem : ObservableObject
     public partial double Port { get; set; } = 5181;
 
     [ObservableProperty]
-    public partial string Token { get; set; } = string.Empty;
-
-    [ObservableProperty]
-    public partial bool HasToken { get; set; }
-}
-
-/// <summary>正向 WS 目标块。</summary>
-public sealed partial class ForwardServerItem : ObservableObject
-{
-    [ObservableProperty]
     public partial string Url { get; set; } = string.Empty;
 
     [ObservableProperty]
     public partial string Token { get; set; } = string.Empty;
 
-    [ObservableProperty]
-    public partial bool HasToken { get; set; }
+    partial void OnHostChanged(string value) => OnPropertyChanged(nameof(EndpointText));
+
+    partial void OnPortChanged(double value) => OnPropertyChanged(nameof(EndpointText));
+
+    partial void OnUrlChanged(string value) => OnPropertyChanged(nameof(EndpointText));
+
+    partial void OnTokenChanged(string value) => OnPropertyChanged(nameof(TokenText));
 }
 
 /// <summary>外部接口（WS）配置页（问题记录 03 #5）。</summary>
@@ -46,9 +57,11 @@ public sealed partial class ExternalViewModel : ObservableObject
         _api = api;
     }
 
-    public ObservableCollection<ReverseServerItem> ReverseServers { get; } = [];
+    public ObservableCollection<ExternalServerItem> AllServers { get; } = [];
 
-    public ObservableCollection<ForwardServerItem> ForwardServers { get; } = [];
+    public ObservableCollection<ExternalServerItem> ReverseServers { get; } = [];
+
+    public ObservableCollection<ExternalServerItem> ForwardServers { get; } = [];
 
     [ObservableProperty]
     public partial bool AllowSend { get; set; }
@@ -70,27 +83,39 @@ public sealed partial class ExternalViewModel : ObservableObject
                 ? string.Join(", ", external.AllowedSessions)
                 : string.Empty;
 
+            AllServers.Clear();
             ReverseServers.Clear();
+            ForwardServers.Clear();
+
             foreach (var item in external?.ReverseServers ?? [])
             {
-                ReverseServers.Add(new ReverseServerItem
+                var server = new ExternalServerItem
                 {
+                    Kind = "reverse",
+                    Name = string.IsNullOrWhiteSpace(item.Name) ? "反向监听" : item.Name,
+                    Enabled = item.Enabled,
                     Host = item.Host,
                     Port = item.Port,
-                    Token = string.Empty,
-                    HasToken = item.HasToken,
-                });
+                    Token = item.Token,
+                };
+
+                AllServers.Add(server);
+                ReverseServers.Add(server);
             }
 
-            ForwardServers.Clear();
             foreach (var item in external?.ForwardServers ?? [])
             {
-                ForwardServers.Add(new ForwardServerItem
+                var server = new ExternalServerItem
                 {
+                    Kind = "forward",
+                    Name = string.IsNullOrWhiteSpace(item.Name) ? "正向连接" : item.Name,
+                    Enabled = item.Enabled,
                     Url = item.Url,
-                    Token = string.Empty,
-                    HasToken = item.HasToken,
-                });
+                    Token = item.Token,
+                };
+
+                AllServers.Add(server);
+                ForwardServers.Add(server);
             }
 
             Status = "已加载";
@@ -101,13 +126,41 @@ public sealed partial class ExternalViewModel : ObservableObject
         }
     }
 
-    public void AddReverse() => ReverseServers.Add(new ReverseServerItem());
+    public ExternalServerItem AddReverse()
+    {
+        var server = new ExternalServerItem
+        {
+            Kind = "reverse",
+            Name = "反向监听",
+            Host = "0.0.0.0",
+            Port = 5181,
+        };
 
-    public void RemoveReverse(ReverseServerItem item) => ReverseServers.Remove(item);
+        AllServers.Add(server);
+        ReverseServers.Add(server);
+        return server;
+    }
 
-    public void AddForward() => ForwardServers.Add(new ForwardServerItem());
+    public ExternalServerItem AddForward()
+    {
+        var server = new ExternalServerItem
+        {
+            Kind = "forward",
+            Name = "正向连接",
+            Url = "ws://",
+        };
 
-    public void RemoveForward(ForwardServerItem item) => ForwardServers.Remove(item);
+        AllServers.Add(server);
+        ForwardServers.Add(server);
+        return server;
+    }
+
+    public void Remove(ExternalServerItem item)
+    {
+        AllServers.Remove(item);
+        ReverseServers.Remove(item);
+        ForwardServers.Remove(item);
+    }
 
     [RelayCommand]
     private async Task SaveAsync()
@@ -117,18 +170,28 @@ public sealed partial class ExternalViewModel : ObservableObject
             var sessions = AllowedSessions
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-            var reverse = ReverseServers.Select(s => new
-            {
-                host = s.Host.Trim(),
-                port = (int)s.Port,
-                token = string.IsNullOrWhiteSpace(s.Token) ? null : s.Token.Trim(),
-            }).ToList();
+            var reverse = AllServers
+                .Where(s => s.IsReverse)
+                .Select(s => new
+                {
+                    name = s.Name.Trim(),
+                    host = s.Host.Trim(),
+                    port = (int)s.Port,
+                    token = s.Token.Trim(),
+                    enabled = s.Enabled,
+                })
+                .ToList();
 
-            var forward = ForwardServers.Select(s => new
-            {
-                url = s.Url.Trim(),
-                token = string.IsNullOrWhiteSpace(s.Token) ? null : s.Token.Trim(),
-            }).ToList();
+            var forward = AllServers
+                .Where(s => !s.IsReverse)
+                .Select(s => new
+                {
+                    name = s.Name.Trim(),
+                    url = s.Url.Trim(),
+                    token = s.Token.Trim(),
+                    enabled = s.Enabled,
+                })
+                .ToList();
 
             await _api.CallAsync<object>("setExternal", new
             {

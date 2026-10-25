@@ -41,7 +41,7 @@ public sealed class ForwardWsClient : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             var targets = _external.Current.ForwardServers
-                .Where(t => !string.IsNullOrWhiteSpace(t.Url))
+                .Where(t => t.Enabled && !string.IsNullOrWhiteSpace(t.Url))
                 .DistinctBy(t => t.Url, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 

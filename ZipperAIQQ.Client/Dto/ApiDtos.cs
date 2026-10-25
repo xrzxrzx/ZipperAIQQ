@@ -640,24 +640,36 @@ public sealed class LogLineDto
 /// <summary>反向 WS 监听块（问题记录 03 #5）。</summary>
 public sealed class ReverseServerDto
 {
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
     [JsonPropertyName("host")]
     public string Host { get; set; } = string.Empty;
 
     [JsonPropertyName("port")]
     public int Port { get; set; }
 
-    [JsonPropertyName("hasToken")]
-    public bool HasToken { get; set; }
+    [JsonPropertyName("token")]
+    public string Token { get; set; } = string.Empty;
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>正向 WS 目标块。</summary>
 public sealed class ForwardServerDto
 {
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
     [JsonPropertyName("url")]
     public string Url { get; set; } = string.Empty;
 
-    [JsonPropertyName("hasToken")]
-    public bool HasToken { get; set; }
+    [JsonPropertyName("token")]
+    public string Token { get; set; } = string.Empty;
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>外部 WS 配置（问题记录 03 #5）。</summary>
