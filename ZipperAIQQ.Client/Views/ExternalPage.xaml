@@ -127,18 +127,6 @@
                     </GridView>
                 </PivotItem>
             </Pivot>
-
-            <Border Style="{StaticResource CardStyle}">
-                <StackPanel Spacing="6">
-                    <TextBlock Text="接入说明" Style="{StaticResource SectionHeaderStyle}" />
-                    <TextBlock Text="反向端点：ws://主机:端口/ws/ext；鉴权 Bearer token（服务端 token 或该监听块 token）。"
-                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-                    <TextBlock Text="帧协议：hello / event / ack / subscribe / send / ping（docs/05-契约/external-ws.md）。"
-                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-                    <TextBlock Text="外部应用发的消息不会触发 AI 回复；是否允许发送由上方开关与会话白名单控制。"
-                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-                </StackPanel>
-            </Border>
         </StackPanel>
     </ScrollViewer>
 </Page>

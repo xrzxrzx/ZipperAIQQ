@@ -98,7 +98,20 @@ public sealed partial class ExternalPage : Page
             PrimaryButtonText = "保存",
             CloseButtonText = "关闭",
             DefaultButton = ContentDialogButton.Primary,
+            RequestedTheme = ElementTheme.Dark,
         };
+
+        if (Application.Current.Resources.TryGetValue("JpAccentButtonStyle", out var accent) &&
+            accent is Style accentStyle)
+        {
+            dialog.PrimaryButtonStyle = accentStyle;
+        }
+
+        if (Application.Current.Resources.TryGetValue("JpButtonStyle", out var normal) &&
+            normal is Style normalStyle)
+        {
+            dialog.CloseButtonStyle = normalStyle;
+        }
 
         dialog.PrimaryButtonClick += (_, args) =>
         {
