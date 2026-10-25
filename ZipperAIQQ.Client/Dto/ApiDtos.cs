@@ -650,6 +650,16 @@ public sealed class ReverseServerDto
     public bool HasToken { get; set; }
 }
 
+/// <summary>正向 WS 目标块。</summary>
+public sealed class ForwardServerDto
+{
+    [JsonPropertyName("url")]
+    public string Url { get; set; } = string.Empty;
+
+    [JsonPropertyName("hasToken")]
+    public bool HasToken { get; set; }
+}
+
 /// <summary>外部 WS 配置（问题记录 03 #5）。</summary>
 public sealed class ExternalDto
 {
@@ -659,14 +669,11 @@ public sealed class ExternalDto
     [JsonPropertyName("allowedSessions")]
     public string[] AllowedSessions { get; set; } = [];
 
-    [JsonPropertyName("forwardUrl")]
-    public string ForwardUrl { get; set; } = string.Empty;
-
-    [JsonPropertyName("hasForwardToken")]
-    public bool HasForwardToken { get; set; }
-
     [JsonPropertyName("reverseServers")]
     public ReverseServerDto[] ReverseServers { get; set; } = [];
+
+    [JsonPropertyName("forwardServers")]
+    public ForwardServerDto[] ForwardServers { get; set; } = [];
 }
 
 /// <summary>主人反馈设置（问题记录 03 #4）。</summary>

@@ -80,8 +80,19 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
 
     // M2-A：Kestrel 监听主地址 + 外部 WS 的反向监听块（host:port）
     var listenUrls = new List<string> { $"http://{options.HttpAddress}" };
-    listenUrls.AddRange(options.ExternalReverseServers
-        .Select(s => $"http://{s.Host}:{s.Port}"));
+    foreach (var server in options.ExternalReverseServers)
+    {
+        if (System.Net.IPAddress.TryParse(server.Host, out _) ||
+            string.Equals(server.Host, "localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            listenUrls.Add($"http://{server.Host}:{server.Port}");
+        }
+        else
+        {
+            Log.Warning("反向监听主机无法解析，已跳过：{Host}:{Port}", server.Host, server.Port);
+        }
+    }
+
     builder.WebHost.UseUrls(listenUrls.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
 
     var app = builder.Build();

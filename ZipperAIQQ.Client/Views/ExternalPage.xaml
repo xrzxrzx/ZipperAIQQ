@@ -9,89 +9,158 @@
     <ScrollViewer Padding="32">
         <StackPanel Spacing="16" HorizontalAlignment="Stretch">
 
-            <TextBlock Text="外部接口" Style="{StaticResource PageTitleStyle}" />
-            <TextBlock Text="供第三方应用接入的 WebSocket 接口（反向：外部连入；正向：服务端主动连出）"
-                       Style="{StaticResource CaptionStyle}" Margin="0,-8,0,4" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Spacing="4">
+                    <TextBlock Text="外部接口" Style="{StaticResource PageTitleStyle}" />
+                    <TextBlock Text="WebSocket 接入：反向（外部连入） / 正向（服务端主动连出）"
+                               Style="{StaticResource CaptionStyle}" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Bottom">
+                    <Button Content="保存" Style="{StaticResource JpAccentButtonStyle}"
+                            Command="{x:Bind Vm.SaveCommand}" />
+                    <TextBlock Text="{x:Bind Vm.Status, Mode=OneWay}"
+                               Style="{StaticResource CaptionStyle}" VerticalAlignment="Center"
+                               MaxWidth="320" TextWrapping="Wrap" />
+                </StackPanel>
+            </Grid>
 
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="10">
-                    <TextBlock Text="连接与权限" Style="{StaticResource SectionHeaderStyle}" />
-
+                    <TextBlock Text="通用" Style="{StaticResource SectionHeaderStyle}" />
                     <ToggleSwitch Header="允许外部应用发消息" IsOn="{x:Bind Vm.AllowSend, Mode=TwoWay}" />
                     <TextBox Header="允许的会话（逗号分隔，留空=全部；支持 qq:p*）"
                              Text="{x:Bind Vm.AllowedSessions, Mode=TwoWay}" />
-                    <TextBox Header="正向 WS 地址（ws:// 或 wss://，留空=不连出）"
-                             Text="{x:Bind Vm.ForwardUrl, Mode=TwoWay}" />
-                    <TextBox Header="正向 WS token（留空=保持原值）"
-                             Text="{x:Bind Vm.ForwardToken, Mode=TwoWay}" />
-
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Button Content="保存" Style="{StaticResource JpAccentButtonStyle}"
-                                Command="{x:Bind Vm.SaveCommand}" />
-                        <Button Content="重新加载" Style="{StaticResource JpButtonStyle}"
-                                Command="{x:Bind Vm.LoadCommand}" />
-                        <TextBlock Text="{x:Bind Vm.Status, Mode=OneWay}"
-                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center"
-                                   TextWrapping="Wrap" />
-                    </StackPanel>
                 </StackPanel>
             </Border>
 
-            <!-- 反向监听：参考 NapCat 的多配置块 -->
-            <Border Style="{StaticResource CardStyle}">
-                <StackPanel Spacing="10">
-                    <TextBlock Text="反向监听" Style="{StaticResource SectionHeaderStyle}" />
-                    <TextBlock Text="外部应用连到 host:port/ws/ext。IP 只允许 0.0.0.0 或 127.0.0.1；端口改动需重启服务端生效。"
-                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+            <!-- 反向监听：卡片列表（参考 NapCat 网络配置） -->
+            <StackPanel Spacing="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="2">
+                        <TextBlock Text="反向监听" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="外部应用连到 host:端口/ws/ext；端口改动需重启服务端生效"
+                                   Style="{StaticResource CaptionStyle}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="新建" Style="{StaticResource JpButtonStyle}"
+                            Click="AddReverse_Click" VerticalAlignment="Bottom" />
+                </Grid>
 
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                     <ItemsControl ItemsSource="{x:Bind Vm.ReverseServers}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="12" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:ReverseServerItem">
-                                <Grid ColumnSpacing="8" Padding="0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="150" />
-                                        <ColumnDefinition Width="130" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
+                                <Border Style="{StaticResource CardStyle}" Width="380" Padding="14">
+                                    <StackPanel Spacing="8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Websocket 服务器" FontWeight="SemiBold" />
+                                            <TextBlock Grid.Column="1" Text="反向" Style="{StaticResource CaptionStyle}" />
+                                        </Grid>
 
-                                    <ComboBox Grid.Column="0" Header="IP"
-                                              SelectedValuePath="Content"
-                                              SelectedValue="{x:Bind Host, Mode=TwoWay}">
-                                        <ComboBoxItem Content="0.0.0.0" />
-                                        <ComboBoxItem Content="127.0.0.1" />
-                                    </ComboBox>
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="120" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox Grid.Column="0" Header="主机" PlaceholderText="0.0.0.0"
+                                                     Text="{x:Bind Host, Mode=TwoWay}" />
+                                            <NumberBox Grid.Column="1" Header="端口" Minimum="1" Maximum="65535"
+                                                       SpinButtonPlacementMode="Compact"
+                                                       Value="{x:Bind Port, Mode=TwoWay}" />
+                                        </Grid>
 
-                                    <NumberBox Grid.Column="1" Header="端口"
-                                               Minimum="1024" Maximum="65535"
-                                               SpinButtonPlacementMode="Compact"
-                                               Value="{x:Bind Port, Mode=TwoWay}" />
+                                        <TextBox Header="Token（留空=沿用）" PlaceholderText="非空时用该 token 鉴权"
+                                                 Text="{x:Bind Token, Mode=TwoWay}" />
 
-                                    <TextBox Grid.Column="2" Header="Token（留空=沿用）" Margin="0,24,0,0"
-                                             PlaceholderText="非空时用该 token 鉴权"
-                                             Text="{x:Bind Token, Mode=TwoWay}" />
-
-                                    <Button Grid.Column="3" Content="删除" Style="{StaticResource JpButtonStyle}"
-                                            Margin="0,24,0,0"
-                                            Click="RemoveReverse_Click" />
-                                </Grid>
+                                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                                            <Button Content="删除" Style="{StaticResource JpButtonStyle}"
+                                                    Click="RemoveReverse_Click" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                </ScrollViewer>
+            </StackPanel>
 
-                    <Button Content="添加监听" Style="{StaticResource JpButtonStyle}"
-                            Click="AddReverse_Click" HorizontalAlignment="Left" />
-                </StackPanel>
-            </Border>
+            <!-- 正向连接：卡片列表 -->
+            <StackPanel Spacing="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="2">
+                        <TextBlock Text="正向连接" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="服务端主动连到外部应用；保存后立即重连"
+                                   Style="{StaticResource CaptionStyle}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="新建" Style="{StaticResource JpButtonStyle}"
+                            Click="AddForward_Click" VerticalAlignment="Bottom" />
+                </Grid>
+
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <ItemsControl ItemsSource="{x:Bind Vm.ForwardServers}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="12" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ForwardServerItem">
+                                <Border Style="{StaticResource CardStyle}" Width="380" Padding="14">
+                                    <StackPanel Spacing="8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Websocket 客户端" FontWeight="SemiBold" />
+                                            <TextBlock Grid.Column="1" Text="正向" Style="{StaticResource CaptionStyle}" />
+                                        </Grid>
+
+                                        <TextBox Header="WS 地址" PlaceholderText="ws://host:port"
+                                                 Text="{x:Bind Url, Mode=TwoWay}" />
+                                        <TextBox Header="Token（留空=沿用）" PlaceholderText="非空时用该 token 鉴权"
+                                                 Text="{x:Bind Token, Mode=TwoWay}" />
+
+                                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                                            <Button Content="删除" Style="{StaticResource JpButtonStyle}"
+                                                    Click="RemoveForward_Click" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </StackPanel>
 
             <Border Style="{StaticResource CardStyle}">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="接入方式" Style="{StaticResource SectionHeaderStyle}" />
-                    <TextBlock Text="反向端点：ws://服务端地址:端口/ws/ext" TextWrapping="Wrap" />
-                    <TextBlock Text="鉴权：Authorization: Bearer &lt;服务端 token 或该监听块的 token&gt;" TextWrapping="Wrap" />
-                    <TextBlock Text="帧协议：hello / event / ack / subscribe / send / ping（详见 docs/05-契约/external-ws.md）"
+                <StackPanel Spacing="6">
+                    <TextBlock Text="接入说明" Style="{StaticResource SectionHeaderStyle}" />
+                    <TextBlock Text="反向端点：ws://主机:端口/ws/ext；鉴权 Bearer token（服务端 token 或该监听块 token）。"
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-                    <TextBlock Text="外部应用发的消息不会触发 AI 回复，只作为通道消息发出；是否允许发送由上面的开关与白名单控制。"
+                    <TextBlock Text="帧协议：hello / event / ack / subscribe / send / ping（docs/05-契约/external-ws.md）。"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                    <TextBlock Text="外部应用发的消息不会触发 AI 回复；是否允许发送由上方开关与会话白名单控制。"
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
                 </StackPanel>
             </Border>

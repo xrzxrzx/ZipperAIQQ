@@ -9,8 +9,8 @@ namespace ZipperAIQQ.Server.External;
 /// 正向 WS：本系统**主动连出**到外部应用（问题记录 03 #5）。
 /// </summary>
 /// <remarks>
-/// 与反向端点共用同一套帧协议；配置在客户端保存后立即断开重连（不用重启服务）。
-/// 未配置 <c>external.forwardUrl</c> 时每 3 秒看一次配置。
+/// 正向也是**多个配置块**：每个 url 一条独立连接，各自重连；
+/// 配置保存后所有连接立即断开、按新列表重建（不用重启服务）。
 /// </remarks>
 public sealed class ForwardWsClient : BackgroundService
 {
@@ -40,63 +40,33 @@ public sealed class ForwardWsClient : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            var url = _external.Current.ForwardUrl;
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-
-                continue;
-            }
-
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("ws" or "wss"))
-            {
-                _logger.Warning("external.forwardUrl 不是合法的 ws/wss 地址，正向 WS 暂停");
-                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken).ConfigureAwait(false);
-                continue;
-            }
+            var targets = _external.Current.ForwardServers
+                .Where(t => !string.IsNullOrWhiteSpace(t.Url))
+                .DistinctBy(t => t.Url, StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
             using var changed = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
             void OnChanged() => changed.Cancel();
             _external.Changed += OnChanged;
+
             try
             {
-                using var socket = new ClientWebSocket();
-                var token = await _external.GetForwardTokenAsync(stoppingToken).ConfigureAwait(false);
-                if (!string.IsNullOrWhiteSpace(token))
-                {
-                    socket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
-                }
+                var tasks = targets
+                    .Select(t => Task.Run(() => RunTargetAsync(t, changed.Token), changed.Token))
+                    .ToArray();
 
-                await socket.ConnectAsync(uri, changed.Token).ConfigureAwait(false);
-                _logger.Information("正向 WS 已连接：{Url}", uri);
-
-                var session = _hub.Add($"out:{uri.Host}");
-                try
+                if (tasks.Length > 0)
                 {
-                    _hub.PublishHello(session);
-                    var writer = WriteLoopAsync(socket, session, changed.Token);
-                    var reader = ReadLoopAsync(socket, session, changed.Token);
-                    await Task.WhenAny(writer, reader).ConfigureAwait(false);
+                    await Task.WhenAll(tasks).ConfigureAwait(false);
                 }
-                finally
+                else
                 {
-                    _hub.Remove(session);
+                    await Task.Delay(TimeSpan.FromSeconds(3), changed.Token).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
             {
-                // 停止或配置变更：回到循环重新读取配置
-            }
-            catch (Exception ex)
-            {
-                _logger.Warning(ex, "正向 WS 连接失败，5 秒后重试");
+                // 停止或配置变更
             }
             finally
             {
@@ -105,11 +75,65 @@ public sealed class ForwardWsClient : BackgroundService
 
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 break;
+            }
+        }
+    }
+
+    private async Task RunTargetAsync(ExternalForwardServer target, CancellationToken ct)
+    {
+        if (!Uri.TryCreate(target.Url, UriKind.Absolute, out var uri) || uri.Scheme is not ("ws" or "wss"))
+        {
+            _logger.Warning("正向 WS 地址不合法，跳过：{Url}", target.Url);
+            return;
+        }
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                using var socket = new ClientWebSocket();
+                if (!string.IsNullOrWhiteSpace(target.Token))
+                {
+                    socket.Options.SetRequestHeader("Authorization", $"Bearer {target.Token}");
+                }
+
+                await socket.ConnectAsync(uri, ct).ConfigureAwait(false);
+                _logger.Information("正向 WS 已连接：{Url}", uri);
+
+                var session = _hub.Add($"out:{uri.Host}:{uri.Port}");
+                try
+                {
+                    _hub.PublishHello(session);
+                    var writer = WriteLoopAsync(socket, session, ct);
+                    var reader = ReadLoopAsync(socket, session, ct);
+                    await Task.WhenAny(writer, reader).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _hub.Remove(session);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning(ex, "正向 WS 连接失败（{Url}），5 秒后重试", target.Url);
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
             }
         }
     }

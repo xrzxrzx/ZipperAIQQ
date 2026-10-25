@@ -1,13 +1,11 @@
 namespace ZipperAIQQ.Server.External;
 
-/// <summary>
-/// 反向 WS 监听块：外部应用连到 <c>host:port/ws/ext</c>。
-/// </summary>
+/// <summary>反向 WS 监听块：外部应用连到 <c>host:port/ws/ext</c>。</summary>
 /// <remarks>
-/// 只允许 <c>0.0.0.0</c>（对外）与 <c>127.0.0.1</c>（仅本机），避免误绑到不安全的网卡。
-/// 端口变更需要重启服务端才生效（Kestrel 监听器在启动时建立）。
+/// host 由用户手填（不限制成固定几项）；启动时只绑定能解析成 IP / localhost 的值，
+/// 非法值只记警告，不会让整个服务起不来。
 /// </remarks>
-public sealed record ExternalReverseServer(string Host, int Port, string? Token)
-{
-    public static readonly IReadOnlyList<string> AllowedHosts = ["0.0.0.0", "127.0.0.1"];
-}
+public sealed record ExternalReverseServer(string Host, int Port, string? Token);
+
+/// <summary>正向 WS 目标块：本系统主动连到 <c>url</c>。</summary>
+public sealed record ExternalForwardServer(string Url, string? Token);
