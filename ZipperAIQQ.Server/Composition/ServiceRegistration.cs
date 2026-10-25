@@ -138,14 +138,24 @@ public static class ServiceRegistration
         services.AddSingleton<IServerRestartService, ServerRestartService>();
         services.AddSingleton<IApiAction, RestartServerAction>();
 
-        // #38：网页搜索（DeepSeek 原生 Search/Fetch；形态待实测，失败即不可用）
+        // #38：网页搜索（DeepSeek 官方 /v1/tools/search + /v1/tools/fetch）
         services.AddHttpClient();
-        services.AddSingleton<IWebSearchProvider>(sp => new DeepSeekWebSearchProvider(
-            sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(DeepSeekWebSearchProvider)),
-            sp.GetRequiredService<IConfigStore>(),
-            sp.GetRequiredService<ISecretProtector>(),
-            Environment.GetEnvironmentVariable("ZIPPER_SEARCH_BASEURL"),
-            sp.GetRequiredService<ILogger>()));
+        services.AddSingleton<IWebSearchProvider>(sp =>
+        {
+            var configs = sp.GetRequiredService<IConfigStore>();
+            var protector = sp.GetRequiredService<ISecretProtector>();
+
+            return new DeepSeekWebSearchProvider(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(DeepSeekWebSearchProvider)),
+                async ct =>
+                {
+                    var endpoint = await configs.GetEndpointAsync("primary", ct).ConfigureAwait(false);
+                    return endpoint is null ? null : protector.Unprotect(endpoint.KeyCipher);
+                },
+                options.SearchEnabled,
+                options.SearchBaseUrl,
+                sp.GetRequiredService<ILogger>());
+        });
 
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
