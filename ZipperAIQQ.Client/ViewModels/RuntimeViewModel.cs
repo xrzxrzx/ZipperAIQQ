@@ -64,21 +64,6 @@ public sealed partial class RuntimeViewModel : ObservableObject
     [ObservableProperty]
     public partial string FeedbackStatus { get; set; } = string.Empty;
 
-    [ObservableProperty]
-    public partial bool ExternalAllowSend { get; set; }
-
-    [ObservableProperty]
-    public partial string ExternalAllowedSessions { get; set; } = string.Empty;
-
-    [ObservableProperty]
-    public partial string ExternalForwardUrl { get; set; } = string.Empty;
-
-    [ObservableProperty]
-    public partial string ExternalForwardToken { get; set; } = string.Empty;
-
-    [ObservableProperty]
-    public partial string ExternalStatus { get; set; } = string.Empty;
-
     partial void OnNoticeSearchChanged(string value) => ApplyNoticeFilter();
 
     [RelayCommand]
@@ -144,15 +129,6 @@ public sealed partial class RuntimeViewModel : ObservableObject
             FeedbackExternal = types.Contains("ExternalMessage", StringComparer.OrdinalIgnoreCase);
             FeedbackTarget = feedback?.Target ?? string.Empty;
             FeedbackStatus = FeedbackEnabled ? "已开启" : "已关闭";
-
-            var external = await _api.CallAsync<ExternalDto>("getExternal").ConfigureAwait(true);
-            ExternalAllowSend = external?.AllowSend == true;
-            ExternalAllowedSessions = external?.AllowedSessions is { Length: > 0 }
-                ? string.Join(", ", external.AllowedSessions)
-                : string.Empty;
-            ExternalForwardUrl = external?.ForwardUrl ?? string.Empty;
-            ExternalForwardToken = string.Empty;
-            ExternalStatus = external?.HasForwardToken == true ? "已配置 token" : "未配置 token";
         }
         catch (Exception ex)
         {
@@ -260,33 +236,6 @@ public sealed partial class RuntimeViewModel : ObservableObject
         catch (Exception ex)
         {
             FeedbackStatus = $"保存失败：{ex.Message}";
-        }
-    }
-
-    [RelayCommand]
-    private async Task SaveExternalAsync()
-    {
-        try
-        {
-            var sessions = ExternalAllowedSessions
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-            await _api.CallAsync<object>("setExternal", new
-            {
-                allowSend = ExternalAllowSend,
-                allowedSessions = sessions,
-                forwardUrl = ExternalForwardUrl.Trim(),
-                forwardToken = string.IsNullOrWhiteSpace(ExternalForwardToken)
-                    ? null
-                    : ExternalForwardToken.Trim(),
-            }).ConfigureAwait(true);
-
-            ExternalForwardToken = string.Empty;
-            ExternalStatus = "已保存（正向连接会立即重连）";
-        }
-        catch (Exception ex)
-        {
-            ExternalStatus = $"保存失败：{ex.Message}";
         }
     }
 }
