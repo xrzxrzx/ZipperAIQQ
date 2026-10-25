@@ -52,7 +52,7 @@ public static class ScheduleTools
     private static AIFunction CreateCreate(ToolCallContext context, IPermissionGate gate, IScheduleStore store)
     {
         return AIFunctionFactory.Create(
-            async (string when, string content, string? mentionUser, int? repeatMinutes) =>
+            async (string when, string content, string? mentionUser, int? repeatMinutes, string? target) =>
             {
                 if (Deny(gate, context) is { } denied)
                 {
@@ -81,9 +81,27 @@ public static class ScheduleTools
                     return "重复间隔至少 1 分钟。";
                 }
 
+                // 目标会话默认当前会话；发给别人需要跨会话能力（管理员/主人）
+                var chat = context.Chat;
+                if (!string.IsNullOrWhiteSpace(target))
+                {
+                    if (!SessionRefParser.TryParse(target, context.Chat.Platform, out var parsed, out var parseError))
+                    {
+                        return parseError!;
+                    }
+
+                    if (!string.Equals(parsed.SessionId, context.Chat.SessionId, StringComparison.Ordinal) &&
+                        !gate.IsAllowed(ToolCapability.SendToOtherSession, context.Role))
+                    {
+                        return "只有管理员/主人才能把定时消息发给其他会话。";
+                    }
+
+                    chat = parsed;
+                }
+
                 var task = new ScheduledTask(
                     Id: 0,
-                    Chat: context.Chat,
+                    Chat: chat,
                     Content: content.Trim(),
                     MentionUserId: string.IsNullOrWhiteSpace(mentionUser) ? null : mentionUser.Trim(),
                     Repeat: repeat ? ScheduleRepeat.Interval : ScheduleRepeat.Once,
@@ -97,11 +115,15 @@ public static class ScheduleTools
 
                 var kind = repeat ? $"每 {repeatMinutes} 分钟" : "一次性";
                 var mention = task.MentionUserId is null ? string.Empty : $"，@ {task.MentionUserId}";
-                return $"已创建定时任务 #{id}：{BeijingTime.Format(at)}（{kind}{mention}）。到点会自动发送。";
+                var where = string.Equals(chat.SessionId, context.Chat.SessionId, StringComparison.Ordinal)
+                    ? "当前会话"
+                    : chat.SessionId;
+                return $"已创建定时任务 #{id}：{BeijingTime.Format(at)}（{kind}{mention}），发到{where}。到点会自动发送。";
             },
             name: "schedule_create",
             description:
-                "创建一个定时任务：到指定时间（**北京时间**，`yyyy-MM-dd HH:mm`）自动在**当前会话**发一条消息。" +
+                "创建一个定时任务：到指定时间（**北京时间**，`yyyy-MM-dd HH:mm`）自动发一条消息。" +
+                "默认发到**当前会话**；`target` 可指定 `qq:p<QQ号>`（私聊）或 `qq:g<群号>`（群，需管理员/主人）。" +
                 "可选 repeatMinutes 表示每隔多少分钟重复一次；可选 mentionUser 在群聊里 @ 某人。");
     }
 
