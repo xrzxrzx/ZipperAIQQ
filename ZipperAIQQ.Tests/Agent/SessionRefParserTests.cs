@@ -7,7 +7,7 @@ namespace ZipperAIQQ.Tests.Agent;
 public sealed class SessionRefParserTests
 {
     [Theory]
-    [InlineData("qq:p3406515483", ChatType.Private, "3406515483")]
+    [InlineData("qq:p10001", ChatType.Private, "10001")]
     [InlineData("qq:g123456", ChatType.Group, "123456")]
     [InlineData("QQ:P1", ChatType.Private, "1")]
     public void ParsesValidRefs(string raw, ChatType type, string id)
@@ -22,7 +22,7 @@ public sealed class SessionRefParserTests
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("3406515483")]
+    [InlineData("10001")]
     [InlineData("qq:")]
     [InlineData("qq:x123")]
     [InlineData("qq:p")]
@@ -34,3 +34,4 @@ public sealed class SessionRefParserTests
         Assert.False(string.IsNullOrWhiteSpace(error));
     }
 }
+
