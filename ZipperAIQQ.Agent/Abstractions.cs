@@ -108,6 +108,12 @@ public sealed record ChatAgentDependencies
     /// <summary>网页搜索（#38）；未注册时不给模型搜索工具。</summary>
     public Search.IWebSearchProvider? WebSearch { get; init; }
 
+    /// <summary>图片下载（问题记录 03 #2）；未注册时图片只显示占位。</summary>
+    public Media.IImageFetcher? ImageFetcher { get; init; }
+
+    /// <summary>GIF/WebP 首帧转 PNG；未注册时按原格式投喂。</summary>
+    public Media.IImageConverter? ImageConverter { get; init; }
+
     /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
     public required Security.IRoleResolver Roles { get; init; }
 

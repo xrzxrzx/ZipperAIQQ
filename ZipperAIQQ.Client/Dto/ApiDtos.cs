@@ -98,7 +98,7 @@ public sealed class MessageDto
     public long OccurredAt { get; set; }
 
     public string TimeText =>
-        DateTimeOffset.FromUnixTimeMilliseconds(OccurredAt).LocalDateTime.ToString("HH:mm:ss");
+        DateTimeOffset.FromUnixTimeMilliseconds(OccurredAt).LocalDateTime.ToString("MM-dd HH:mm:ss");
 
     /// <summary>发送人显示名（AI 统一显示「AI」）。</summary>
     [JsonIgnore]
@@ -635,6 +635,83 @@ public sealed class LogLineDto
 
     [JsonIgnore]
     public string Display => $"[{TimeText} {Level}] {Message}";
+}
+
+/// <summary>网页搜索配置（与模型端点独立）。</summary>
+public sealed class SearchDto
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("baseUrl")]
+    public string BaseUrl { get; set; } = string.Empty;
+
+    [JsonPropertyName("hasKey")]
+    public bool HasKey { get; set; }
+}
+
+/// <summary>反向 WS 监听块（问题记录 03 #5）。</summary>
+public sealed class ReverseServerDto
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("host")]
+    public string Host { get; set; } = string.Empty;
+
+    [JsonPropertyName("port")]
+    public int Port { get; set; }
+
+    [JsonPropertyName("token")]
+    public string Token { get; set; } = string.Empty;
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+}
+
+/// <summary>正向 WS 目标块。</summary>
+public sealed class ForwardServerDto
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("url")]
+    public string Url { get; set; } = string.Empty;
+
+    [JsonPropertyName("token")]
+    public string Token { get; set; } = string.Empty;
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+}
+
+/// <summary>外部 WS 配置（问题记录 03 #5）。</summary>
+public sealed class ExternalDto
+{
+    [JsonPropertyName("allowSend")]
+    public bool AllowSend { get; set; }
+
+    [JsonPropertyName("allowedSessions")]
+    public string[] AllowedSessions { get; set; } = [];
+
+    [JsonPropertyName("reverseServers")]
+    public ReverseServerDto[] ReverseServers { get; set; } = [];
+
+    [JsonPropertyName("forwardServers")]
+    public ForwardServerDto[] ForwardServers { get; set; } = [];
+}
+
+/// <summary>主人反馈设置（问题记录 03 #4）。</summary>
+public sealed class FeedbackDto
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("types")]
+    public string[] Types { get; set; } = [];
+
+    [JsonPropertyName("target")]
+    public string Target { get; set; } = string.Empty;
 }
 
 /// <summary>系统提示词（与人设分开）。</summary>

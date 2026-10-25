@@ -4,6 +4,7 @@ using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Server.Configuration;
+using ZipperAIQQ.Server.Feedback;
 using ZipperAIQQ.Storage.Notices;
 using ZipperAIQQ.Storage.Settings;
 
@@ -37,6 +38,7 @@ public sealed class NoticeResponder
     private readonly IChatAgentPool _agents;
     private readonly IMessageChannel _channel;
     private readonly ServerOptions _options;
+    private readonly OwnerFeedbackService _feedback;
     private readonly ILogger _logger;
 
     public NoticeResponder(
@@ -45,6 +47,7 @@ public sealed class NoticeResponder
         IChatAgentPool agents,
         IMessageChannel channel,
         ServerOptions options,
+        OwnerFeedbackService feedback,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(notices);
@@ -52,6 +55,7 @@ public sealed class NoticeResponder
         ArgumentNullException.ThrowIfNull(agents);
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(feedback);
         ArgumentNullException.ThrowIfNull(logger);
 
         _notices = notices;
@@ -59,6 +63,7 @@ public sealed class NoticeResponder
         _agents = agents;
         _channel = channel;
         _options = options;
+        _feedback = feedback;
         _logger = logger;
     }
 
@@ -74,6 +79,16 @@ public sealed class NoticeResponder
         catch (Exception ex)
         {
             _logger.Warning(ex, "通知落库失败（{Type}，会话 {Session}）", notice.Type, notice.Chat.SessionId);
+        }
+
+        // 主人反馈（问题记录 03 #4）：独立于「是否在当前会话回应」
+        try
+        {
+            await _feedback.HandleAsync(notice, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "主人反馈处理失败（{Type}）", notice.Type);
         }
 
         // 请求类（加好友 / 加群）**只记录不响应**：自动通过等于替主人做决定

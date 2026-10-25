@@ -172,6 +172,30 @@ public sealed class SqliteMessageStore : IMessageStore
         }, ct);
     }
 
+    public Task<StoredMessage?> FindByMessageIdAsync(
+        string sessionId, string messageId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+
+        return _db.ReadAsync<StoredMessage?>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT {SelectColumnsSql}
+                FROM Messages
+                WHERE SessionId = @sessionId AND MessageId = @messageId
+                ORDER BY Id DESC
+                LIMIT 1;
+                """;
+            cmd.Parameters.AddWithValue("@sessionId", sessionId);
+            cmd.Parameters.AddWithValue("@messageId", messageId);
+
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            return await reader.ReadAsync(token).ConfigureAwait(false) ? ReadRow(reader) : null;
+        }, ct);
+    }
+
     public Task<IReadOnlyList<StoredMessage>> GetByIdsAsync(
         string sessionId, IReadOnlyList<long> ids, CancellationToken ct = default)
     {

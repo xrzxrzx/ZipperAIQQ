@@ -10,6 +10,8 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Api;
+using ZipperAIQQ.Server.External;
+using ZipperAIQQ.Server.Search;
 using ZipperAIQQ.Server.Composition;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Configuration;
@@ -77,8 +79,27 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
         .PersistKeysToFileSystem(new DirectoryInfo(Path.GetFullPath(options.DataProtectionKeysPath)))
         .SetApplicationName("ZipperAIQQ");
 
-    // M2-A：Kestrel 只监听配置里的地址
-    builder.WebHost.UseUrls($"http://{options.HttpAddress}");
+    // M2-A：Kestrel 监听主地址 + 外部 WS 的反向监听块（host:port）
+    var listenUrls = new List<string> { $"http://{options.HttpAddress}" };
+    foreach (var server in options.ExternalReverseServers)
+    {
+        if (!server.Enabled)
+        {
+            continue;
+        }
+
+        if (System.Net.IPAddress.TryParse(server.Host, out _) ||
+            string.Equals(server.Host, "localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            listenUrls.Add($"http://{server.Host}:{server.Port}");
+        }
+        else
+        {
+            Log.Warning("反向监听主机无法解析，已跳过：{Host}:{Port}", server.Host, server.Port);
+        }
+    }
+
+    builder.WebHost.UseUrls(listenUrls.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
 
     var app = builder.Build();
 
@@ -117,11 +138,18 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     var runtimeConfig = app.Services.GetRequiredService<RuntimeConfigService>();
     await runtimeConfig.SeedFromEnvironmentAsync(options);
 
+    // 外部 WS 配置（客户端可改）先读回 RuntimeSettings
+    await app.Services.GetRequiredService<ExternalOptionsService>().InitializeAsync();
+
+    // 网页搜索配置（与模型独立）先读回库
+    await app.Services.GetRequiredService<SearchOptionsService>().InitializeAsync();
+
     // 按运行配置建（或重建）LLM 客户端；配置写错只会保留旧客户端，不会起不来
     await app.Services.GetRequiredService<IChatClientProvider>().ReloadAsync();
 
     ApiEndpoint.Map(app);
     EventEndpoint.Map(app);
+    ExternalWsEndpoint.Map(app);
 
     SubscribeAgentEvents(app.Services);
 

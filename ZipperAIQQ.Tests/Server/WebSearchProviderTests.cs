@@ -45,8 +45,7 @@ public sealed class WebSearchProviderTests
         new(
             new HttpClient(handler),
             _ => Task.FromResult<string?>("test-key"),
-            enabled,
-            "https://api.deepseek.test",
+            () => new SearchSnapshot(enabled, "https://api.deepseek.test", HasKey: true),
             new LoggerConfiguration().CreateLogger());
 
     [Fact]

@@ -49,6 +49,21 @@ public sealed partial class RuntimeViewModel : ObservableObject
     [ObservableProperty]
     public partial string BehaviorStatus { get; set; } = string.Empty;
 
+    [ObservableProperty]
+    public partial bool FeedbackEnabled { get; set; }
+
+    [ObservableProperty]
+    public partial bool FeedbackRecall { get; set; } = true;
+
+    [ObservableProperty]
+    public partial bool FeedbackExternal { get; set; }
+
+    [ObservableProperty]
+    public partial string FeedbackTarget { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string FeedbackStatus { get; set; } = string.Empty;
+
     partial void OnNoticeSearchChanged(string value) => ApplyNoticeFilter();
 
     [RelayCommand]
@@ -106,6 +121,14 @@ public sealed partial class RuntimeViewModel : ObservableObject
             }
 
             SettingsStatus = "已加载";
+
+            var feedback = await _api.CallAsync<FeedbackDto>("getFeedback").ConfigureAwait(true);
+            FeedbackEnabled = feedback?.Enabled == true;
+            var types = feedback?.Types ?? [];
+            FeedbackRecall = types.Contains("MessageRecalled", StringComparer.OrdinalIgnoreCase);
+            FeedbackExternal = types.Contains("ExternalMessage", StringComparer.OrdinalIgnoreCase);
+            FeedbackTarget = feedback?.Target ?? string.Empty;
+            FeedbackStatus = FeedbackEnabled ? "已开启" : "已关闭";
         }
         catch (Exception ex)
         {
@@ -182,6 +205,37 @@ public sealed partial class RuntimeViewModel : ObservableObject
         catch (Exception ex)
         {
             BehaviorStatus = $"保存失败：{ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveFeedbackAsync()
+    {
+        try
+        {
+            var types = new List<string>();
+            if (FeedbackRecall)
+            {
+                types.Add("MessageRecalled");
+            }
+
+            if (FeedbackExternal)
+            {
+                types.Add("ExternalMessage");
+            }
+
+            await _api.CallAsync<object>("setFeedback", new
+            {
+                enabled = FeedbackEnabled,
+                types,
+                target = FeedbackTarget.Trim(),
+            }).ConfigureAwait(true);
+
+            FeedbackStatus = FeedbackEnabled ? "已保存（已开启）" : "已保存（已关闭）";
+        }
+        catch (Exception ex)
+        {
+            FeedbackStatus = $"保存失败：{ex.Message}";
         }
     }
 }

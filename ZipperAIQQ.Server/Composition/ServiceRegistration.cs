@@ -7,6 +7,7 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
+using ZipperAIQQ.Agent.Media;
 using ZipperAIQQ.Agent.Search;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
@@ -22,8 +23,11 @@ using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Contacts;
+using ZipperAIQQ.Server.External;
+using ZipperAIQQ.Server.Feedback;
 using ZipperAIQQ.Server.Identity;
 using ZipperAIQQ.Server.Logs;
+using ZipperAIQQ.Server.Media;
 using ZipperAIQQ.Server.Notices;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Server.Process;
@@ -143,24 +147,44 @@ public static class ServiceRegistration
         services.AddHostedService<SelfIdRecorder>();
         services.AddSingleton<IApiAction, GetSelfInfoAction>();
 
-        // #38：网页搜索（DeepSeek 官方 /v1/tools/search + /v1/tools/fetch）
+        // #38：网页搜索（与模型端点独立：自己的 baseUrl + 加密 key）
         services.AddHttpClient();
+        services.AddSingleton<SearchOptionsService>();
+        services.AddSingleton<IApiAction, GetSearchAction>();
+        services.AddSingleton<IApiAction, SetSearchAction>();
         services.AddSingleton<IWebSearchProvider>(sp =>
         {
-            var configs = sp.GetRequiredService<IConfigStore>();
-            var protector = sp.GetRequiredService<ISecretProtector>();
+            var search = sp.GetRequiredService<SearchOptionsService>();
 
             return new DeepSeekWebSearchProvider(
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(DeepSeekWebSearchProvider)),
-                async ct =>
-                {
-                    var endpoint = await configs.GetEndpointAsync("primary", ct).ConfigureAwait(false);
-                    return endpoint is null ? null : protector.Unprotect(endpoint.KeyCipher);
-                },
-                options.SearchEnabled,
-                options.SearchBaseUrl,
+                ct => search.GetKeyAsync(ct),
+                () => search.Current,
                 sp.GetRequiredService<ILogger>());
         });
+
+        // 图片（问题记录 03 #2）：下载字节 + 真实 MIME + GIF/WebP 首帧转 PNG
+        services.AddSingleton<IImageFetcher>(sp =>
+        {
+            var client = sp.GetRequiredService<IHttpClientFactory>()
+                .CreateClient(nameof(HttpImageFetcher));
+            client.Timeout = TimeSpan.FromSeconds(8);
+            return new HttpImageFetcher(client, sp.GetRequiredService<ILogger>());
+        });
+        services.AddSingleton<IImageConverter, SkiaImageConverter>();
+
+        // 主人反馈（问题记录 03 #4）：指定通知抄送到主人私聊
+        services.AddSingleton<OwnerFeedbackService>();
+        services.AddSingleton<IApiAction, GetFeedbackAction>();
+        services.AddSingleton<IApiAction, SetFeedbackAction>();
+
+        // 外部 WS（问题记录 03 #5）：反向连入 + 正向连出（配置可客户端热改）
+        services.AddSingleton<ExternalOptionsService>();
+        services.AddSingleton<ExternalWsHub>();
+        services.AddSingleton<ExternalCommandHandler>();
+        services.AddHostedService<ForwardWsClient>();
+        services.AddSingleton<IApiAction, GetExternalAction>();
+        services.AddSingleton<IApiAction, SetExternalAction>();
 
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
@@ -297,6 +321,8 @@ public static class ServiceRegistration
                 PermissionGate = sp.GetRequiredService<IPermissionGate>(),
                 Policy = sp.GetRequiredService<IExecutionPolicy>(),
                 WebSearch = sp.GetService<IWebSearchProvider>(),
+                ImageFetcher = sp.GetService<IImageFetcher>(),
+                ImageConverter = sp.GetService<IImageConverter>(),
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
                 FileMaxBytes = options.FileMaxBytes,

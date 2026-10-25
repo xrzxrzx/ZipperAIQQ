@@ -27,6 +27,7 @@ public sealed class MessageRouter : BackgroundService
     private readonly Agent.Security.IRoleResolver _roles;
     private readonly Agent.IReplyModeDecider _replyModes;
     private readonly Notices.NoticeResponder _noticeResponder;
+    private readonly External.ExternalWsHub _external;
     private readonly Configuration.ServerOptions _options;
     private readonly ILogger _logger;
 
@@ -39,6 +40,7 @@ public sealed class MessageRouter : BackgroundService
         Agent.Security.IRoleResolver roles,
         Agent.IReplyModeDecider replyModes,
         Notices.NoticeResponder noticeResponder,
+        External.ExternalWsHub external,
         Configuration.ServerOptions options,
         ILogger logger)
     {
@@ -50,6 +52,7 @@ public sealed class MessageRouter : BackgroundService
         ArgumentNullException.ThrowIfNull(roles);
         ArgumentNullException.ThrowIfNull(replyModes);
         ArgumentNullException.ThrowIfNull(noticeResponder);
+        ArgumentNullException.ThrowIfNull(external);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -61,6 +64,7 @@ public sealed class MessageRouter : BackgroundService
         _roles = roles;
         _replyModes = replyModes;
         _noticeResponder = noticeResponder;
+        _external = external;
         _options = options;
         _logger = logger;
     }
@@ -77,6 +81,7 @@ public sealed class MessageRouter : BackgroundService
                 switch (evt)
                 {
                     case IncomingMessage msg:
+                        _external.PublishMessage(msg);
                         await HandleMessageAsync(msg, stoppingToken).ConfigureAwait(false);
                         break;
 
@@ -95,6 +100,7 @@ public sealed class MessageRouter : BackgroundService
                             break;
                         }
 
+                        _external.PublishNotice(notice);
                         await _noticeResponder.HandleAsync(notice, stoppingToken).ConfigureAwait(false);
                         break;
                 }
