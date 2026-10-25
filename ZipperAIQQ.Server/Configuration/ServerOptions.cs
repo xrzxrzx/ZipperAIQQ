@@ -112,6 +112,9 @@ public sealed record ServerOptions
     /// <summary>正向 WS 鉴权 token。</summary>
     public string? ExternalForwardToken { get; init; }
 
+    /// <summary>反向 WS 额外监听块（host:port；启动时生效）。</summary>
+    public IReadOnlyList<External.ExternalReverseServer> ExternalReverseServers { get; init; } = [];
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;

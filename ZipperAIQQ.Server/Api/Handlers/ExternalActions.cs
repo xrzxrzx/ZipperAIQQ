@@ -27,6 +27,12 @@ public sealed class GetExternalAction : IApiAction
             allowedSessions = current.AllowedSessions,
             forwardUrl = current.ForwardUrl ?? string.Empty,
             hasForwardToken = current.HasForwardToken,
+            reverseServers = current.ReverseServers.Select(s => new
+            {
+                host = s.Host,
+                port = s.Port,
+                hasToken = !string.IsNullOrWhiteSpace(s.Token),
+            }),
         });
     }
 }
@@ -97,7 +103,56 @@ public sealed class SetExternalAction : IApiAction
             ? tokenElement.GetString()?.Trim()
             : null;
 
-        await _external.UpdateAsync(allowSend, sessions, forwardUrl, token, ct).ConfigureAwait(false);
+        // 反向监听块：host 只允许 0.0.0.0 / 127.0.0.1；token 留空 = 沿用同 host:port 的旧值
+        var reverse = new List<ExternalReverseServer>();
+        var existing = _external.Current.ReverseServers;
+        if (payload.TryGetProperty("reverseServers", out var reverseElement) &&
+            reverseElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in reverseElement.EnumerateArray())
+            {
+                var host = item.TryGetProperty("host", out var hostElement) &&
+                           hostElement.ValueKind == JsonValueKind.String
+                    ? hostElement.GetString()?.Trim()
+                    : null;
+
+                if (host is null || !ExternalReverseServer.AllowedHosts.Contains(host, StringComparer.Ordinal))
+                {
+                    throw new ApiException(ApiResponse.BadRequest, "反向监听 IP 只支持 0.0.0.0 或 127.0.0.1。");
+                }
+
+                var port = item.TryGetProperty("port", out var portElement) &&
+                           portElement.ValueKind == JsonValueKind.Number &&
+                           portElement.TryGetInt32(out var parsedPort)
+                    ? parsedPort
+                    : 0;
+
+                if (port is < 1024 or > 65535)
+                {
+                    throw new ApiException(ApiResponse.BadRequest, "反向监听端口必须在 1024~65535 之间。");
+                }
+
+                if (reverse.Any(s => s.Host == host && s.Port == port))
+                {
+                    throw new ApiException(ApiResponse.BadRequest, $"重复的监听：{host}:{port}");
+                }
+
+                var itemToken = item.TryGetProperty("token", out var itemTokenElement) &&
+                                itemTokenElement.ValueKind == JsonValueKind.String
+                    ? itemTokenElement.GetString()?.Trim()
+                    : null;
+
+                if (string.IsNullOrWhiteSpace(itemToken))
+                {
+                    itemToken = existing
+                        .FirstOrDefault(s => s.Host == host && s.Port == port)?.Token;
+                }
+
+                reverse.Add(new ExternalReverseServer(host, port, itemToken));
+            }
+        }
+
+        await _external.UpdateAsync(allowSend, sessions, forwardUrl, token, reverse, ct).ConfigureAwait(false);
 
         return new
         {
@@ -105,6 +160,12 @@ public sealed class SetExternalAction : IApiAction
             allowedSessions = sessions,
             forwardUrl,
             hasForwardToken = _external.Current.HasForwardToken,
+            reverseServers = reverse.Select(s => new
+            {
+                host = s.Host,
+                port = s.Port,
+                hasToken = !string.IsNullOrWhiteSpace(s.Token),
+            }),
         };
     }
 }

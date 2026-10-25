@@ -29,8 +29,15 @@ public static class ExternalWsEndpoint
         {
             var policy = context.RequestServices.GetRequiredService<HttpAccessPolicy>();
             var logger = context.RequestServices.GetRequiredService<ILogger>();
+            var external = context.RequestServices.GetRequiredService<ExternalOptionsService>();
 
-            if (!policy.IsAllowed(ExtractToken(context.Request)))
+            var token = ExtractToken(context.Request);
+            var block = external.Current.ReverseServers
+                .FirstOrDefault(s => s.Port == context.Connection.LocalPort);
+            var tokenAllowed =
+                (!string.IsNullOrWhiteSpace(block?.Token) && string.Equals(block.Token, token, StringComparison.Ordinal));
+
+            if (!policy.IsAllowed(token) && !tokenAllowed)
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;

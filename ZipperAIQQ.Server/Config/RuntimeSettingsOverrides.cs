@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Serilog;
 using ZipperAIQQ.Server.Configuration;
+using ZipperAIQQ.Server.External;
 using ZipperAIQQ.Server.Identity;
 
 namespace ZipperAIQQ.Server.Config;
@@ -77,6 +78,7 @@ public static class RuntimeSettingsOverrides
                 FileMaxBytes = (int)(fileMax ?? options.FileMaxBytes),
                 HotWindowMessages = (int)(hotWindow ?? options.HotWindowMessages),
                 SelfId = string.IsNullOrWhiteSpace(options.SelfId) ? persistedSelfId : options.SelfId,
+                ExternalReverseServers = await ReadReverseServersAsync(conn, options, logger).ConfigureAwait(false),
             };
 
             if (interval is not null || hotWindow is not null || fileMax is not null)
@@ -93,6 +95,33 @@ public static class RuntimeSettingsOverrides
         {
             logger.Warning(ex, "读取运行参数失败，沿用环境变量里的值");
             return options;
+        }
+    }
+
+    /// <summary>读取反向 WS 监听块（客户端保存的 JSON）；失败沿用启动配置。</summary>
+    private static async Task<IReadOnlyList<ExternalReverseServer>> ReadReverseServersAsync(
+        SqliteConnection conn, ServerOptions options, ILogger logger)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Value FROM RuntimeSettings WHERE Key = @key;";
+        cmd.Parameters.AddWithValue("@key", ExternalOptionsService.ReverseServersKey);
+
+        var value = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+        if (value is null or DBNull)
+        {
+            return options.ExternalReverseServers;
+        }
+
+        try
+        {
+            var json = Convert.ToString(value);
+            return System.Text.Json.JsonSerializer.Deserialize<List<ExternalReverseServer>>(json ?? string.Empty)
+                   ?? options.ExternalReverseServers;
+        }
+        catch (Exception ex)
+        {
+            logger.Warning(ex, "解析 external.reverseServers 失败，沿用启动配置");
+            return options.ExternalReverseServers;
         }
     }
 }

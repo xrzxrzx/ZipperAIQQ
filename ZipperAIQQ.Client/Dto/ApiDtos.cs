@@ -637,6 +637,19 @@ public sealed class LogLineDto
     public string Display => $"[{TimeText} {Level}] {Message}";
 }
 
+/// <summary>反向 WS 监听块（问题记录 03 #5）。</summary>
+public sealed class ReverseServerDto
+{
+    [JsonPropertyName("host")]
+    public string Host { get; set; } = string.Empty;
+
+    [JsonPropertyName("port")]
+    public int Port { get; set; }
+
+    [JsonPropertyName("hasToken")]
+    public bool HasToken { get; set; }
+}
+
 /// <summary>外部 WS 配置（问题记录 03 #5）。</summary>
 public sealed class ExternalDto
 {
@@ -651,6 +664,9 @@ public sealed class ExternalDto
 
     [JsonPropertyName("hasForwardToken")]
     public bool HasForwardToken { get; set; }
+
+    [JsonPropertyName("reverseServers")]
+    public ReverseServerDto[] ReverseServers { get; set; } = [];
 }
 
 /// <summary>主人反馈设置（问题记录 03 #4）。</summary>

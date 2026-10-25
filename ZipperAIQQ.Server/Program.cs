@@ -78,8 +78,11 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
         .PersistKeysToFileSystem(new DirectoryInfo(Path.GetFullPath(options.DataProtectionKeysPath)))
         .SetApplicationName("ZipperAIQQ");
 
-    // M2-A：Kestrel 只监听配置里的地址
-    builder.WebHost.UseUrls($"http://{options.HttpAddress}");
+    // M2-A：Kestrel 监听主地址 + 外部 WS 的反向监听块（host:port）
+    var listenUrls = new List<string> { $"http://{options.HttpAddress}" };
+    listenUrls.AddRange(options.ExternalReverseServers
+        .Select(s => $"http://{s.Host}:{s.Port}"));
+    builder.WebHost.UseUrls(listenUrls.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
 
     var app = builder.Build();
 
