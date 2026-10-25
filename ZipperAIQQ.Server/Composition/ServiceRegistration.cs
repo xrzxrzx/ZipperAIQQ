@@ -23,6 +23,7 @@ using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Contacts;
+using ZipperAIQQ.Server.Feedback;
 using ZipperAIQQ.Server.Identity;
 using ZipperAIQQ.Server.Logs;
 using ZipperAIQQ.Server.Media;
@@ -173,6 +174,11 @@ public static class ServiceRegistration
             return new HttpImageFetcher(client, sp.GetRequiredService<ILogger>());
         });
         services.AddSingleton<IImageConverter, SkiaImageConverter>();
+
+        // 主人反馈（问题记录 03 #4）：指定通知抄送到主人私聊
+        services.AddSingleton<OwnerFeedbackService>();
+        services.AddSingleton<IApiAction, GetFeedbackAction>();
+        services.AddSingleton<IApiAction, SetFeedbackAction>();
 
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();

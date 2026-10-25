@@ -139,6 +139,28 @@
                     </StackPanel>
                 </StackPanel>
             </Border>
+
+            <!-- 主人反馈：指定通知抄送到主人私聊 -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="主人反馈" Style="{StaticResource SectionHeaderStyle}" />
+                    <TextBlock Text="指定类型的通知主动转发给主人（撤回会带上原文）；与「通知响应」互不影响。"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                    <ToggleSwitch Header="启用主人反馈" IsOn="{x:Bind Vm.FeedbackEnabled, Mode=TwoWay}" />
+                    <TextBox Header="通知类型（逗号分隔，如 MessageRecalled, GroupIncrease）"
+                             Text="{x:Bind Vm.FeedbackTypes, Mode=TwoWay}" />
+                    <TextBox Header="目标会话（留空 = 主人私聊；可填 qq:p123 / qq:g456）"
+                             Text="{x:Bind Vm.FeedbackTarget, Mode=TwoWay}" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button Content="保存主人反馈" Style="{StaticResource JpAccentButtonStyle}"
+                                Command="{x:Bind Vm.SaveFeedbackCommand}" />
+                        <TextBlock Text="{x:Bind Vm.FeedbackStatus, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </Page>

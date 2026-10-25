@@ -71,6 +71,12 @@ public interface IMessageStore
         IReadOnlyList<long> ids,
         CancellationToken ct = default);
 
+    /// <summary>按平台消息 ID 查一条（撤回反馈用）。找不到返回 null。</summary>
+    Task<StoredMessage?> FindByMessageIdAsync(
+        string sessionId,
+        string messageId,
+        CancellationToken ct = default);
+
     /// <summary>某会话的消息总数。</summary>
     Task<long> CountAsync(string sessionId, CancellationToken ct = default);
 

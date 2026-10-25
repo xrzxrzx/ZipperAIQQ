@@ -49,6 +49,18 @@ public sealed partial class RuntimeViewModel : ObservableObject
     [ObservableProperty]
     public partial string BehaviorStatus { get; set; } = string.Empty;
 
+    [ObservableProperty]
+    public partial bool FeedbackEnabled { get; set; }
+
+    [ObservableProperty]
+    public partial string FeedbackTypes { get; set; } = "MessageRecalled";
+
+    [ObservableProperty]
+    public partial string FeedbackTarget { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string FeedbackStatus { get; set; } = string.Empty;
+
     partial void OnNoticeSearchChanged(string value) => ApplyNoticeFilter();
 
     [RelayCommand]
@@ -106,6 +118,14 @@ public sealed partial class RuntimeViewModel : ObservableObject
             }
 
             SettingsStatus = "已加载";
+
+            var feedback = await _api.CallAsync<FeedbackDto>("getFeedback").ConfigureAwait(true);
+            FeedbackEnabled = feedback?.Enabled == true;
+            FeedbackTypes = feedback?.Types is { Length: > 0 }
+                ? string.Join(", ", feedback.Types)
+                : "MessageRecalled";
+            FeedbackTarget = feedback?.Target ?? string.Empty;
+            FeedbackStatus = FeedbackEnabled ? "已开启" : "已关闭";
         }
         catch (Exception ex)
         {
@@ -182,6 +202,29 @@ public sealed partial class RuntimeViewModel : ObservableObject
         catch (Exception ex)
         {
             BehaviorStatus = $"保存失败：{ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveFeedbackAsync()
+    {
+        try
+        {
+            var types = FeedbackTypes
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            await _api.CallAsync<object>("setFeedback", new
+            {
+                enabled = FeedbackEnabled,
+                types,
+                target = FeedbackTarget.Trim(),
+            }).ConfigureAwait(true);
+
+            FeedbackStatus = FeedbackEnabled ? "已保存（已开启）" : "已保存（已关闭）";
+        }
+        catch (Exception ex)
+        {
+            FeedbackStatus = $"保存失败：{ex.Message}";
         }
     }
 }

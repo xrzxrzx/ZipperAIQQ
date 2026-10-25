@@ -637,6 +637,19 @@ public sealed class LogLineDto
     public string Display => $"[{TimeText} {Level}] {Message}";
 }
 
+/// <summary>主人反馈设置（问题记录 03 #4）。</summary>
+public sealed class FeedbackDto
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("types")]
+    public string[] Types { get; set; } = [];
+
+    [JsonPropertyName("target")]
+    public string Target { get; set; } = string.Empty;
+}
+
 /// <summary>系统提示词（与人设分开）。</summary>
 public sealed class SystemPromptDto{
     [JsonPropertyName("text")]
