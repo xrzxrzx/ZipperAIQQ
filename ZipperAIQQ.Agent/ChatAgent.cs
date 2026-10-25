@@ -49,6 +49,8 @@ public sealed class ChatAgent : IChatAgent
     private readonly IPermissionGate _permissionGate;
     private readonly IExecutionPolicy _policy;
     private readonly Search.IWebSearchProvider? _webSearch;
+    private readonly Media.IImageFetcher? _imageFetcher;
+    private readonly Media.IImageConverter? _imageConverter;
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
@@ -94,6 +96,8 @@ public sealed class ChatAgent : IChatAgent
         _permissionGate = deps.PermissionGate;
         _policy = deps.Policy;
         _webSearch = deps.WebSearch;
+        _imageFetcher = deps.ImageFetcher;
+        _imageConverter = deps.ImageConverter;
         _configs = configs;
         _settings = settings;
         _roles = deps.Roles;
@@ -348,7 +352,7 @@ public sealed class ChatAgent : IChatAgent
         // 时间注入（FR-15）：每条消息带时间，且每次都给发送者双名
         var memoryBlock = BuildMemoryBlock(related);
         var userLine = $"[{BeijingTime.Format(request.Now)}] {request.Sender.DisplayName}：{memoryBlock}{RenderContent(request)}";
-        messages.Add(BuildUserMessage(request, userLine));
+        messages.Add(await BuildUserMessageAsync(request, userLine, ct).ConfigureAwait(false));
 
         // send_message 绑定当前会话（模型无法指定发给谁）
         var sent = 0;
@@ -908,7 +912,8 @@ public sealed class ChatAgent : IChatAgent
     /// 否则每轮都要把所有历史图片重传一遍，token 会迅速烧光，
     /// 而且旧图对当前这轮几乎没有价值。
     /// </remarks>
-    private ChatMessage BuildUserMessage(AgentRunRequest request, string textVersion)
+    private async Task<ChatMessage> BuildUserMessageAsync(
+        AgentRunRequest request, string textVersion, CancellationToken ct)
     {
         var hasImage = request.Segments.Any(s => s is ImageSegment { Url: not null });
         if (!hasImage)
@@ -937,8 +942,10 @@ public sealed class ChatAgent : IChatAgent
                     contents.Add(new TextContent(RenderRecord(record)));
                     break;
 
-                case ImageSegment image when Uri.TryCreate(image.Url, UriKind.Absolute, out var uri):
-                    contents.Add(new UriContent(uri, "image/jpeg"));
+                case ImageSegment image when Uri.TryCreate(image.Url, UriKind.Absolute, out _):
+                    contents.Add(await Media.ImageContentBuilder
+                        .BuildAsync(image, _imageFetcher, _imageConverter, ct)
+                        .ConfigureAwait(false));
                     break;
 
                 case ImageSegment:

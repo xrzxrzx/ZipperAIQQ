@@ -7,6 +7,7 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
+using ZipperAIQQ.Agent.Media;
 using ZipperAIQQ.Agent.Search;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
@@ -24,6 +25,7 @@ using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Contacts;
 using ZipperAIQQ.Server.Identity;
 using ZipperAIQQ.Server.Logs;
+using ZipperAIQQ.Server.Media;
 using ZipperAIQQ.Server.Notices;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Server.Process;
@@ -162,6 +164,16 @@ public static class ServiceRegistration
                 sp.GetRequiredService<ILogger>());
         });
 
+        // 图片（问题记录 03 #2）：下载字节 + 真实 MIME + GIF/WebP 首帧转 PNG
+        services.AddSingleton<IImageFetcher>(sp =>
+        {
+            var client = sp.GetRequiredService<IHttpClientFactory>()
+                .CreateClient(nameof(HttpImageFetcher));
+            client.Timeout = TimeSpan.FromSeconds(8);
+            return new HttpImageFetcher(client, sp.GetRequiredService<ILogger>());
+        });
+        services.AddSingleton<IImageConverter, SkiaImageConverter>();
+
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
 
@@ -297,6 +309,8 @@ public static class ServiceRegistration
                 PermissionGate = sp.GetRequiredService<IPermissionGate>(),
                 Policy = sp.GetRequiredService<IExecutionPolicy>(),
                 WebSearch = sp.GetService<IWebSearchProvider>(),
+                ImageFetcher = sp.GetService<IImageFetcher>(),
+                ImageConverter = sp.GetService<IImageConverter>(),
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
                 FileMaxBytes = options.FileMaxBytes,
