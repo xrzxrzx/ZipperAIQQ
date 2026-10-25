@@ -88,6 +88,8 @@ public static class ServerConfigLoader
             NapCatWebSocketUrl = s.Str("napcat", "wsUrl", o.NapCatWebSocketUrl)!,
             NapCatAccessToken = s.Str("napcat", "token", o.NapCatAccessToken),
             SelfId = s.Str("napcat", "selfId", o.SelfId),
+            SearchEnabled = s.Bool("search", "enabled", o.SearchEnabled),
+            SearchBaseUrl = s.Str("search", "baseUrl", o.SearchBaseUrl),
 
             // ── llm ──
             LlmApiKey = s.Str("llm", "apiKey", o.LlmApiKey)!,

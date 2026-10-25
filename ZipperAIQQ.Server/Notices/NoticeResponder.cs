@@ -1,6 +1,9 @@
 using Serilog;
 using ZipperAIQQ.Agent;
+using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Storage.Notices;
 using ZipperAIQQ.Storage.Settings;
 
@@ -32,22 +35,30 @@ public sealed class NoticeResponder
     private readonly INoticeStore _notices;
     private readonly IRuntimeSettingsStore _settings;
     private readonly IChatAgentPool _agents;
+    private readonly IMessageChannel _channel;
+    private readonly ServerOptions _options;
     private readonly ILogger _logger;
 
     public NoticeResponder(
         INoticeStore notices,
         IRuntimeSettingsStore settings,
         IChatAgentPool agents,
+        IMessageChannel channel,
+        ServerOptions options,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(notices);
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(agents);
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _notices = notices;
         _settings = settings;
         _agents = agents;
+        _channel = channel;
+        _options = options;
         _logger = logger;
     }
 
@@ -79,7 +90,8 @@ public sealed class NoticeResponder
             return;
         }
 
-        var text = Describe(notice);
+        var selfId = _channel.SelfId ?? _options.SelfId;
+        var text = Describe(notice, selfId);
 
         try
         {
@@ -106,9 +118,11 @@ public sealed class NoticeResponder
     }
 
     /// <summary>把通知翻译成给模型看的一句话（保留 actor / target 的区分）。</summary>
-    public static string Describe(IncomingNotice notice) => notice.Type switch
+    public static string Describe(IncomingNotice notice, string? selfId = null) => notice.Type switch
     {
-        NoticeType.Poke => $"[戳一戳] {Who(notice.Actor)} 戳了 {Who(notice.Target)}",
+        NoticeType.Poke => string.Equals(notice.Target?.UserId, selfId, StringComparison.Ordinal)
+            ? $"[戳一戳] {Who(notice.Actor)} 戳了你"
+            : $"[戳一戳] {Who(notice.Actor)} 戳了 {Who(notice.Target)}（不是你，别当成戳自己）",
         // 成员增减事件没有 target_id 时，被操作者就是 user_id（映射层已补；这里再兜一次）
         NoticeType.GroupIncrease => $"[入群] {Who(notice.Target ?? notice.Actor)} 加入了群",
         NoticeType.GroupDecrease => $"[退群] {Who(notice.Target ?? notice.Actor)} 离开了群",

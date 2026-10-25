@@ -3,6 +3,24 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-10-25
+
+完整的发布说明见 [`docs/发布/v0.3.0.md`](docs/发布/v0.3.0.md)。
+
+### Added
+- 网页搜索对齐官方 `/v1/tools/search` + `/v1/tools/fetch`（`count` / `need_content`，官方优先 + 自建回落）
+- `search.enabled` / `search.baseUrl` 配置
+- 主人优先：主人可要求改称呼 / 设定 / 扮演，安全与工具权限不让渡
+- 自我身份：`bot.selfId` 持久化、提示词注入「你自己是谁」、`getSelfInfo` 诊断
+- 戳一戳：别人戳别人也响应，正文标注「不是你」；戳机器人用「戳了你」
+
+### Fixed
+- 网页搜索 404、参数名错误、fetch 未走官方接口
+- 搜索失败被伪装成「没搜到」
+- 戳 AI 无响应（`Target == self` 被误丢）
+- 自己入群被当成别人入群
+- 日志检索在 UTC 机器上的日期/时间范围错位
+
 ## [0.2.0] - 2026-10-23
 
 完整的发布说明见 [`docs/发布/v0.2.0.md`](docs/发布/v0.2.0.md)。

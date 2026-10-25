@@ -1,10 +1,9 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Serilog;
 using ZipperAIQQ.Agent.Search;
-using ZipperAIQQ.Server.Config;
-using ZipperAIQQ.Storage.Config;
 
 namespace ZipperAIQQ.Server.Search;
 
@@ -13,89 +12,116 @@ namespace ZipperAIQQ.Server.Search;
 /// </summary>
 /// <remarks>
 /// <para>
-/// ⚠️ 上游 Search API 的**确切调用形态尚未实测**（D33 只定了"用 DeepSeek 原生能力"）。
-/// 这里按"POST {base}/search {query, top_k} + Bearer key"实现，并把解析写成宽容模式：
-/// 兼容 <c>data.results</c> / <c>results</c> / 顶层数组。实测定型后只需改这一个文件。
+/// 官方端点（2026-10-25 实测，见 <c>docs/06-调研/DeepSeek搜索实测.md</c>）：
+/// <c>POST {base}/v1/tools/search</c>（<c>count</c> / <c>need_content</c>）与
+/// <c>POST {base}/v1/tools/fetch</c>（<c>url</c> → <c>content</c> Markdown）。
 /// </para>
 /// <para>
-/// key 复用 LLM 端点（primary）的加密 key；base 可用 <c>ZIPPER_SEARCH_BASEURL</c> 覆盖。
-/// 失败一律返回"不可用"，**绝不**让搜索把对话卡住。
+/// 失败语义：非 2xx / 鉴权失败 / 解析失败 → 抛 <see cref="WebSearchException"/>，
+/// **不再**伪装成「没搜到」；只有 200 且结果为空才是真的没搜到。
+/// </para>
+/// <para>
+/// fetch 采用「官方优先 + 自建回落」：官方有反爬与正文提取，但按成功请求计费；
+/// 官方失败时才用旧的 GET + 正则剥标签，兼顾可用性与成本。
 /// </para>
 /// </remarks>
 public sealed class DeepSeekWebSearchProvider : IWebSearchProvider
 {
+    private const string SearchPath = "/v1/tools/search";
+    private const string FetchPath = "/v1/tools/fetch";
+
     private readonly HttpClient _http;
-    private readonly IConfigStore _configs;
-    private readonly ISecretProtector _protector;
+    private readonly Func<CancellationToken, Task<string?>> _keyProvider;
+    private readonly bool _enabled;
     private readonly string _baseUrl;
     private readonly ILogger _logger;
 
     public DeepSeekWebSearchProvider(
         HttpClient http,
-        IConfigStore configs,
-        ISecretProtector protector,
+        Func<CancellationToken, Task<string?>> keyProvider,
+        bool enabled,
         string? baseUrl,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(http);
-        ArgumentNullException.ThrowIfNull(configs);
-        ArgumentNullException.ThrowIfNull(protector);
+        ArgumentNullException.ThrowIfNull(keyProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _http = http;
-        _configs = configs;
-        _protector = protector;
+        _keyProvider = keyProvider;
+        _enabled = enabled;
         _baseUrl = (string.IsNullOrWhiteSpace(baseUrl) ? "https://api.deepseek.com" : baseUrl).TrimEnd('/');
         _logger = logger;
     }
 
-    public bool IsAvailable => true;
+    public bool IsAvailable => _enabled;
 
     public async Task<IReadOnlyList<WebSearchResult>> SearchAsync(
         string query, int topK, CancellationToken ct = default)
     {
-        var key = await GetKeyAsync(ct).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(key))
+        if (!_enabled)
         {
-            return [];
+            throw new WebSearchException("网页搜索已被配置关闭");
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/search")
+        var key = await _keyProvider(ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(key))
         {
-            Content = JsonContent.Create(new { query, top_k = topK }),
+            throw new WebSearchException("没有可用的搜索 key（LLM 端点未配置）");
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}{SearchPath}")
+        {
+            Content = JsonContent.Create(new
+            {
+                query,
+                count = Math.Clamp(topK, 1, 50),
+                need_content = false,
+            }),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
 
         using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            _logger.Warning("网页搜索失败：HTTP {Status}", (int)response.StatusCode);
-            return [];
+            var detail = await ReadBodySnippetAsync(response, ct).ConfigureAwait(false);
+            _logger.Warning(
+                "网页搜索失败：HTTP {Status} {Detail}",
+                (int)response.StatusCode,
+                detail);
+
+            throw new WebSearchException(
+                $"上游返回 HTTP {(int)response.StatusCode}",
+                (int)response.StatusCode);
         }
 
         var json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(json);
 
-        var array = FindArray(doc.RootElement);
-        if (array is null)
+        if (!doc.RootElement.TryGetProperty("results", out var results) ||
+            results.ValueKind != JsonValueKind.Array)
         {
-            return [];
+            throw new WebSearchException("搜索响应里没有 results 数组");
         }
 
-        var results = new List<WebSearchResult>();
-        foreach (var item in array.Value.EnumerateArray())
+        var parsed = new List<WebSearchResult>();
+        foreach (var item in results.EnumerateArray())
         {
-            var title = GetString(item, "title") ?? GetString(item, "name") ?? string.Empty;
-            var url = GetString(item, "url") ?? GetString(item, "link") ?? string.Empty;
-            var snippet = GetString(item, "snippet") ?? GetString(item, "content") ?? GetString(item, "summary") ?? string.Empty;
+            var title = GetString(item, "title") ?? string.Empty;
+            var url = GetString(item, "url") ?? string.Empty;
+            var snippet = GetString(item, "snippet")
+                          ?? GetString(item, "summary")
+                          ?? GetString(item, "content")
+                          ?? string.Empty;
 
             if (url.Length > 0)
             {
-                results.Add(new WebSearchResult(title, url, snippet));
+                parsed.Add(new WebSearchResult(title, url, snippet));
             }
         }
 
-        return results;
+        _logger.Information("网页搜索完成：query={Query} 结果={Count}", query, parsed.Count);
+        return parsed;
     }
 
     public async Task<string?> FetchAsync(string url, CancellationToken ct = default)
@@ -103,62 +129,100 @@ public sealed class DeepSeekWebSearchProvider : IWebSearchProvider
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
             (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
         {
-            return null;
+            throw new WebSearchException($"不是合法的 http/https 地址：{url}");
         }
 
+        if (_enabled)
+        {
+            var official = await TryOfficialFetchAsync(uri, ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(official))
+            {
+                return official;
+            }
+        }
+
+        return await SelfFetchAsync(uri, ct).ConfigureAwait(false);
+    }
+
+    private async Task<string?> TryOfficialFetchAsync(Uri uri, CancellationToken ct)
+    {
+        try
+        {
+            var key = await _keyProvider(ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return null;
+            }
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}{FetchPath}")
+            {
+                Content = JsonContent.Create(new { url = uri.ToString() }),
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+
+            using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.Warning("官方 fetch 失败：HTTP {Status}，回落自建抓取", (int)response.StatusCode);
+                return null;
+            }
+
+            var json = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("content", out var content) ||
+                content.ValueKind != JsonValueKind.String)
+            {
+                _logger.Warning("官方 fetch 响应没有 content，回落自建抓取");
+                return null;
+            }
+
+            var text = content.GetString();
+            return string.IsNullOrWhiteSpace(text) ? null : text;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.Warning(ex, "官方 fetch 异常，回落自建抓取");
+            return null;
+        }
+    }
+
+    /// <summary>自建抓取：GET 页面 + 正则剥标签（免费，但站点一拦就抓不到）。</summary>
+    private async Task<string?> SelfFetchAsync(Uri uri, CancellationToken ct)
+    {
         using var response = await _http.GetAsync(uri, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            return null;
+            throw new WebSearchException(
+                $"抓取页面失败：HTTP {(int)response.StatusCode}",
+                (int)response.StatusCode);
         }
 
         var html = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
-        // 极简正文提取：去脚本/样式/标签；够模型读即可，不引入 HTML 解析依赖
-        var text = System.Text.RegularExpressions.Regex.Replace(
+        var text = Regex.Replace(
             html,
             "<(script|style)[^>]*>.*?</\\1>",
             " ",
-            System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        text = System.Text.RegularExpressions.Regex.Replace(text, "<[^>]+>", " ");
+            RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, "<[^>]+>", " ");
         text = System.Net.WebUtility.HtmlDecode(text);
-        text = System.Text.RegularExpressions.Regex.Replace(text, "\\s{2,}", " ").Trim();
+        text = Regex.Replace(text, "\\s{2,}", " ").Trim();
 
         return text.Length == 0 ? null : text;
     }
 
-    private async Task<string?> GetKeyAsync(CancellationToken ct)
+    private static async Task<string> ReadBodySnippetAsync(
+        HttpResponseMessage response, CancellationToken ct)
     {
-        var endpoint = await _configs.GetEndpointAsync("primary", ct).ConfigureAwait(false);
-        return endpoint is null ? null : _protector.Unprotect(endpoint.KeyCipher);
-    }
-
-    private static JsonElement? FindArray(JsonElement root)
-    {
-        if (root.ValueKind == JsonValueKind.Array)
+        try
         {
-            return root;
+            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            return body.Length <= 200 ? body : body[..200];
         }
-
-        foreach (var name in new[] { "results", "data", "items" })
+        catch
         {
-            if (root.TryGetProperty(name, out var node))
-            {
-                if (node.ValueKind == JsonValueKind.Array)
-                {
-                    return node;
-                }
-
-                if (node.ValueKind == JsonValueKind.Object &&
-                    node.TryGetProperty("results", out var inner) &&
-                    inner.ValueKind == JsonValueKind.Array)
-                {
-                    return inner;
-                }
-            }
+            return string.Empty;
         }
-
-        return null;
     }
 
     private static string? GetString(JsonElement item, string name) =>

@@ -24,7 +24,7 @@ public static class WebSearchTool
 
                 if (!provider.IsAvailable)
                 {
-                    return "搜索服务当前不可用（服务端未配置或连接失败）。";
+                    return "网页搜索已被服务端关闭（配置 search.enabled=false）。";
                 }
 
                 try
@@ -40,6 +40,12 @@ public static class WebSearchTool
 
                     return string.Join('\n', results.Select((r, i) =>
                         $"{i + 1}. {r.Title}\n   {r.Url}\n   {r.Snippet}"));
+                }
+                catch (WebSearchException ex)
+                {
+                    return ex.StatusCode is { } status
+                        ? $"搜索失败（HTTP {status}）。如实告诉对方这次没查成，不要编造结果。"
+                        : $"搜索失败：{ex.Message}。如实告诉对方这次没查成，不要编造结果。";
                 }
                 catch (Exception ex)
                 {
@@ -74,6 +80,12 @@ public static class WebSearchTool
                     }
 
                     return text.Length > 8000 ? text[..8000] + "\n…（截断）" : text;
+                }
+                catch (WebSearchException ex)
+                {
+                    return ex.StatusCode is { } status
+                        ? $"抓取失败（HTTP {status}）。如实告诉对方这次没查成。"
+                        : $"抓取失败：{ex.Message}。如实告诉对方这次没查成。";
                 }
                 catch (Exception ex)
                 {

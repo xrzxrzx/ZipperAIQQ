@@ -93,6 +93,12 @@ public sealed record ServerOptions
     /// </remarks>
     public string? SelfId { get; init; }
 
+    /// <summary>网页搜索开关（默认开；关掉时模型看不到 web_search/fetch_url）。</summary>
+    public bool SearchEnabled { get; init; } = true;
+
+    /// <summary>搜索服务基地址（默认 https://api.deepseek.com，可用环境变量覆盖）。</summary>
+    public string? SearchBaseUrl { get; init; }
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;
@@ -133,6 +139,9 @@ public sealed record ServerOptions
         int IntOrDefault(string name, int fallback) =>
             int.TryParse(Optional(name), out var parsed) ? parsed : fallback;
 
+        bool BoolOrDefault(string name, bool fallback) =>
+            bool.TryParse(Optional(name), out var parsed) ? parsed : fallback;
+
         static IReadOnlyList<string> SplitList(string? raw) =>
             (raw ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
@@ -154,6 +163,8 @@ public sealed record ServerOptions
         {
             NapCatWebSocketUrl = wsUrl,
             NapCatAccessToken = Optional("ZIPPER_NAPCAT_TOKEN"),
+            SearchEnabled = BoolOrDefault("ZIPPER_SEARCH_ENABLED", true),
+            SearchBaseUrl = Optional("ZIPPER_SEARCH_BASEURL"),
             Whitelist = (Optional("ZIPPER_WHITELIST") ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             SttEnabled = Optional("ZIPPER_STT_ENABLED") is not "0",

@@ -321,8 +321,18 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
     public ChannelCapabilities Capabilities =>
         ChannelCapabilities.Text | ChannelCapabilities.Image | ChannelCapabilities.Mention | ChannelCapabilities.Reply;
 
-    /// <summary>机器人自身账号（用于过滤自己发出的消息，避免自激循环）。</summary>
-    public long SelfId => Interlocked.Read(ref _selfId);
+    /// <summary>机器人自身账号；未知时为 null。</summary>
+    public string? SelfId
+    {
+        get
+        {
+            var value = Interlocked.Read(ref _selfId);
+            return value > 0 ? value.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+        }
+    }
+
+    /// <summary>首次发现 / 变更自身账号。</summary>
+    public event Action<string>? SelfIdChanged;
 
     /// <summary>因不在名单内而被丢弃的事件数（FR-17.4，**只计数不记内容**）。</summary>
     public long BlockedCount => Interlocked.Read(ref _blockedCount);
@@ -440,21 +450,32 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
         // 记录机器人自身账号（心跳/生命周期事件里带 self_id），用于过滤自激
         if (obj["self_id"] is JsonValue selfValue && selfValue.TryGetValue<long>(out var selfId))
         {
-            Interlocked.Exchange(ref _selfId, selfId);
+            var previous = Interlocked.Exchange(ref _selfId, selfId);
+            if (previous != selfId && selfId > 0)
+            {
+                var text = selfId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                _logger.Information("已识别机器人账号：{SelfId}", text);
+                SelfIdChanged?.Invoke(text);
+            }
         }
 
         // 自激过滤（消息）：自己发出的消息也会作为 message 事件回来
-        if (evt is IncomingMessage msg && msg.Sender.UserId == SelfId.ToString())
+        var self = SelfId;
+        if (evt is IncomingMessage msg && self is not null && msg.Sender.UserId == self)
         {
             return;
         }
 
-        // 自激过滤（通知）：自己入群 / 自己是被操作者 / 自己触发的操作都不该触发响应（问题记录 #39）。
-        // 只有通道层拿得到**动态** SelfId；路由层只能用配置里的自 ID 再兜一次。
-        if (evt is IncomingNotice notice && IsSelfRelated(notice))
+        // 自激过滤（通知）：自己触发 / 自己是被操作者 → 丢弃（问题记录 #39）。
+        // 只有通道层拿得到**动态** SelfId；路由层用配置/持久化自 ID 再兜一次。
+        if (evt is IncomingNotice notice && NoticeSelfPolicy.ShouldDrop(notice, self))
         {
-            _logger.Debug("丢弃自身相关通知：{Type}（Actor={Actor}, Target={Target}）",
-                notice.Type, notice.Actor?.UserId, notice.Target?.UserId);
+            _logger.Information(
+                "丢弃自身相关通知：{Type}（Actor={Actor}, Target={Target}, Self={Self}）",
+                notice.Type,
+                notice.Actor?.UserId,
+                notice.Target?.UserId,
+                self);
             return;
         }
 
@@ -475,14 +496,6 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
         {
             _logger.Warning("事件队列写入失败，已丢弃一条事件");
         }
-    }
-
-    /// <summary>这条通知是不是「自己相关」（自己触发 / 自己是被操作者）。</summary>
-    private bool IsSelfRelated(IncomingNotice notice)
-    {
-        var self = SelfId.ToString();
-        return !string.IsNullOrEmpty(self) && self != "0"
-            && (notice.Actor?.UserId == self || notice.Target?.UserId == self);
     }
 
     /// <summary>把语音段补齐成转写文本；转写不可用时原样返回。</summary>

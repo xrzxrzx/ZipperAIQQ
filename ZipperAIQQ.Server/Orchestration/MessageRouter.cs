@@ -4,6 +4,7 @@ using Serilog;
 using ZipperAIQQ.Agent;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Storage.Messages;
 
@@ -83,9 +84,14 @@ public sealed class MessageRouter : BackgroundService
                         // M2-E：落库 + 按配置决定是否响应（默认只记录，FR-18.3）
                         // 自激兜底：通道层已按动态 SelfId 过滤过；这里再用配置里的自 ID 拦一次，
                         // 以防换成别的通道实现时漏判（问题记录 #39）
-                        if (IsSelfNotice(notice))
+                        if (NoticeSelfPolicy.ShouldDrop(notice, _options.SelfId))
                         {
-                            _logger.Debug("丢弃自身相关通知（路由层兜底）：{Type}", notice.Type);
+                            _logger.Information(
+                                "丢弃自身相关通知（路由层兜底）：{Type}（Actor={Actor}, Target={Target}, Self={Self}）",
+                                notice.Type,
+                                notice.Actor?.UserId,
+                                notice.Target?.UserId,
+                                _options.SelfId);
                             break;
                         }
 
@@ -109,13 +115,6 @@ public sealed class MessageRouter : BackgroundService
     private const int CollectWindowMs = 600;
 
     /// <summary>这条通知是不是自己触发的（配置里的自 ID 兜底判断）。</summary>
-    private bool IsSelfNotice(IncomingNotice notice)
-    {
-        var self = _options.SelfId;
-        return !string.IsNullOrWhiteSpace(self)
-            && (notice.Actor?.UserId == self || notice.Target?.UserId == self);
-    }
-
     private sealed class SessionBuffer
     {
         public readonly List<IncomingMessage> Messages = [];
