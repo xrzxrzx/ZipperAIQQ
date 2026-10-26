@@ -102,6 +102,22 @@ public static class ServerConfigLoader
             LlmModel = s.Str("llm", "model", o.LlmModel)!,
             LlmApiKind = s.ApiKind("llm", "apiKind", o.LlmApiKind),
 
+            // ── mail（多平台通道接入 · 邮件）──
+            Mail = o.Mail with
+            {
+                Enabled = s.Bool("mail", "enabled", o.Mail.Enabled),
+                InitialDays = s.Int("mail", "initialDays", o.Mail.InitialDays),
+                PollIntervalSeconds = s.Int("mail", "pollIntervalSeconds", o.Mail.PollIntervalSeconds),
+                MaxBodyChars = s.Int("mail", "maxBodyChars", o.Mail.MaxBodyChars),
+                SummaryEnabled = s.Bool("mail", "summaryEnabled", o.Mail.SummaryEnabled),
+                MaxConcurrentSummaries = s.Int("mail", "maxConcurrentSummaries", o.Mail.MaxConcurrentSummaries),
+                SummaryRetryCount = s.Int("mail", "summaryRetryCount", o.Mail.SummaryRetryCount),
+                DigestMode = s.EnumValue("mail", "digestMode", o.Mail.DigestMode),
+                DigestIntervalMinutes = s.Int("mail", "digestIntervalMinutes", o.Mail.DigestIntervalMinutes),
+                DailyAtHour = s.Int("mail", "dailyAtHour", o.Mail.DailyAtHour),
+                ForwardRetryCount = s.Int("mail", "forwardRetryCount", o.Mail.ForwardRetryCount),
+            },
+
             // ── limits ──
             SendIntervalMs = s.Int("limits", "sendIntervalMs", o.SendIntervalMs),
             MaxConsecutive = s.Int("limits", "maxConsecutive", o.MaxConsecutive),
@@ -190,6 +206,14 @@ public static class ServerConfigLoader
         public LlmApiKind ApiKind(string section, string key, LlmApiKind fallback) =>
             Node(section, key) is YamlScalarNode s
             && Enum.TryParse<LlmApiKind>(s.Value, ignoreCase: true, out var v)
+                ? v
+                : fallback;
+
+        /// <summary>任意枚举（大小写不敏感）；写错就回落默认值，不让一个拼写错误把服务卡住。</summary>
+        public TEnum EnumValue<TEnum>(string section, string key, TEnum fallback)
+            where TEnum : struct, Enum =>
+            Node(section, key) is YamlScalarNode s
+            && Enum.TryParse<TEnum>(s.Value, ignoreCase: true, out var v)
                 ? v
                 : fallback;
     }

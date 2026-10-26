@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!--
+    邮件接入（多平台通道接入 · 决策一）：IMAP 收信，**只收不发**。
+
+    依赖方向：Mail → Storage → Channel → Core。
+      · Channel：IMessageSource / IncomingMail（平台无关抽象，接缝 B）
+      · Storage：IMailRepository（账号 / 邮件 / 摘要状态）
+      · ⚠️ **不依赖 Agent**：通道层不得反向依赖 agent 层；
+        摘要服务放在 Server，用 IChatClientProvider 实现。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\ZipperAIQQ.Channel\ZipperAIQQ.Channel.csproj" />
+    <ProjectReference Include="..\ZipperAIQQ.Core\ZipperAIQQ.Core.csproj" />
+    <ProjectReference Include="..\ZipperAIQQ.Storage\ZipperAIQQ.Storage.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 只服务端引入：客户端不引（邮件接入设计 §10 风险 4） -->
+    <PackageReference Include="MailKit" Version="4.18.2" />
+    <PackageReference Include="Serilog" Version="4.4.0" />
+  </ItemGroup>
+
+</Project>

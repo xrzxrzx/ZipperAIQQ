@@ -17,7 +17,9 @@ using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.NapCat;
 using ZipperAIQQ.Channel.Throttling;
 using ZipperAIQQ.Core.Events;
+using ZipperAIQQ.Mail;
 using ZipperAIQQ.Server.Configuration;
+using ZipperAIQQ.Server.Mail;
 using ZipperAIQQ.Server.Api;
 using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
@@ -39,6 +41,7 @@ using ZipperAIQQ.Storage.Settings;
 using ZipperAIQQ.Storage.Database;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Mails;
 using ZipperAIQQ.Storage.Notices;
 using ZipperAIQQ.Storage.Metrics;
 using ZipperAIQQ.Storage.Personas;
@@ -188,6 +191,45 @@ public static class ServiceRegistration
 
         services.AddSingleton<ActionDispatcher>();
         services.AddSingleton<EventBroadcaster>();
+
+        // ── 邮件接入（多平台通道接入 · 决策一 / 九）：IMAP 收信 → 摘要 → 转发给主人 ──
+        // 邮件**只收不发**：实现 IMessageSource 而不是 IMessageChannel（邮件接入设计 §2.1）。
+        services.AddSingleton<IMailRepository, SqliteMailRepository>();
+        services.AddSingleton<IImapSessionFactory, MailKitImapSessionFactory>();
+        services.AddSingleton<ICredentialProtector, MailSecretAdapter>();
+        services.AddSingleton(sp => new MailSource(
+            sp.GetRequiredService<IImapSessionFactory>(),
+            sp.GetRequiredService<IMailRepository>(),
+            sp.GetRequiredService<ICredentialProtector>(),
+            new MailSourceOptions
+            {
+                InitialDays = options.Mail.InitialDays,
+                PollIntervalSeconds = options.Mail.PollIntervalSeconds,
+                MaxBodyChars = options.Mail.MaxBodyChars,
+            },
+            sp.GetRequiredService<ILogger>()));
+        // 源**不**注册成 HostedService（实施微调 M12）：由 MailPipeline 在 ExecuteAsync 里
+        // StartAsync / StopAsync，与 MessageRouter 启动 NapCatChannel 完全同构 —— 生命周期只有一处。
+        // 邮件策略参数进容器：action 与两个服务都直接注入 MailOptions，不引 IOptions<T>。
+        services.AddSingleton(options.Mail);
+        services.AddSingleton(sp => new MailSummaryService(
+            sp.GetRequiredService<IChatClientProvider>(),
+            options.Mail,
+            sp.GetRequiredService<ILogger>()));
+        services.AddSingleton<IMailSummaryService>(sp => sp.GetRequiredService<MailSummaryService>());
+        services.AddSingleton(sp => new MailDigestService(
+            sp.GetRequiredService<IRuntimeSettingsStore>(),
+            sp.GetRequiredService<IMessageChannel>(),
+            sp.GetRequiredService<IMailRepository>(),
+            options.Mail,
+            sp.GetRequiredService<ILogger>()));
+        services.AddHostedService<MailPipeline>();
+        services.AddSingleton<IApiAction, ListMailsAction>();
+        services.AddSingleton<IApiAction, GetMailAction>();
+        services.AddSingleton<IApiAction, ListMailAccountsAction>();
+        services.AddSingleton<IApiAction, SaveMailAccountAction>();
+        services.AddSingleton<IApiAction, DeleteMailAccountAction>();
+        services.AddSingleton<IApiAction, SyncMailAction>();
 
         // ── M2-E：回复触发模式（FR-11）：every / mention / jev（判断失败降级 mention）──
         services.AddSingleton<IRuntimeSettingsStore, SqliteRuntimeSettingsStore>();

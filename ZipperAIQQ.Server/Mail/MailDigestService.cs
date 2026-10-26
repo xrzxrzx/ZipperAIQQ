@@ -1,0 +1,248 @@
+using System.Text;
+using Serilog;
+using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Core.Time;
+using ZipperAIQQ.Storage.Mails;
+using ZipperAIQQ.Storage.Settings;
+
+namespace ZipperAIQQ.Server.Mail;
+
+/// <summary>一次汇总转发的结果。</summary>
+/// <param name="MailCount">这一批涉及多少封邮件（0 = 本来就没有待转的）。</param>
+/// <param name="Sent">是否真的发出去了。**false 时这些邮件仍是待转发状态**（下次还会试）。</param>
+/// <param name="Error">没发出去的可读原因（主人未配置 / 发送失败）；成功时为 <c>null</c>。</param>
+public sealed record MailDigestResult(int MailCount, bool Sent, string? Error);
+
+/// <summary>
+/// 把「摘要成功但还没转发」的邮件合并成一条，转发到主人私聊（需求决策九）。
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>为什么按「库里查待转」而不是「事件里攒」</b>：进程重启、当天发送失败、
+/// 汇总时刻没转出去，这些情况都得能补。待转状态放在库里（<c>MailSummaries.ForwardedAt</c>），
+/// 下一轮巡检重新捞出来即可；纯内存攒批一重启就全丢。
+/// </para>
+/// <para>
+/// <b>主人未配置 ≠ 静默丢</b>（验收标准 10）：返回 <see cref="MailDigestResult.Sent"/> = false +
+/// 可读原因，且**不标记已转发** —— 配置好主人之后下一轮自动补发。
+/// </para>
+/// <para>
+/// <b>不转发正文全文</b>：只发 时间 / 发件人 / 主题 / 摘要 / 是否需要处理
+/// （设计 §2.3）。正文动辄几千字，转发等于刷屏；真要看详情去客户端看。
+/// </para>
+/// </remarks>
+public class MailDigestService
+{
+    /// <summary>主人账号的设置键。与 <c>OwnerFeedbackService</c> / <c>GetOwnerAction</c> 同一口径。</summary>
+    public const string OwnerKey = "owner.userId";
+
+    /// <summary>单批上限的兜底（调用方传再大也不至于一次刷几千行到 QQ）。</summary>
+    private const int MaxBatchSize = 200;
+
+    private readonly IRuntimeSettingsStore _settings;
+    private readonly IMessageChannel _channel;
+    private readonly IMailRepository _repository;
+    private readonly MailOptions _options;
+    private readonly ILogger _logger;
+
+    public MailDigestService(
+        IRuntimeSettingsStore settings,
+        IMessageChannel channel,
+        IMailRepository repository,
+        MailOptions options,
+        ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        _settings = settings;
+        _channel = channel;
+        _repository = repository;
+        _options = options;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// 取一批待转邮件，合并后发到主人私聊；成功则标记已转发。
+    /// </summary>
+    /// <param name="maxMails">这一批最多几封（小于 1 时按 1 处理）。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <remarks>
+    /// **不抛异常**（取消除外）：管道每轮都会调它，抛出去只会变成"管道崩了"，
+    /// 而真正该让用户看到的是"为什么没转出去"——那就在返回值里。
+    /// </remarks>
+    public async Task<MailDigestResult> FlushAsync(int maxMails, CancellationToken ct = default)
+    {
+        try
+        {
+            return await FlushCoreAsync(maxMails, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 停机是正常流程，不吞也不当失败
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // 仓储 / 设置 / 通道都可能临时抽风：这一批保持待转发，下一轮重试
+            _logger.Error(ex, "邮件汇总转发失败");
+            return new MailDigestResult(0, false, "汇总转发失败：" + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 重试前的等待（指数退避 1s → 2s → 4s，封顶 8s）。抽成虚方法只为单测能把等待压成 0。
+    /// </summary>
+    protected virtual TimeSpan RetryDelay(int attempt) =>
+        TimeSpan.FromSeconds(Math.Min(8, Math.Pow(2, attempt - 1)));
+
+    private async Task<MailDigestResult> FlushCoreAsync(int maxMails, CancellationToken ct)
+    {
+        var limit = Math.Clamp(maxMails, 1, MaxBatchSize);
+        var pending = await _repository.GetPendingDigestAsync(limit, ct).ConfigureAwait(false);
+
+        // 管道每轮都会调：空转是常态，不该报错也不该刷 Warning
+        if (pending.Count == 0)
+        {
+            return new MailDigestResult(0, false, null);
+        }
+
+        var ownerId = await _settings.GetAsync(OwnerKey, ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(ownerId))
+        {
+            // 不静默丢：不标记已转发，配好主人之后下一轮会补发（验收标准 10）
+            _logger.Warning(
+                "邮件汇总未转发：还没有设置主人（{Key}），{Count} 封保持待转发",
+                OwnerKey, pending.Count);
+
+            return new MailDigestResult(
+                pending.Count,
+                false,
+                "还没有设置主人（owner.userId），这封汇总没有发出去；邮件都在库里，配置主人后会自动补发。");
+        }
+
+        var text = BuildDigest(pending);
+        var target = new ChatRef
+        {
+            Platform = _channel.Platform,
+            Type = ChatType.Private,
+            Id = ownerId.Trim(),
+        };
+
+        var retries = Math.Max(0, _options.ForwardRetryCount);
+        var failureCount = 0;
+
+        while (true)
+        {
+            try
+            {
+                await _channel
+                    .SendAsync(
+                        new OutgoingMessage
+                        {
+                            Chat = target,
+                            Segments = [new TextSegment(text)],
+                        },
+                        ct)
+                    .ConfigureAwait(false);
+
+                break;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (failureCount >= retries)
+                {
+                    // 不标记已转发：邮件留在待转队列里，下一轮继续试
+                    _logger.Error(
+                        ex,
+                        "邮件汇总发送失败（已重试 {Retries} 次），{Count} 封保持待转发",
+                        failureCount, pending.Count);
+
+                    return new MailDigestResult(
+                        pending.Count,
+                        false,
+                        $"发送到主人私聊失败：{ex.Message}（已重试 {failureCount} 次，邮件仍待转发）。");
+                }
+
+                failureCount++;
+                var delay = RetryDelay(failureCount);
+
+                _logger.Warning(
+                    "邮件汇总发送失败，第 {Attempt} 次重试：等待 {DelayMs}ms 原因={Reason}",
+                    failureCount, (int)delay.TotalMilliseconds, ex.Message);
+
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
+        }
+
+        var ids = pending.Select(mail => mail.Id).ToList();
+        await _repository.MarkForwardedAsync(ids, ct: ct).ConfigureAwait(false);
+
+        _logger.Information(
+            "邮件汇总已转发：{Count} 封 → {Session}", pending.Count, target.SessionId);
+
+        return new MailDigestResult(pending.Count, true, null);
+    }
+
+    /// <summary>组汇总文本：标题 + 每封的 时间/发件人/主题/摘要/是否需处理，**不含正文**。</summary>
+    private static string BuildDigest(IReadOnlyList<StoredMail> mails)
+    {
+        var builder = new StringBuilder();
+        builder.Append("📬 邮件汇总（").Append(mails.Count).AppendLine(" 封）");
+
+        var index = 0;
+        foreach (var mail in mails)
+        {
+            index++;
+
+            builder.AppendLine();
+            builder.Append(index).Append(". ");
+
+            if (mail.Summary?.NeedsAction == true)
+            {
+                builder.Append("⚠️ 需要处理｜");
+            }
+
+            builder.Append('[').Append(BeijingTime.FormatShort(mail.SentAt)).Append("] ")
+                .AppendLine(DescribeSender(mail));
+            builder.Append("   主题：").AppendLine(mail.Subject);
+            builder.Append("   摘要：").AppendLine(SummaryText(mail.Summary));
+        }
+
+        builder.AppendLine();
+        builder.Append("（正文不转发，详情请在客户端邮件列表查看）");
+
+        return builder.ToString().TrimEnd();
+    }
+
+    /// <summary>摘要位的内容：成功用摘要，失败带原因 —— 失败也要转，别让人以为漏了信。</summary>
+    private static string SummaryText(MailSummaryRow? row)
+    {
+        if (row is null)
+        {
+            return "（摘要未完成）";
+        }
+
+        if (!row.IsOk)
+        {
+            return string.IsNullOrWhiteSpace(row.Error)
+                ? "（摘要失败：原因未知）"
+                : $"（摘要失败：{row.Error}）";
+        }
+
+        return string.IsNullOrWhiteSpace(row.Text) ? "（摘要为空）" : row.Text;
+    }
+
+    private static string DescribeSender(StoredMail mail) =>
+        string.IsNullOrWhiteSpace(mail.FromName)
+            ? mail.FromAddress
+            : $"{mail.FromName} <{mail.FromAddress}>";
+}

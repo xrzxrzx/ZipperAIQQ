@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\ZipperAIQQ.Core\ZipperAIQQ.Core.csproj" />
     <ProjectReference Include="..\ZipperAIQQ.Channel\ZipperAIQQ.Channel.csproj" />
+    <ProjectReference Include="..\ZipperAIQQ.Mail\ZipperAIQQ.Mail.csproj" />
     <ProjectReference Include="..\ZipperAIQQ.Storage\ZipperAIQQ.Storage.csproj" />
     <ProjectReference Include="..\ZipperAIQQ.Agent\ZipperAIQQ.Agent.csproj" />
     <ProjectReference Include="..\ZipperAIQQ.Server\ZipperAIQQ.Server.csproj" />

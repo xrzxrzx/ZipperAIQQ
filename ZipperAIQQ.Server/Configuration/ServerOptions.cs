@@ -115,10 +115,20 @@ public sealed record ServerOptions
     /// <summary>反向 WS 额外监听块（host:port；启动时生效）。</summary>
     public IReadOnlyList<External.ExternalReverseServer> ExternalReverseServers { get; init; } = [];
 
+    // ── 邮件接入（多平台通道接入 · 决策一 / 九）──
+
+    /// <summary>
+    /// 邮件运行参数（<c>mail</c> 配置节）。
+    /// </summary>
+    /// <remarks>
+    /// 账号与凭据**不在这里**：它们存在 <c>MailAccounts</c> 表里（客户端可改），
+    /// 这里只放策略参数。默认 <see cref="Mail.MailOptions.Enabled"/> = false（不启用就不连 IMAP）。
+    /// </remarks>
+    public Mail.MailOptions Mail { get; init; } = new();
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;
-
     /// <summary>连续快发到多少条后进入冷却。</summary>
     public int MaxConsecutive { get; init; } = 10;
 

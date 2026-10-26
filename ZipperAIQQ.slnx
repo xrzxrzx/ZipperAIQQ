@@ -3,6 +3,7 @@
   <Project Path="ZipperAIQQ.Channel/ZipperAIQQ.Channel.csproj" />
   <Project Path="ZipperAIQQ.Client/ZipperAIQQ.Client.csproj" />
   <Project Path="ZipperAIQQ.Core/ZipperAIQQ.Core.csproj" />
+  <Project Path="ZipperAIQQ.Mail/ZipperAIQQ.Mail.csproj" />
   <Project Path="ZipperAIQQ.Server/ZipperAIQQ.Server.csproj" />
   <Project Path="ZipperAIQQ.Storage/ZipperAIQQ.Storage.csproj" />
   <Project Path="ZipperAIQQ.Tests/ZipperAIQQ.Tests.csproj" />
