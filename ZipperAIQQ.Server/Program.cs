@@ -165,6 +165,13 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     // 网页搜索配置（与模型独立）先读回库
     await app.Services.GetRequiredService<SearchOptionsService>().InitializeAsync();
 
+    // 抖音 sidecar 配置（S3-F / 决策七）：先读回库，再把变更推给通道
+    var douyinOptions = app.Services.GetRequiredService<ZipperAIQQ.Server.Channels.DouyinOptionsService>();
+    var douyinChannel = app.Services.GetRequiredService<ZipperAIQQ.Server.Channels.DouyinChannel>();
+    await douyinOptions.InitializeAsync();
+    douyinChannel.UpdateOptions(douyinOptions.Current.ToOptions());
+    douyinOptions.Changed += () => douyinChannel.UpdateOptions(douyinOptions.Current.ToOptions());
+
     // 按运行配置建（或重建）LLM 客户端；配置写错只会保留旧客户端，不会起不来
     await app.Services.GetRequiredService<IChatClientProvider>().ReloadAsync();
 

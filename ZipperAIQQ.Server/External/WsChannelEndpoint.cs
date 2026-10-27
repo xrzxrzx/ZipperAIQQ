@@ -44,10 +44,11 @@ public static class WsChannelEndpoint
         app.Map("/ws/channel", async context =>
         {
             var services = context.RequestServices;
-            var options = services.GetRequiredService<ServerOptions>();
+            // 配置走 DouyinOptionsService（S3-F）：客户端改了 enabled/token 后，下一次连接就按新值判
+            var douyin = services.GetRequiredService<DouyinOptionsService>().Current;
             var logger = services.GetRequiredService<ILogger>();
 
-            if (!options.Douyin.Enabled)
+            if (!douyin.Enabled)
             {
                 // 没启用就当不存在：不泄露"这里有个端点"
                 context.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -62,7 +63,7 @@ public static class WsChannelEndpoint
 
             var policy = services.GetRequiredService<HttpAccessPolicy>();
             var token = ExtractToken(context.Request);
-            var configured = options.Douyin.Token;
+            var configured = douyin.Token;
             var tokenMatches = !string.IsNullOrWhiteSpace(configured)
                 && string.Equals(configured, token, StringComparison.Ordinal);
 

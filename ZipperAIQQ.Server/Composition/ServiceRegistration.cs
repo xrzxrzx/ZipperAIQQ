@@ -25,6 +25,7 @@ using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Server.Contacts;
+using ZipperAIQQ.Server.Channels;
 using ZipperAIQQ.Server.External;
 using ZipperAIQQ.Server.Feedback;
 using ZipperAIQQ.Server.Identity;
@@ -231,6 +232,11 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, DeleteMailAccountAction>();
         services.AddSingleton<IApiAction, SyncMailAction>();
 
+        // ── 第三方平台接入页（S3-F / 决策七）：平台总览 + 抖音配置读写 ──
+        // 邮件账号的增删改直接用上面那批 mail action，不重复造一套。
+        services.AddSingleton<IApiAction, GetPlatformsAction>();
+        services.AddSingleton<IApiAction, SaveDouyinAction>();
+
         // ── M2-E：回复触发模式（FR-11）：every / mention / jev（判断失败降级 mention）──
         services.AddSingleton<IRuntimeSettingsStore, SqliteRuntimeSettingsStore>();
         // decisions 模型（Jev）判断客户端：OpenRouter /api/alpha/decisions
@@ -302,8 +308,14 @@ public static class ServiceRegistration
 
         // ── 抖音通道（S3-E / 决策二）：sidecar 连入后由 /ws/channel 调 AttachAsync ──
         // 关掉时也注册（端点会 404），只是不进复合通道、不进联系人注册表。
+        // 配置走 DouyinOptionsService（S3-F）：客户端可改、立即生效；启动值来自 ServerOptions.Douyin。
+        services.AddSingleton(sp => new DouyinOptionsService(
+            sp.GetRequiredService<IRuntimeSettingsStore>(),
+            options,
+            sp.GetRequiredService<ISecretProtector>(),
+            sp.GetRequiredService<ILogger>()));
         services.AddSingleton(sp => new Channels.DouyinChannel(
-            options.Douyin,
+            sp.GetRequiredService<DouyinOptionsService>().Current.ToOptions(),
             sp.GetRequiredService<ILogger>()));
 
         // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围 / 平台专用工具都只认平台名。

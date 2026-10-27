@@ -34,7 +34,10 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
     /// <summary>等旧接收循环收尾的上限：换连接/停服不能因为一条倔强的连接而挂住。</summary>
     private static readonly TimeSpan ReceiveLoopExitTimeout = TimeSpan.FromSeconds(2);
 
-    private readonly DouyinOptions _options;
+    /// <summary>
+    /// 运行参数。**可热替换**（客户端在「第三方平台接入」页改白名单 / 超时后立即生效）。
+    /// </summary>
+    private volatile DouyinOptions _options;
     private readonly ILogger _logger;
 
     /// <summary>
@@ -102,6 +105,51 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
 
     /// <summary>当前是否有 sidecar 连接（健康检查 / 断线诊断用）。</summary>
     public bool IsConnected => _connection is not null;
+
+    /// <summary>
+    /// 热替换运行参数（决策七：客户端在「第三方平台接入」页保存后立即生效）。
+    /// </summary>
+    /// <remarks>
+    /// 只影响"下一次判断"：白名单立即生效；超时 / 文本上限对**已在等 ack** 的那一帧不追溯
+    /// （它已经用旧值算出了超时），这是有意的 —— 不为了配置变更去打断进行中的发送。
+    /// </remarks>
+    public void UpdateOptions(DouyinOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        _options = options;
+        _logger.Information(
+            "抖音通道参数已更新：白名单 {Count} 条 / 发送超时 {Send}ms / 文本上限 {Text} 字",
+            options.AllowedSessions.Count, options.SendTimeoutMs, options.MaxTextLength);
+    }
+
+    /// <summary>会话是否在允许列表内（空 = 全部放行；`douyin:p*` 支持 `*` 后缀）。</summary>
+    private bool IsSessionAllowed(string sessionId)
+    {
+        var allowed = _options.AllowedSessions;
+        if (allowed.Count == 0)
+        {
+            return true;
+        }
+
+        foreach (var pattern in allowed)
+        {
+            if (string.IsNullOrWhiteSpace(pattern))
+            {
+                continue;
+            }
+
+            var trimmed = pattern.Trim();
+            if (trimmed.EndsWith('*')
+                ? sessionId.StartsWith(trimmed[..^1], StringComparison.OrdinalIgnoreCase)
+                : string.Equals(trimmed, sessionId, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// 空实现：抖音是**反向连接**，连接由 sidecar 发起（<see cref="AttachAsync"/>）。
@@ -374,6 +422,15 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
                 {
                     // stranger（设计 §4.1 明确丢弃）与畸形帧都走这里：Debug 级别，不刷屏
                     _logger.Debug("抖音入站帧未映射（陌生人盒 / 缺字段 / 未知形状），已丢弃");
+                    break;
+                }
+
+                // 会话白名单（决策七 / 设计 §6.1）：空 = 全部放行；非空则只收匹配的会话。
+                // 与 QQ 的接收过滤同口径（`douyin:p*` / `douyin:g*` 支持 `*` 后缀），
+                // 但**在通道层**拦：不进库、不进模型 —— 与"过滤发生在通道层"（FR-17.3）一致。
+                if (!IsSessionAllowed(message.Chat.SessionId))
+                {
+                    _logger.Debug("抖音会话 {Session} 不在白名单内，已丢弃", message.Chat.SessionId);
                     break;
                 }
 
