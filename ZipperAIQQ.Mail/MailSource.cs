@@ -45,19 +45,24 @@ public sealed class MailSource : IMessageSource
 
     // 必须写全 System.Threading.Channels.Channel：命名空间里还有个 ZipperAIQQ.Channel，
     // 在这个命名空间下裸写 Channel 会被解析成那个命名空间。
-    private readonly Channel<InboundEvent> _channel =
-        System.Threading.Channels.Channel.CreateUnbounded<InboundEvent>(
-            new UnboundedChannelOptions
-            {
-                SingleReader = true,
-                SingleWriter = false,
-            });
+    // ⚠️ **不是 readonly**：运行时开关邮件接入要能"停了再起"，而 Channel 一旦 Complete 就不能复用，
+    //    所以重启时换一条新的入站流（消费者也要跟着重订阅，见 MailPipeline）。
+    private Channel<InboundEvent> _channel = CreateChannel();
 
     private readonly ConcurrentDictionary<string, SessionHandle> _handles = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _reloadGate = new(1, 1);
 
     private CancellationTokenSource? _lifetime;
     private bool _stopped;
+
+    /// <summary>建一条新的入站流（单读者：管道；多写者：每个账号会话）。</summary>
+    private static Channel<InboundEvent> CreateChannel() =>
+        System.Threading.Channels.Channel.CreateUnbounded<InboundEvent>(
+            new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false,
+            });
 
     /// <summary>构造邮件源（不启动，等 <see cref="StartAsync"/>）。</summary>
     /// <param name="sessions">IMAP 会话工厂。</param>
@@ -92,10 +97,35 @@ public sealed class MailSource : IMessageSource
     /// 启动：加载**启用**的账号并各起一个会话（等价于一次 <see cref="ReloadAsync"/>）。
     /// </summary>
     /// <remarks>
-    /// 签名与 <c>IHostedService.StartAsync</c> 一致 —— 见本类上方的 TODO，
-    /// 接口本身还差一个包引用才能落到本类上。
+    /// <para>
+    /// 签名与 <c>IHostedService.StartAsync</c> 一致（本类不实现该接口，由管道启停，见实施微调 M12）。
+    /// </para>
+    /// <para>
+    /// **可重启**（S3-F 补）：客户端把"邮件接入"关掉再打开时，这里会建一条新的入站流。
+    /// 旧流在 <see cref="StopAsync"/> 里已经 Complete，不能复用 —— 复用会得到一个"永远读不到东西"的流。
+    /// </para>
     /// </remarks>
-    public Task StartAsync(CancellationToken ct) => ReloadAsync(ct);
+    public async Task StartAsync(CancellationToken ct)
+    {
+        await _reloadGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_stopped)
+            {
+                _channel = CreateChannel();
+                _stopped = false;
+                _lifetime?.Dispose();
+                _lifetime = null;
+                _logger.Information("邮件源重新启动：已建立新的入站流");
+            }
+        }
+        finally
+        {
+            _reloadGate.Release();
+        }
+
+        await ReloadAsync(ct).ConfigureAwait(false);
+    }
 
     /// <summary>停止：取消所有会话、等它们收尾、结束事件流（可重复调用）。</summary>
     /// <remarks>签名与 <c>IHostedService.StopAsync</c> 一致。</remarks>

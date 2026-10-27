@@ -40,7 +40,15 @@ public sealed class MailPipeline : BackgroundService
     private readonly IMailSummaryService _summaries;
     private readonly MailDigestService _digest;
     private readonly MailOptions _options;
+    private readonly MailOptionsService _switch;
     private readonly ILogger _logger;
+
+    /// <summary>邮件源当前是否已启动（开关热切换时对账用）。</summary>
+    private bool _sourceStarted;
+
+    /// <summary>唤醒泵的生命周期：源重启时换一条新的入站流，泵也要跟着重建。</summary>
+    private CancellationTokenSource? _pumpCts;
+    private Task? _pumpTask;
 
     /// <summary>「有新邮件」的唤醒信号（容量 1：多个事件合并成一次唤醒）。</summary>
     /// <remarks>
@@ -59,6 +67,7 @@ public sealed class MailPipeline : BackgroundService
         IMailSummaryService summaries,
         MailDigestService digest,
         MailOptions options,
+        MailOptionsService switchService,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -66,6 +75,7 @@ public sealed class MailPipeline : BackgroundService
         ArgumentNullException.ThrowIfNull(summaries);
         ArgumentNullException.ThrowIfNull(digest);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(switchService);
         ArgumentNullException.ThrowIfNull(logger);
 
         _source = source;
@@ -73,28 +83,20 @@ public sealed class MailPipeline : BackgroundService
         _summaries = summaries;
         _digest = digest;
         _options = options;
+        _switch = switchService;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!_options.Enabled)
-        {
-            _logger.Information("邮件管道未启动：mail.enabled = false");
-            return;
-        }
-
         _lastFlushAt = BeijingTime.Now;
 
-        // 源由管道启停（实施微调 M12）：与 MessageRouter 启动 NapCatChannel 同构，
-        // 生命周期只在一处，Mail 项目也就不必引 Hosting 包。
-        await _source.StartAsync(stoppingToken).ConfigureAwait(false);
-
-        // 收信事件只当"闹钟"用：读到就推一个唤醒信号，真正的待办从库里查。
-        var pump = PumpWakeupsAsync(stoppingToken);
+        // 开关一变就立刻唤醒，不必等下一轮巡检（默认 30 秒）
+        void OnSwitchChanged() => _wakeups.Writer.TryWrite(true);
+        _switch.Changed += OnSwitchChanged;
 
         _logger.Information(
-            "邮件管道已启动：摘要={Summary}（并发 {Concurrency}，重试 {Retries}）汇总={Mode}",
+            "邮件管道已启动（开关可热切）：摘要={Summary}（并发 {Concurrency}，重试 {Retries}）汇总={Mode}",
             _options.SummaryEnabled ? "开" : "关",
             _options.MaxConcurrentSummaries,
             _options.SummaryRetryCount,
@@ -105,6 +107,16 @@ public sealed class MailPipeline : BackgroundService
             while (!stoppingToken.IsCancellationRequested)
             {
                 await WaitForWakeupAsync(stoppingToken).ConfigureAwait(false);
+
+                // 每轮对账：开关开 → 起源 + 起泵；开关关 → 停泵 + 停源。
+                // 不用"启动时判断一次"——那样客户端点了开关还得重启服务。
+                await EnsureSourceStateAsync(stoppingToken).ConfigureAwait(false);
+
+                if (!_switch.Enabled)
+                {
+                    // 停用期间不摘要、不转发：否则"关了还在发汇总"会让人以为开关没生效
+                    continue;
+                }
 
                 try
                 {
@@ -127,19 +139,86 @@ public sealed class MailPipeline : BackgroundService
         }
         finally
         {
-            await pump.ConfigureAwait(false);
-
-            // 停机时 stoppingToken 已取消，传进去会直接抛 —— 断开连接必须能跑完
-            try
-            {
-                await _source.StopAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.Warning(ex, "关闭邮件源时出错（连接可能已断）");
-            }
-
+            _switch.Changed -= OnSwitchChanged;
+            await StopPumpAsync().ConfigureAwait(false);
+            await StopSourceAsync().ConfigureAwait(false);
             _logger.Information("邮件管道已停止");
+        }
+    }
+
+    /// <summary>让"源 + 唤醒泵"跟上开关状态（幂等，可每轮调用）。</summary>
+    private async Task EnsureSourceStateAsync(CancellationToken ct)
+    {
+        var wanted = _switch.Enabled;
+
+        if (wanted && !_sourceStarted)
+        {
+            await _source.StartAsync(ct).ConfigureAwait(false);
+            _sourceStarted = true;
+
+            // 源重启会换一条新的入站流，旧的泵读的是已 Complete 的流 → 必须重建
+            _pumpCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            _pumpTask = PumpWakeupsAsync(_pumpCts.Token);
+
+            _logger.Information("邮件源已启动（开关：启用）");
+            return;
+        }
+
+        if (!wanted && _sourceStarted)
+        {
+            await StopPumpAsync().ConfigureAwait(false);
+            await StopSourceAsync().ConfigureAwait(false);
+            _logger.Information("邮件源已停止（开关：停用）；已收邮件与账号仍保留");
+        }
+    }
+
+    private async Task StopPumpAsync()
+    {
+        var cts = _pumpCts;
+        var task = _pumpTask;
+        _pumpCts = null;
+        _pumpTask = null;
+
+        if (cts is null)
+        {
+            return;
+        }
+
+        cts.Cancel();
+        try
+        {
+            if (task is not null)
+            {
+                await task.ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 正常
+        }
+        finally
+        {
+            cts.Dispose();
+        }
+    }
+
+    private async Task StopSourceAsync()
+    {
+        if (!_sourceStarted)
+        {
+            return;
+        }
+
+        _sourceStarted = false;
+
+        // 停机 / 关开关时传入的 token 可能已取消 —— 断开连接必须能跑完
+        try
+        {
+            await _source.StopAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "关闭邮件源时出错（连接可能已断）");
         }
     }
 

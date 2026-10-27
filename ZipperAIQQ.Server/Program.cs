@@ -165,6 +165,9 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     // 网页搜索配置（与模型独立）先读回库
     await app.Services.GetRequiredService<SearchOptionsService>().InitializeAsync();
 
+    // 邮件接入的运行时开关（S3-F 补）：先读回库，管道随后按它决定起点 / 停源
+    await app.Services.GetRequiredService<ZipperAIQQ.Server.Mail.MailOptionsService>().InitializeAsync();
+
     // 抖音 sidecar 配置（S3-F / 决策七）：先读回库，再把变更推给通道
     var douyinOptions = app.Services.GetRequiredService<ZipperAIQQ.Server.Channels.DouyinOptionsService>();
     var douyinChannel = app.Services.GetRequiredService<ZipperAIQQ.Server.Channels.DouyinChannel>();

@@ -40,6 +40,7 @@ public sealed class PlatformActionsTests : IAsyncLifetime
     private FakeChannel _channel = null!;
     private DouyinChannel _douyin = null!;
     private DouyinOptionsService _douyinOptions = null!;
+    private MailOptionsService _mailSwitch = null!;
 
     public async Task InitializeAsync()
     {
@@ -63,6 +64,10 @@ public sealed class PlatformActionsTests : IAsyncLifetime
 
         _douyinOptions = new DouyinOptionsService(_settings, bootstrap, _protector, Logger);
         await _douyinOptions.InitializeAsync();
+
+        // 邮件总开关的运行时版本（S3-F 补）：启动值默认关，测试里按需打开
+        _mailSwitch = new MailOptionsService(_settings, new MailOptions(), Logger);
+        await _mailSwitch.InitializeAsync();
 
         _douyin = new DouyinChannel(_douyinOptions.Current.ToOptions(), Logger);
         _channel = new FakeChannel();
@@ -95,7 +100,7 @@ public sealed class PlatformActionsTests : IAsyncLifetime
         });
 
         var action = new GetPlatformsAction(
-            _channel, _douyin, _douyinOptions, new SqliteMailRepository(_db), new MailOptions());
+            _channel, _douyin, _douyinOptions, new SqliteMailRepository(_db), new MailOptions(), _mailSwitch);
         var json = ToJson(await action.HandleAsync(EmptyPayload(), CancellationToken.None));
 
         var text = json.GetRawText();
@@ -184,6 +189,56 @@ public sealed class PlatformActionsTests : IAsyncLifetime
 
         var ex = await Assert.ThrowsAsync<ApiException>(() =>
             action.HandleAsync(Payload("""{ "sendTimeoutMs": 0 }"""), CancellationToken.None));
+
+        Assert.Equal(ApiResponse.BadRequest, ex.Code);
+    }
+
+    // ─────────────────────────── 邮件运行时开关（S3-F 补）───────────────────────────
+
+    [Fact]
+    public async Task SaveMail_PersistsAndReflectsInGetPlatforms()
+    {
+        Assert.False(_mailSwitch.Enabled); // 启动默认关
+
+        var action = new SaveMailAction(_mailSwitch, _configs);
+        var json = ToJson(await action.HandleAsync(Payload("""{ "enabled": true }"""), CancellationToken.None));
+
+        Assert.True(json.GetProperty("enabled").GetBoolean());
+        Assert.Equal(1, json.GetProperty("saved").GetInt32());
+
+        // 落库 + 运行时生效
+        var stored = await _settings.GetAsync(MailOptionsService.EnabledKey, CancellationToken.None);
+        Assert.Equal("1", stored);
+        Assert.True(_mailSwitch.Enabled);
+
+        // getPlatforms 读的是运行时真值
+        var get = new GetPlatformsAction(
+            _channel, _douyin, _douyinOptions, new SqliteMailRepository(_db), new MailOptions(), _mailSwitch);
+        var platforms = ToJson(await get.HandleAsync(EmptyPayload(), CancellationToken.None));
+        Assert.True(platforms.GetProperty("mail").GetProperty("enabled").GetBoolean());
+    }
+
+    [Fact]
+    public async Task SaveMail_UnchangedValue_ReturnsSkipped()
+    {
+        var action = new SaveMailAction(_mailSwitch, _configs);
+
+        var first = ToJson(await action.HandleAsync(Payload("""{ "enabled": true }"""), CancellationToken.None));
+        Assert.False(first.GetProperty("skipped").GetBoolean());
+
+        // 原样再存一次：不算错，也不重复审计
+        var second = ToJson(await action.HandleAsync(Payload("""{ "enabled": true }"""), CancellationToken.None));
+        Assert.True(second.GetProperty("skipped").GetBoolean());
+        Assert.Equal(0, second.GetProperty("saved").GetInt32());
+    }
+
+    [Fact]
+    public async Task SaveMail_InvalidPayload_ReturnsBadRequest()
+    {
+        var action = new SaveMailAction(_mailSwitch, _configs);
+
+        var ex = await Assert.ThrowsAsync<ApiException>(() =>
+            action.HandleAsync(Payload("""{ "enabled": "yes" }"""), CancellationToken.None));
 
         Assert.Equal(ApiResponse.BadRequest, ex.Code);
     }

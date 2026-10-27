@@ -944,3 +944,21 @@ public sealed class SaveDouyinResultDto
     [JsonPropertyName("connected")]
     public bool Connected { get; set; }
 }
+
+/// <summary>保存邮件总开关的结果（<c>saveMail</c>，S3-F 补：运行时热切，不必重启）。</summary>
+/// <remarks>
+/// 值没变时服务端回 <c>saved = 0 / skipped = true</c>，**不算错**；
+/// <see cref="Enabled"/> 是落库后的真值 —— 界面以它为准，别拿自己拨的值当结果。
+/// </remarks>
+public sealed class SaveMailResultDto
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    /// <summary>实际改动的键数：0 = 本来就是这值（配合 <see cref="Skipped"/>）。</summary>
+    [JsonPropertyName("saved")]
+    public int Saved { get; set; }
+
+    [JsonPropertyName("skipped")]
+    public bool Skipped { get; set; }
+}

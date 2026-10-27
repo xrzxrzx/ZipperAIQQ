@@ -219,6 +219,14 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
         ArgumentNullException.ThrowIfNull(message);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        // 运行时开关（S3-F 补）：关掉后即使老连接还在，也不许再从抖音发出去。
+        // 抛异常而不是静默成功 —— 上层会把原因回填给模型（FR-2.3）。
+        if (!_options.Enabled)
+        {
+            throw new InvalidOperationException(
+                "抖音接入已停用（客户端「第三方平台接入」里可以打开）。");
+        }
+
         // 路由层把 qq 会话发到抖音通道 = 路由 bug，宁可在通道层炸掉，也不要发到奇怪的地方。
         if (!string.Equals(message.Chat.Platform, PlatformName, StringComparison.Ordinal))
         {
@@ -417,6 +425,14 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
 
             case DouyinFrameTypes.Inbound:
             {
+                // 运行时开关（S3-F 补）：停用时直接丢，不进库、不进模型。
+                // 为什么在通道层：与接收过滤同口径（FR-17.3），且关掉之后连"占存储"都不该发生。
+                if (!_options.Enabled)
+                {
+                    _logger.Debug("抖音接入已停用，丢弃入站帧");
+                    break;
+                }
+
                 var message = DouyinProtocol.ParseInbound(frame.Data, PlatformName);
                 if (message is null)
                 {
@@ -656,10 +672,20 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
         return batches;
     }
 
-    private IDouyinConnection RequireConnection() =>
-        _connection
-        ?? throw new InvalidOperationException(
-            "抖音未连接：sidecar 尚未连入 /ws/channel（或已断开），无法发送。");
+    private IDouyinConnection RequireConnection()
+    {
+        // 运行时开关先判：关掉时即使连接还在，也按"未启用"回答 —— 否则会误报"未连接"，
+        // 排查时让人以为 sidecar 挂了。
+        if (!_options.Enabled)
+        {
+            throw new InvalidOperationException(
+                "抖音接入已停用（客户端「第三方平台接入」里可以打开）。");
+        }
+
+        return _connection
+            ?? throw new InvalidOperationException(
+                "抖音未连接：sidecar 尚未连入 /ws/channel（或已断开），无法发送。");
+    }
 
     private async Task CloseQuietlyAsync(IDouyinConnection connection, CancellationToken ct)
     {

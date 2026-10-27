@@ -104,16 +104,30 @@
                 <!-- ── 邮件 ─────────────────────────────────────────── -->
                 <PivotItem Header="邮件">
                     <StackPanel Spacing="12" Margin="0,8,0,0">
+
+                        <!-- 通道开关（S3-F 补）：运行时热切，改完不必重启服务 -->
+                        <Border Style="{StaticResource CardStyle}">
+                            <StackPanel Spacing="8">
+                                <ToggleSwitch Header="启用邮件接入"
+                                              IsOn="{x:Bind Vm.MailEnabled, Mode=OneWay}"
+                                              IsEnabled="{x:Bind Vm.MailSwitchAvailable, Mode=OneWay}"
+                                              Toggled="MailChannel_Toggled" />
+                                <TextBlock Text="{x:Bind Vm.MailChannelText, Mode=OneWay}"
+                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                                <TextBlock Text="{x:Bind Vm.MailSwitchStatus, Mode=OneWay}"
+                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                                <TextBlock Text="关闭后不再连 IMAP 收信；已收的邮件与账号仍保留。"
+                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" Spacing="2">
-                                <TextBlock Text="收信账号" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
-                                <TextBlock Text="{x:Bind Vm.MailChannelText, Mode=OneWay}"
-                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-                            </StackPanel>
+                            <TextBlock Grid.Column="0" Text="收信账号" Style="{StaticResource SectionHeaderStyle}"
+                                       Margin="0" VerticalAlignment="Center" />
                             <Button Grid.Column="1" Content="新建账号" Style="{StaticResource JpAccentButtonStyle}"
                                     VerticalAlignment="Center" Click="AddMail_Click" />
                         </Grid>

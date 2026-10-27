@@ -28,25 +28,29 @@ public sealed class GetPlatformsAction : IApiAction
     private readonly DouyinOptionsService _douyinOptions;
     private readonly IMailRepository _mailRepository;
     private readonly MailOptions _mailOptions;
+    private readonly MailOptionsService _mailSwitch;
 
     public GetPlatformsAction(
         IMessageChannel channel,
         DouyinChannel douyin,
         DouyinOptionsService douyinOptions,
         IMailRepository mailRepository,
-        MailOptions mailOptions)
+        MailOptions mailOptions,
+        MailOptionsService mailSwitch)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(douyin);
         ArgumentNullException.ThrowIfNull(douyinOptions);
         ArgumentNullException.ThrowIfNull(mailRepository);
         ArgumentNullException.ThrowIfNull(mailOptions);
+        ArgumentNullException.ThrowIfNull(mailSwitch);
 
         _channel = channel;
         _douyin = douyin;
         _douyinOptions = douyinOptions;
         _mailRepository = mailRepository;
         _mailOptions = mailOptions;
+        _mailSwitch = mailSwitch;
     }
 
     public string Name => "getPlatforms";
@@ -77,7 +81,8 @@ public sealed class GetPlatformsAction : IApiAction
 
             mail = new
             {
-                enabled = _mailOptions.Enabled,
+                // 运行时真值（S3-F 补）：客户端改完开关马上就能看到效果
+                enabled = _mailSwitch.Enabled,
                 accounts = accounts
                     .Select(a => new
                     {
@@ -267,5 +272,60 @@ public sealed class SaveDouyinAction : IApiAction
         }
 
         throw new ApiException(ApiResponse.BadRequest, $"{name} 必须是正整数。");
+    }
+}
+
+/// <summary>
+/// 邮件接入的运行时开关（S3-F 补 / 决策七）：客户端点一下就生效，不必重启。
+/// </summary>
+/// <remarks>
+/// payload：<c>{ "enabled": true }</c>。
+/// 关掉只是"不再连 IMAP、不再摘要转发"，**已收的邮件与账号配置都保留**。
+/// </remarks>
+public sealed class SaveMailAction : IApiAction
+{
+    private const string Actor = "http-client";
+
+    private readonly MailOptionsService _switch;
+    private readonly IConfigStore _configs;
+
+    public SaveMailAction(MailOptionsService switchService, IConfigStore configs)
+    {
+        ArgumentNullException.ThrowIfNull(switchService);
+        ArgumentNullException.ThrowIfNull(configs);
+
+        _switch = switchService;
+        _configs = configs;
+    }
+
+    public string Name => "saveMail";
+
+    public async Task<object?> HandleAsync(JsonElement payload, CancellationToken ct)
+    {
+        if (payload.ValueKind != JsonValueKind.Object ||
+            !payload.TryGetProperty("enabled", out var enabledElement))
+        {
+            throw new ApiException(ApiResponse.BadRequest, "payload 需要 enabled（true / false）。");
+        }
+
+        var enabled = enabledElement.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => throw new ApiException(ApiResponse.BadRequest, "enabled 必须是布尔值。"),
+        };
+
+        var changed = await _switch.SetEnabledAsync(enabled, ct).ConfigureAwait(false);
+        if (!changed)
+        {
+            // 值没变不算错（与 setAccess / saveDouyin 同口径）
+            return new { enabled = _switch.Enabled, saved = 0, skipped = true };
+        }
+
+        await _configs
+            .AppendAuditAsync("saveMail", Actor, enabled ? "enabled=1" : "enabled=0", ct)
+            .ConfigureAwait(false);
+
+        return new { enabled = _switch.Enabled, saved = 1, skipped = false };
     }
 }

@@ -213,6 +213,13 @@ public static class ServiceRegistration
         // StartAsync / StopAsync，与 MessageRouter 启动 NapCatChannel 完全同构 —— 生命周期只有一处。
         // 邮件策略参数进容器：action 与两个服务都直接注入 MailOptions，不引 IOptions<T>。
         services.AddSingleton(options.Mail);
+
+        // 总开关的**运行时**版本（S3-F 补）：客户端点一下就生效，不必重启。
+        // 启动值来自 options.Mail.Enabled（YAML），库里写过之后以库为准。
+        services.AddSingleton(sp => new MailOptionsService(
+            sp.GetRequiredService<IRuntimeSettingsStore>(),
+            options.Mail,
+            sp.GetRequiredService<ILogger>()));
         services.AddSingleton(sp => new MailSummaryService(
             sp.GetRequiredService<IChatClientProvider>(),
             options.Mail,
@@ -231,6 +238,7 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, SaveMailAccountAction>();
         services.AddSingleton<IApiAction, DeleteMailAccountAction>();
         services.AddSingleton<IApiAction, SyncMailAction>();
+        services.AddSingleton<IApiAction, SaveMailAction>();
 
         // ── 第三方平台接入页（S3-F / 决策七）：平台总览 + 抖音配置读写 ──
         // 邮件账号的增删改直接用上面那批 mail action，不重复造一套。
@@ -319,17 +327,15 @@ public static class ServiceRegistration
             sp.GetRequiredService<ILogger>()));
 
         // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围 / 平台专用工具都只认平台名。
+        // ⚠️ 抖音**无条件**注册（S3-F 补）：之前按启动配置决定加不加，结果"客户端打开开关"不生效 ——
+        //    注册表/复合通道是启动时定死的，运行时改不了。现在改成通道常驻、由快照决定收不收发不发。
         services.AddSingleton<IContactDirectoryRegistry>(sp =>
         {
             var map = new Dictionary<string, IContactDirectory>(StringComparer.OrdinalIgnoreCase)
             {
                 [Access.AccessKeys.DefaultPlatform] = sp.GetRequiredService<IContactDirectory>(),
+                [Channels.DouyinChannel.PlatformName] = sp.GetRequiredService<Channels.DouyinChannel>(),
             };
-
-            if (options.Douyin.Enabled)
-            {
-                map[Channels.DouyinChannel.PlatformName] = sp.GetRequiredService<Channels.DouyinChannel>();
-            }
 
             return new ContactDirectoryRegistry(map);
         });
@@ -357,13 +363,12 @@ public static class ServiceRegistration
             var channels = new List<IMessageChannel>
             {
                 sp.GetRequiredService<NapCatChannel>(),
-            };
 
-            if (options.Douyin.Enabled)
-            {
-                // 抖音是第二个 IMessageChannel：注册位置在复合通道里，上游零改动（决策三验收）
-                channels.Add(sp.GetRequiredService<Channels.DouyinChannel>());
-            }
+                // 抖音是第二个 IMessageChannel：**常驻**注册（S3-F 补）。
+                // 启不启用由 DouyinOptionsService 快照决定（入站丢弃 / 出站抛「已停用」），
+                // 这样客户端改开关是**立即生效**的，不必重启服务。
+                sp.GetRequiredService<Channels.DouyinChannel>(),
+            };
 
             var composite = new Channels.CompositeMessageChannel(
                 channels, sp.GetRequiredService<ILogger>());

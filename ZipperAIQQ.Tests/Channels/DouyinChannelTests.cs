@@ -107,6 +107,54 @@ public sealed class DouyinChannelTests
     }
 
     [Fact]
+    public async Task ReceiveAsync_WhenDisabled_DropsInboundAndSendThrows()
+    {
+        // S3-F 补：客户端关掉抖音后，即使 sidecar 还连着，也不许再收 / 再发
+        await using var channel = new DouyinChannel(
+            new DouyinOptions { Enabled = false },
+            Logger);
+
+        var connection = new FakeDouyinConnection { Respond = AutoAck };
+        await channel.AttachAsync(connection);
+
+        connection.Push(Frame(DouyinFrameTypes.Inbound, new
+        {
+            type = "message.private",
+            threadId = "10086",
+            serverMessageId = "m-disabled",
+            time = 1_730_000_000_000L,
+            senderUid = "u-1",
+            content = new { kind = "text", text = "这条应该被丢掉" },
+        }));
+
+        // 入站被丢弃 → 读流拿不到消息（短超时断言"没东西"）
+        await Assert.ThrowsAsync<TimeoutException>(
+            () => ReadMessageAsync(channel, TimeSpan.FromMilliseconds(300)));
+
+        // 出站直接拒绝，且原因说得清（不是"未连接"这种误导）
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => channel.SendAsync(Outgoing("不该发出去"), CancellationToken.None));
+
+        Assert.Contains("已停用", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UpdateOptions_EnableAtRuntime_TakesEffectImmediately()
+    {
+        // 运行时打开：同一个通道实例，改配置后立刻能发（不必重建对象/重启服务）
+        await using var channel = new DouyinChannel(new DouyinOptions { Enabled = false }, Logger);
+        var connection = new FakeDouyinConnection { Respond = AutoAck };
+        await channel.AttachAsync(connection);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => channel.SendAsync(Outgoing("关着的时候"), CancellationToken.None));
+
+        channel.UpdateOptions(new DouyinOptions { Enabled = true });
+
+        await channel.SendAsync(Outgoing("开着的时候"), CancellationToken.None);
+    }
+
+    [Fact]
     public async Task ReceiveAsync_NonNumericMention_DegradesToTextSegment()
     {
         await using var channel = CreateChannel();

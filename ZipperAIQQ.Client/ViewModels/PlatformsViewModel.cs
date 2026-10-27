@@ -151,9 +151,24 @@ public sealed partial class PlatformsViewModel : ObservableObject
     [ObservableProperty]
     public partial string MailEmptyHint { get; set; } = string.Empty;
 
-    /// <summary>邮件通道总开关的**只读**展示（契约里没有"改 mail.enabled"的 action）。</summary>
+    /// <summary>邮件通道当前状态文案（已启用 / 已停用 / 未知）。</summary>
     [ObservableProperty]
-    public partial string MailChannelText { get; set; } = "邮件通道：未知（还没加载）";
+    public partial string MailChannelText { get; set; } = "邮件通道：状态未知（还没加载）";
+
+    /// <summary>邮件总开关的运行时真值（<c>getPlatforms.mail.enabled</c>，可热改，不必重启）。</summary>
+    [ObservableProperty]
+    public partial bool MailEnabled { get; set; }
+
+    /// <summary>
+    /// 开关能不能动：**服务端没返回 mail 块（旧版本）→ false**。
+    /// 宁可禁用并说明，也不摆一个假状态。
+    /// </summary>
+    [ObservableProperty]
+    public partial bool MailSwitchAvailable { get; set; }
+
+    /// <summary>开关自己的状态位（成功「已启用 / 已停用」、失败原因）。</summary>
+    [ObservableProperty]
+    public partial string MailSwitchStatus { get; set; } = string.Empty;
 
     // ── 抖音配置卡 ────────────────────────────────────────────────
     [ObservableProperty]
@@ -272,16 +287,20 @@ public sealed partial class PlatformsViewModel : ObservableObject
         ApplyDouyinBlock(data.Douyin);
     }
 
-    /// <summary>邮件块：只用来兜底 + 展示通道开关（账号仍以 listMailAccounts 为准）。</summary>
+    /// <summary>邮件块：通道开关的真值 + 账号兜底（账号仍以 listMailAccounts 为准）。</summary>
     private void ApplyMailBlock(MailPlatformDto? mail)
     {
         if (mail is null)
         {
-            MailChannelText = "邮件通道：服务端未返回（旧版本？按账号能否收信为准）";
+            // 旧服务端：连 mail 块都没有 → 不知道真值，也不许假装知道
+            MailSwitchAvailable = false;
+            MailChannelText = "邮件通道：服务端未返回运行状态（旧版本）—— 开关不可用，只能改 server.yaml 后重启";
             return;
         }
 
-        MailChannelText = mail.Enabled ? "邮件通道：已启用" : "邮件通道：未启用（服务端 mail.enabled = false）";
+        MailSwitchAvailable = true;
+        MailEnabled = mail.Enabled;
+        ShowMailChannelState(mail.Enabled);
 
         // 正常情况下 listMailAccounts 已经填过；只有它失败（列表还空着）时才用这份兜底
         if (MailAccounts.Count == 0 && mail.Accounts.Count > 0)
@@ -292,6 +311,59 @@ public sealed partial class PlatformsViewModel : ObservableObject
             }
 
             MailEmptyHint = string.Empty;
+        }
+    }
+
+    /// <summary>把「已启用 / 已停用」翻译成给人看的一句话（关闭的后果也写在这儿）。</summary>
+    private void ShowMailChannelState(bool enabled) =>
+        MailChannelText = enabled
+            ? "邮件通道：已启用（运行时可热切，改完不必重启服务）"
+            : "邮件通道：已停用 —— 关闭后不再连 IMAP 收信；已收的邮件与账号仍保留";
+
+    /// <summary>
+    /// 邮件总开关（<c>saveMail</c>，运行时热切）。失败**把开关拨回去**并把原因写出来；
+    /// 旧服务端（未知 action = 404）额外说明"不支持运行时开关"，同时禁用开关。
+    /// </summary>
+    public async Task SetMailChannelEnabledAsync(bool enabled)
+    {
+        if (enabled == MailEnabled)
+        {
+            return;   // 没变就别打扰服务端
+        }
+
+        var previous = MailEnabled;
+        MailEnabled = enabled;
+        MailSwitchStatus = enabled ? "正在启用…" : "正在停用…";
+
+        try
+        {
+            var result = await _api.CallAsync<SaveMailResultDto>("saveMail", new { enabled })
+                .ConfigureAwait(true);
+
+            // 以服务端回的真值为准（skipped = 本来就是这值，不算错）
+            var actual = result?.Enabled ?? enabled;
+            MailEnabled = actual;
+            ShowMailChannelState(actual);
+            MailSwitchStatus = result?.Skipped == true
+                ? $"没有变化（当前：{(actual ? "已启用" : "已停用")}）"
+                : (actual ? "已启用邮件接入" : "已停用邮件接入");
+
+            // 再拉一次平台总览回显（不自己猜服务端状态）
+            await LoadPlatformsAsync().ConfigureAwait(true);
+        }
+        catch (ApiCallException ex) when (ex.Code == 404 && ex.Message.Contains("未知 action", StringComparison.Ordinal))
+        {
+            MailEnabled = previous;
+            ShowMailChannelState(previous);
+            MailSwitchAvailable = false;   // 服务端没有这个能力了，别让用户再拨
+            MailChannelText = "邮件通道：服务端不支持运行时开关（旧版本）—— 只能改 server.yaml 后重启";
+            MailSwitchStatus = $"未保存：服务端没有 saveMail（{ex.Message}）";
+        }
+        catch (Exception ex)
+        {
+            MailEnabled = previous;
+            ShowMailChannelState(previous);
+            MailSwitchStatus = $"保存失败（已还原开关）：{ex.Message}";
         }
     }
 

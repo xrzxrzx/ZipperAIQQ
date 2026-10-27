@@ -109,6 +109,25 @@ public sealed partial class PlatformsPage : Page
         _ = Vm.SetMailEnabledAsync(item, toggle.IsOn);
     }
 
+    /// <summary>
+    /// 邮件通道总开关（<c>saveMail</c>）。IsOn 同样只做 OneWay：
+    /// 只有用户拨到与真值不同才发请求 —— 绑定回填和失败还原都不会再打一次接口。
+    /// </summary>
+    private void MailChannel_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleSwitch toggle || !Vm.MailSwitchAvailable)
+        {
+            return;
+        }
+
+        if (toggle.IsOn == Vm.MailEnabled)
+        {
+            return;
+        }
+
+        _ = Vm.SetMailChannelEnabledAsync(toggle.IsOn);
+    }
+
     /// <summary>新建 / 编辑对话框：校验在按钮回调里，保存也在这里（失败就把对话框留着，输入不丢）。</summary>
     private async Task ShowMailDialogAsync(MailAccountItem? existing)
     {
