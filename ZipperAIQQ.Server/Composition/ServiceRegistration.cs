@@ -300,13 +300,31 @@ public static class ServiceRegistration
 
         services.AddSingleton<IContactDirectory>(sp => sp.GetRequiredService<NapCatChannel>());
 
-        // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围都只认平台名。
-        // 抖音（S3-E）落地后在这里加一项，上层零改动。
-        services.AddSingleton<IContactDirectoryRegistry>(sp => new ContactDirectoryRegistry(
-            new Dictionary<string, IContactDirectory>(StringComparer.OrdinalIgnoreCase)
+        // ── 抖音通道（S3-E / 决策二）：sidecar 连入后由 /ws/channel 调 AttachAsync ──
+        // 关掉时也注册（端点会 404），只是不进复合通道、不进联系人注册表。
+        services.AddSingleton(sp => new Channels.DouyinChannel(
+            options.Douyin,
+            sp.GetRequiredService<ILogger>()));
+
+        // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围 / 平台专用工具都只认平台名。
+        services.AddSingleton<IContactDirectoryRegistry>(sp =>
+        {
+            var map = new Dictionary<string, IContactDirectory>(StringComparer.OrdinalIgnoreCase)
             {
                 [Access.AccessKeys.DefaultPlatform] = sp.GetRequiredService<IContactDirectory>(),
-            }));
+            };
+
+            if (options.Douyin.Enabled)
+            {
+                map[Channels.DouyinChannel.PlatformName] = sp.GetRequiredService<Channels.DouyinChannel>();
+            }
+
+            return new ContactDirectoryRegistry(map);
+        });
+
+        // Agent 层按平台取目录（抖音专用工具用）：同一个注册表，只是接口更窄
+        services.AddSingleton<IPlatformContacts>(sp =>
+            sp.GetRequiredService<IContactDirectoryRegistry>());
 
         // 会话显示名（#2）：好友昵称 / 群名，带 5 分钟缓存
         services.AddSingleton<ISessionNameResolver, SessionNameResolver>();
@@ -327,8 +345,13 @@ public static class ServiceRegistration
             var channels = new List<IMessageChannel>
             {
                 sp.GetRequiredService<NapCatChannel>(),
-                // 抖音（S3-E）：落地后在这里加一行 DouyinChannel 即可，上层零改动
             };
+
+            if (options.Douyin.Enabled)
+            {
+                // 抖音是第二个 IMessageChannel：注册位置在复合通道里，上游零改动（决策三验收）
+                channels.Add(sp.GetRequiredService<Channels.DouyinChannel>());
+            }
 
             var composite = new Channels.CompositeMessageChannel(
                 channels, sp.GetRequiredService<ILogger>());
@@ -395,6 +418,8 @@ public static class ServiceRegistration
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
                 FileMaxBytes = options.FileMaxBytes,
                 Schedules = sp.GetRequiredService<IScheduleStore>(),
+                // 平台专用工具（抖音）靠它按平台取联系人目录
+                PlatformContacts = sp.GetRequiredService<IPlatformContacts>(),
                 Options = BuildAgentOptions(options),
                 Logger = sp.GetRequiredService<ILogger>(),
             };

@@ -33,6 +33,15 @@ public interface IMessageChannel
     }
 
     /// <summary>
+    /// 本通道覆盖的全部平台（单平台通道默认只有自己；复合通道返回全部子平台）。
+    /// </summary>
+    /// <remarks>
+    /// 存在理由（S3-E）：<c>SelfIdRecorder</c> 这类"要为每个平台各记一份状态"的消费者，
+    /// 需要一个不用猜"现在到底有哪些平台"的来源。默认实现保持加性：单平台实现零改动。
+    /// </remarks>
+    IReadOnlyList<string> Platforms => [Platform];
+
+    /// <summary>
     /// 指定平台上的自身账号。单平台实现沿用 <see cref="SelfId"/>。
     /// </summary>
     /// <remarks>

@@ -29,7 +29,22 @@ public sealed class GetBehaviorAction : IApiAction
     /// <summary>可配置回复模式的取值。</summary>
     public static readonly string[] ReplyModes = ["every", "mention", "jev"];
 
-    /// <summary>可响应（可配置开关）的通知类型（#34：从 6 类扩到全部非请求类）。</summary>
+    /// <summary>
+    /// 可响应（可配置开关）的通知类型（#34：从 6 类扩到全部非请求类；
+    /// 2026-10-27 追加 4 个抖音语义类型，决策六）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// **平台归属不在这里写**：由 <see cref="NoticeCatalog.PlatformOf"/> 决定，
+    /// 每项的 <c>platform</c> 字段据此填 —— 清单里混着两个平台的类型是**故意**的：
+    /// 行为页一次拿全，客户端按 <c>platform</c> 分 Tab。
+    /// </para>
+    /// <para>
+    /// QQ 的 <c>FriendRequest</c> / <c>GroupRequest</c> 仍然**不在**本清单里：它们在
+    /// <c>NoticeResponder</c> 里是硬编码"只记录不响应"。抖音的申请类类型不同 ——
+    /// 它们**进清单、受开关控制**，默认关 = 同样只记录（见 <c>NoticeResponder</c> 的说明）。
+    /// </para>
+    /// </remarks>
     public static readonly NoticeType[] ReplyableNotices =
     [
         NoticeType.Poke,
@@ -49,6 +64,12 @@ public sealed class GetBehaviorAction : IApiAction
         NoticeType.EssenceChanged,
         NoticeType.MessageEmojiLike,
         NoticeType.BotOffline,
+
+        // ── 抖音语义（决策六 / S3-E）：排在末尾，客户端按 platform 分组 ──
+        NoticeType.DouyinFriendRequest,
+        NoticeType.DouyinGroupRequest,
+        NoticeType.DouyinMemberChanged,
+        NoticeType.DouyinSessionSynced,
     ];
 
     /// <summary>「常用」的 6 类（界面上单独一组）。</summary>
@@ -73,10 +94,11 @@ public sealed class GetBehaviorAction : IApiAction
     /// 已知平台（目前只有 <see cref="NoticeCatalog"/> 里那两个）。
     /// </summary>
     /// <remarks>
-    /// <see cref="NoticeCatalog"/> 没有暴露"平台清单"（本次改动不改它），所以在这里显式列出。
-    /// ⚠️ 新增平台（S3-E 之后还有别的）时**必须**同步这里，否则 <c>setBehavior</c> 会拒绝该平台。
-    /// 不用 <c>ForPlatform(platform).Count &gt; 0</c> 来推导：抖音的通知类型要等 S3-E 才入表，
-    /// 在那之前按这个口径会把 <c>douyin</c> 判成"未知平台"。
+    /// <see cref="NoticeCatalog"/> 没有暴露"平台清单"，所以在这里显式列出。
+    /// ⚠️ 新增平台时**必须**同步这里，否则 <c>setBehavior</c> 会拒绝该平台。
+    /// 不用 <c>ForPlatform(platform).Count &gt; 0</c> 推导：那是"有没有通知类型"，
+    /// 而"是不是已知平台"是另一个问题 —— 两者混用会让"暂时没有通知类型的平台"
+    /// 连配置都写不进去（抖音在 S3-E 入表前正是这种情况）。
     /// </remarks>
     public static readonly string[] KnownPlatforms =
         [NoticeCatalog.QqPlatform, NoticeCatalog.DouyinPlatform];
@@ -121,7 +143,7 @@ public sealed class GetBehaviorAction : IApiAction
             platform = requestedPlatform,
 
             // 平台下拉框 / 分组 Tab 的数据源：**有通知类型**的平台
-            // （抖音的类型在 S3-E 入表后会自动出现在这里，不写死）
+            // （抖音的类型已入表，所以现在会返回 qq + douyin；以后加平台自动出现，不写死清单）
             platforms = KnownPlatforms
                 .Where(platform => NoticeCatalog.ForPlatform(platform).Count > 0)
                 .ToList(),
@@ -194,6 +216,13 @@ public sealed class GetBehaviorAction : IApiAction
         NoticeType.EssenceChanged => "群精华",
         NoticeType.MessageEmojiLike => "表情回应",
         NoticeType.BotOffline => "机器人离线",
+
+        // 抖音语义（决策六 / S3-E）：中文名给客户端直接用，别再让前端自己翻译
+        NoticeType.DouyinFriendRequest => "好友申请",
+        NoticeType.DouyinGroupRequest => "入群申请",
+        NoticeType.DouyinMemberChanged => "成员变化",
+        NoticeType.DouyinSessionSynced => "会话同步",
+
         _ => type.ToString(),
     };
 }

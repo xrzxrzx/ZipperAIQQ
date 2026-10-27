@@ -9,20 +9,15 @@ namespace ZipperAIQQ.Server.Contacts;
 /// <para>
 /// 为什么需要注册表：<c>IContactDirectory</c> 是"这个平台上谁能当主人 / 群有哪些"的数据源，
 /// 而每个平台的实现不同（QQ → NapCat；抖音 → sidecar 的 <c>query.contacts</c>）。
-/// 上层（配置页、主人放行范围）只认平台名，不认实现。
+/// 上层（配置页、主人放行范围、平台专用工具）只认平台名，不认实现。
 /// </para>
 /// <para>
 /// 取不到时返回 <c>null</c> 而不是抛：新平台还没接入时，配置页应当显示"该平台暂无候选人"，
-/// 而不是整页 500。
+/// 而不是整页 500；平台专用工具也应当直接不出现。
 /// </para>
 /// </remarks>
-public interface IContactDirectoryRegistry
+public interface IContactDirectoryRegistry : IPlatformContacts
 {
-    /// <summary>已注册的平台。</summary>
-    IReadOnlyList<string> Platforms { get; }
-
-    /// <summary>取某平台的目录；未注册返回 <c>null</c>。</summary>
-    IContactDirectory? For(string platform);
 }
 
 /// <summary>

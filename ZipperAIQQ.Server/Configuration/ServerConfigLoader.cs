@@ -98,6 +98,18 @@ public static class ServerConfigLoader
             ExternalForwardUrl = s.Str("external", "forwardUrl", o.ExternalForwardUrl),
             ExternalForwardToken = s.Str("external", "forwardToken", o.ExternalForwardToken),
 
+            // ── douyin（多平台通道接入 · 抖音 sidecar）──
+            Douyin = o.Douyin with
+            {
+                Enabled = s.Bool("douyin", "enabled", o.Douyin.Enabled),
+                Token = s.Str("douyin", "token", o.Douyin.Token),
+                AllowedSessions = (s.Str("douyin", "allowedSessions", string.Join(',', o.Douyin.AllowedSessions)) ?? string.Empty)
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                SendTimeoutMs = s.Int("douyin", "sendTimeoutMs", o.Douyin.SendTimeoutMs),
+                MaxTextLength = s.Int("douyin", "maxTextLength", o.Douyin.MaxTextLength),
+                QueryTimeoutMs = s.Int("douyin", "queryTimeoutMs", o.Douyin.QueryTimeoutMs),
+            },
+
             // ── llm ──
             LlmApiKey = s.Str("llm", "apiKey", o.LlmApiKey)!,
             LlmBaseUrl = s.Str("llm", "baseUrl", o.LlmBaseUrl)!,

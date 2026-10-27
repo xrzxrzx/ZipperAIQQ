@@ -145,6 +145,17 @@ public sealed record ServerOptions
     /// <summary>反向 WS 额外监听块（host:port；启动时生效）。</summary>
     public IReadOnlyList<External.ExternalReverseServer> ExternalReverseServers { get; init; } = [];
 
+    // ── 抖音接入（多平台通道接入 · 决策二）──
+
+    /// <summary>
+    /// 抖音 sidecar 参数（<c>douyin</c> 配置节）。
+    /// </summary>
+    /// <remarks>
+    /// sidecar 主动连入 <c>/ws/channel</c>；默认 <see cref="Channels.DouyinOptions.Enabled"/> = false，
+    /// 关着的时候端点直接 404，服务照常跑（只是多平台里少一个平台）。
+    /// </remarks>
+    public Channels.DouyinOptions Douyin { get; init; } = new();
+
     // ── 邮件接入（多平台通道接入 · 决策一 / 九）──
 
     /// <summary>

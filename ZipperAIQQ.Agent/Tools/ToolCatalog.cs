@@ -48,6 +48,10 @@ public static class ToolCatalog
         Item(ProfileTools.PokeToolName, "戳一戳", ToolCapability.SendPoke, ToolPlatform.Qq),
         Item(Search.WebSearchTool.SearchToolName, "网页搜索", null),
         Item(Search.WebSearchTool.FetchToolName, "抓取网页", null),
+
+        // ── 抖音专用（决策五 / S3-E）：只在抖音会话里对模型可见 ──
+        Item(DouyinTools.FriendsToolName, "抖音好友", null, ToolPlatform.Douyin),
+        Item(DouyinTools.GroupsToolName, "抖音群", null, ToolPlatform.Douyin),
     ];
 
     private static PolicyItem Item(

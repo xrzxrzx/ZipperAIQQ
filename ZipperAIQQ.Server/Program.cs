@@ -171,6 +171,8 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     ApiEndpoint.Map(app);
     EventEndpoint.Map(app);
     ExternalWsEndpoint.Map(app);
+    // 抖音 sidecar 的通道端点（S3-E）：未启用时端点内部直接 404
+    WsChannelEndpoint.Map(app);
 
     SubscribeAgentEvents(app.Services);
 

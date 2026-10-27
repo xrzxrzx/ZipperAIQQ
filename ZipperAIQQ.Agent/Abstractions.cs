@@ -117,6 +117,12 @@ public sealed record ChatAgentDependencies
     /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
     public required Security.IRoleResolver Roles { get; init; }
 
+    /// <summary>
+    /// 按平台取联系人目录（S3-E / 决策四）：抖音专用工具靠它判断"这个平台接没接"。
+    /// </summary>
+    /// <remarks>未注册（单平台部署）时为 <c>null</c>：平台专用工具一律不出现。</remarks>
+    public Channel.IPlatformContacts? PlatformContacts { get; init; }
+
     /// <summary>会话工作区（路径穿越拦截，FR-7）。</summary>
     public required Security.WorkspacePathResolver Workspace { get; init; }
 

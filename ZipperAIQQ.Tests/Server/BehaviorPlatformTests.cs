@@ -93,12 +93,21 @@ public sealed class BehaviorPlatformTests : IAsyncLifetime
 
         Assert.Equal("qq", json.GetProperty("platform").GetString());
 
-        // 现有 21 个通知类型全归 QQ（NoticeCatalog.PlatformOf），所以 platforms 现在只有 qq
-        Assert.Contains("qq", Strings(json.GetProperty("platforms")));
+        // S3-E 起通知类型分成两族：21 个 QQ 语义 + 4 个抖音语义（NoticeCatalog.PlatformOf）
+        var platforms = Strings(json.GetProperty("platforms"));
+        Assert.Contains("qq", platforms);
+        Assert.Contains("douyin", platforms);
 
         var notices = json.GetProperty("notices").EnumerateArray().ToList();
         Assert.NotEmpty(notices);
-        Assert.All(notices, item => Assert.Equal("qq", item.GetProperty("platform").GetString()));
+
+        // 每一项的 platform 必须等于"这个类型自己的平台归属"，而不是本次查询的平台
+        Assert.All(notices, item =>
+        {
+            var type = item.GetProperty("type").GetString();
+            var expected = type!.StartsWith("Douyin", StringComparison.Ordinal) ? "douyin" : "qq";
+            Assert.Equal(expected, item.GetProperty("platform").GetString());
+        });
 
         // 既有字段一个都不能少、不能改名（老客户端还在按这些名字读）
         var first = notices[0];

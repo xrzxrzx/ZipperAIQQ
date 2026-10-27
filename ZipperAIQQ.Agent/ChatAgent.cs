@@ -55,6 +55,9 @@ public sealed class ChatAgent : IChatAgent
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
     private readonly WorkspacePathResolver _workspace;
+
+    /// <summary>按平台取联系人目录（S3-E）：抖音专用工具靠它判断"这个平台接没接"。</summary>
+    private readonly Channel.IPlatformContacts? _platformContacts;
     private readonly int _fileMaxBytes;
     private readonly IScheduleStore _schedules;
     private readonly ChatAgentOptions _options;
@@ -102,6 +105,7 @@ public sealed class ChatAgent : IChatAgent
         _settings = settings;
         _roles = deps.Roles;
         _workspace = deps.Workspace;
+        _platformContacts = deps.PlatformContacts;
         _fileMaxBytes = deps.FileMaxBytes;
         _schedules = deps.Schedules;
         _options = deps.Options;
@@ -588,6 +592,13 @@ public sealed class ChatAgent : IChatAgent
         if (_webSearch is { IsAvailable: true })
         {
             tools.AddRange(WebSearchTool.Create(_webSearch));
+        }
+
+        // 平台专用工具（决策五 / S3-E）：抖音侧要单独的数据源（sidecar 的 query.contacts），
+        // 所以按平台取目录；取不到（抖音未接入）这组工具**不出现**，而不是出现后报错。
+        if (_platformContacts is not null)
+        {
+            tools.AddRange(DouyinTools.Create(_platformContacts, context, _policy));
         }
 
         var allowed = new List<AITool>(tools.Count);
