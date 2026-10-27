@@ -793,3 +793,154 @@ public sealed class SaveResultDto
     [JsonPropertyName("changed")]
     public List<string> Changed { get; set; } = [];
 }
+
+/// <summary>第三方平台配置总览（<c>getPlatforms</c>，S3-F）。</summary>
+/// <remarks>
+/// 旧服务端没有这个 action → 调用会抛 <see cref="Services.ApiCallException"/>；
+/// 页面必须**降级**（邮件页仍走 <c>listMailAccounts</c>，抖音页提示"需要新服务端"），不能整页白屏。
+/// </remarks>
+public sealed class PlatformsDto
+{
+    /// <summary>平台清单（QQ / 抖音…）：页面顶部状态点用。</summary>
+    [JsonPropertyName("platforms")]
+    public List<PlatformInfoDto> Platforms { get; set; } = [];
+
+    /// <summary>邮件块；**缺失 → null**（不是空对象），页面按"服务端没给"展示。</summary>
+    [JsonPropertyName("mail")]
+    public MailPlatformDto? Mail { get; set; }
+
+    /// <summary>抖音块；**缺失 → null**。</summary>
+    [JsonPropertyName("douyin")]
+    public DouyinPlatformDto? Douyin { get; set; }
+}
+
+/// <summary>一个平台的连通概况（<c>getPlatforms.platforms[]</c>）。</summary>
+public sealed class PlatformInfoDto
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("label")]
+    public string Label { get; set; } = string.Empty;
+
+    [JsonPropertyName("connected")]
+    public bool Connected { get; set; }
+
+    /// <summary>平台侧自己的账号 ID（如 QQ 号）；未连上时可能为空。</summary>
+    [JsonPropertyName("selfId")]
+    public string? SelfId { get; set; }
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>该平台支持的能力名；旧服务端没给 → 空表。</summary>
+    [JsonPropertyName("features")]
+    public List<string> Features { get; set; } = [];
+}
+
+/// <summary>邮件平台块（<c>getPlatforms.mail</c>）。</summary>
+public sealed class MailPlatformDto
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("accounts")]
+    public List<MailAccountDto> Accounts { get; set; } = [];
+}
+
+/// <summary>
+/// 一个收信账号（<c>listMailAccounts</c> 数组项 / <c>saveMailAccount</c> 回显）。
+/// </summary>
+/// <remarks>
+/// ⚠️ **契约里没有明文、也没有密文**：只有 <see cref="HasSecret"/>。
+/// 要换授权码只能整条重填（<c>secret</c> 缺省 = 保留旧密文）。
+/// </remarks>
+public sealed class MailAccountDto
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("address")]
+    public string Address { get; set; } = string.Empty;
+
+    [JsonPropertyName("displayName")]
+    public string? DisplayName { get; set; }
+
+    [JsonPropertyName("imapHost")]
+    public string ImapHost { get; set; } = string.Empty;
+
+    [JsonPropertyName("imapPort")]
+    public int ImapPort { get; set; } = 993;
+
+    [JsonPropertyName("useSsl")]
+    public bool UseSsl { get; set; } = true;
+
+    [JsonPropertyName("username")]
+    public string? Username { get; set; }
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>最近一次同步（Unix 毫秒）；**没同步过是 null**，别当 0 显示成 1970。</summary>
+    [JsonPropertyName("lastSyncAt")]
+    public long? LastSyncAt { get; set; }
+
+    /// <summary>上次同步失败的原因；正常时 null。</summary>
+    [JsonPropertyName("lastError")]
+    public string? LastError { get; set; }
+
+    /// <summary>是否已存授权码（**只有布尔，永不放凭据**）。</summary>
+    [JsonPropertyName("hasSecret")]
+    public bool HasSecret { get; set; }
+}
+
+/// <summary>抖音平台块（<c>getPlatforms.douyin</c>）。**不含 token 明文**，只给 <see cref="TokenConfigured"/>。</summary>
+public sealed class DouyinPlatformDto
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("connected")]
+    public bool Connected { get; set; }
+
+    [JsonPropertyName("selfId")]
+    public string? SelfId { get; set; }
+
+    [JsonPropertyName("tokenConfigured")]
+    public bool TokenConfigured { get; set; }
+
+    /// <summary>允许的会话白名单（空 = 全部；支持 <c>douyin:p*</c> / <c>douyin:g*</c>）。</summary>
+    [JsonPropertyName("allowedSessions")]
+    public List<string> AllowedSessions { get; set; } = [];
+
+    /// <summary>出站 ack 超时（毫秒）；服务端默认 15000。</summary>
+    [JsonPropertyName("sendTimeoutMs")]
+    public int SendTimeoutMs { get; set; } = 15_000;
+
+    /// <summary>文本分段阈值（字符）；服务端默认 16000。</summary>
+    [JsonPropertyName("maxTextLength")]
+    public int MaxTextLength { get; set; } = 16_000;
+
+    /// <summary>联系人 / 群查询超时（毫秒）；服务端默认 10000。</summary>
+    [JsonPropertyName("queryTimeoutMs")]
+    public int QueryTimeoutMs { get; set; } = 10_000;
+
+    /// <summary>sidecar 连入的端点（<c>/ws/channel</c>）。</summary>
+    [JsonPropertyName("endpoint")]
+    public string Endpoint { get; set; } = "/ws/channel";
+}
+
+/// <summary>保存抖音配置的结果（<c>saveDouyin</c>）。</summary>
+public sealed class SaveDouyinResultDto
+{
+    [JsonPropertyName("saved")]
+    public bool Saved { get; set; }
+
+    /// <summary>真正变了的字段名；没变化 → 空表。</summary>
+    [JsonPropertyName("changed")]
+    public List<string> Changed { get; set; } = [];
+
+    /// <summary>保存后 sidecar 当前是否连着（配置改完不一定立刻重连）。</summary>
+    [JsonPropertyName("connected")]
+    public bool Connected { get; set; }
+}
