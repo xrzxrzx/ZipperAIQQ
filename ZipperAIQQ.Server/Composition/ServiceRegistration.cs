@@ -263,7 +263,9 @@ public static class ServiceRegistration
         // ── 权限与工作区（M1-E / FR-6 / FR-7）──
         // PermissionGate 构造时就校验硬底线：越界配置直接拒绝启动（FR-6.6）
         services.AddSingleton<IPermissionGate>(_ => new PermissionGate());
-        services.AddSingleton<IRoleResolver>(_ => new ConfiguredRoleResolver(options.Admins, options.ToolWhitelist));
+        // 角色解析按平台（S3-C）：启动配置（环境变量 / YAML）只喂 qq，其余平台由 Program.cs 从库里灌
+        services.AddSingleton<IRoleResolver>(_ =>
+            new ConfiguredRoleResolver(options.Admins, options.ToolWhitelist, Access.AccessKeys.DefaultPlatform));
         services.AddSingleton(_ => new WorkspacePathResolver(options.WorkspacePath));
 
         // ── 存储 ──
@@ -275,8 +277,10 @@ public static class ServiceRegistration
         services.AddSingleton<IMetricsStore, SqliteMetricsStore>();
         services.AddSingleton<IScheduleStore, SqliteScheduleStore>();
 
-        // ── 接收过滤：白名单空 = 全放行仅在"没配置白名单"时启用，避免默认什么都收 ──
-        services.AddSingleton<IChatFilter>(_ => new ChatFilter(BuildFilterOptions(options)));
+        // ── 接收过滤（S3-C：按平台分桶）：启动种子只喂 qq（环境变量 / YAML 是单平台时代的写法），
+        //    其余平台的名单由 Program.cs 从库里按平台灌入 ──
+        services.AddSingleton<IChatFilter>(_ =>
+            new ChatFilter(BuildFilterOptions(options), Access.AccessKeys.DefaultPlatform));
 
         // ── 通道（内层 NapCat + 外层节流）──
         services.AddSingleton<IClientTransport>(sp =>
@@ -295,6 +299,14 @@ public static class ServiceRegistration
             new SpeechOptions { Enabled = options.SttEnabled }));
 
         services.AddSingleton<IContactDirectory>(sp => sp.GetRequiredService<NapCatChannel>());
+
+        // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围都只认平台名。
+        // 抖音（S3-E）落地后在这里加一项，上层零改动。
+        services.AddSingleton<IContactDirectoryRegistry>(sp => new ContactDirectoryRegistry(
+            new Dictionary<string, IContactDirectory>(StringComparer.OrdinalIgnoreCase)
+            {
+                [Access.AccessKeys.DefaultPlatform] = sp.GetRequiredService<IContactDirectory>(),
+            }));
 
         // 会话显示名（#2）：好友昵称 / 群名，带 5 分钟缓存
         services.AddSingleton<ISessionNameResolver, SessionNameResolver>();

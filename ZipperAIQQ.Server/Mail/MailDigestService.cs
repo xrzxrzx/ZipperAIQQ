@@ -34,8 +34,20 @@ public sealed record MailDigestResult(int MailCount, bool Sent, string? Error);
 /// </remarks>
 public class MailDigestService
 {
-    /// <summary>主人账号的设置键。与 <c>OwnerFeedbackService</c> / <c>GetOwnerAction</c> 同一口径。</summary>
-    public const string OwnerKey = "owner.userId";
+    /// <summary>
+    /// 汇总转发到哪个平台的主人（决策九：第一期只转 QQ）。
+    /// </summary>
+    /// <remarks>键由 <see cref="ZipperAIQQ.Server.Access.AccessKeys"/> 统一提供（含旧键回退），不在这里写字面量。</remarks>
+    public const string ForwardPlatform = ZipperAIQQ.Server.Access.AccessKeys.DefaultPlatform;
+
+    /// <summary>
+    /// qq 主人的**旧键**（S3-C 之前的口径）。
+    /// </summary>
+    /// <remarks>
+    /// 保留是为了兼容既有调用与测试：读主人时 <see cref="ZipperAIQQ.Server.Access.AccessSettings"/>
+    /// 会先读新键 <c>access.qq.owner</c>，空了再回退到这个旧键。
+    /// </remarks>
+    public const string OwnerKey = ZipperAIQQ.Server.Access.AccessKeys.LegacyOwnerKey;
 
     /// <summary>单批上限的兜底（调用方传再大也不至于一次刷几千行到 QQ）。</summary>
     private const int MaxBatchSize = 200;
@@ -111,18 +123,19 @@ public class MailDigestService
             return new MailDigestResult(0, false, null);
         }
 
-        var ownerId = await _settings.GetAsync(OwnerKey, ct).ConfigureAwait(false);
+        var ownerId = await ZipperAIQQ.Server.Access.AccessSettings
+            .GetOwnerAsync(_settings, ForwardPlatform, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(ownerId))
         {
             // 不静默丢：不标记已转发，配好主人之后下一轮会补发（验收标准 10）
             _logger.Warning(
-                "邮件汇总未转发：还没有设置主人（{Key}），{Count} 封保持待转发",
-                OwnerKey, pending.Count);
+                "邮件汇总未转发：{Platform} 平台还没有设置主人，{Count} 封保持待转发",
+                ForwardPlatform, pending.Count);
 
             return new MailDigestResult(
                 pending.Count,
                 false,
-                "还没有设置主人（owner.userId），这封汇总没有发出去；邮件都在库里，配置主人后会自动补发。");
+                $"还没有设置主人（{ForwardPlatform}），这封汇总没有发出去；邮件都在库里，配置主人后会自动补发。");
         }
 
         var text = BuildDigest(pending);

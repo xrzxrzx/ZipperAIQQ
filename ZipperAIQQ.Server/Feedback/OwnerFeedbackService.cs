@@ -2,6 +2,7 @@ using Serilog;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Server.Access;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Settings;
 
@@ -66,10 +67,12 @@ public sealed class OwnerFeedbackService
             return;
         }
 
-        var ownerId = await _settings.GetAsync("owner.userId", ct).ConfigureAwait(false);
+        // 主人按平台取（S3-C）：抖音的通知要发给抖音的主人，不是 QQ 的主人
+        var platform = AccessKeys.Normalize(notice.Chat.Platform);
+        var ownerId = await AccessSettings.GetOwnerAsync(_settings, platform, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(ownerId))
         {
-            _logger.Warning("主人反馈：还没有设置主人，跳过");
+            _logger.Warning("主人反馈：{Platform} 平台还没有设置主人，跳过", platform);
             return;
         }
 
@@ -79,7 +82,7 @@ public sealed class OwnerFeedbackService
             return;
         }
 
-        var chat = await ResolveTargetAsync(ownerId, ct).ConfigureAwait(false);
+        var chat = await ResolveTargetAsync(platform, ownerId, ct).ConfigureAwait(false);
 
         StoredMessage? original = null;
         if (notice.Type == NoticeType.MessageRecalled &&
@@ -134,13 +137,15 @@ public sealed class OwnerFeedbackService
             return;
         }
 
-        var ownerId = await _settings.GetAsync("owner.userId", ct).ConfigureAwait(false);
+        // 外部接口消息：主人取该会话所属平台（S3-C）
+        var platform = AccessKeys.Normalize(chat.Platform);
+        var ownerId = await AccessSettings.GetOwnerAsync(_settings, platform, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(ownerId))
         {
             return;
         }
 
-        var target = await ResolveTargetAsync(ownerId, ct).ConfigureAwait(false);
+        var target = await ResolveTargetAsync(platform, ownerId, ct).ConfigureAwait(false);
         try
         {
             await _channel.SendAsync(new OutgoingMessage
@@ -180,18 +185,20 @@ public sealed class OwnerFeedbackService
         return types;
     }
 
-    private async Task<ChatRef> ResolveTargetAsync(string ownerId, CancellationToken ct)
+    /// <summary>反馈发送目标：优先用配置的会话（须属于同一平台），否则该平台的主人私聊。</summary>
+    private async Task<ChatRef> ResolveTargetAsync(string platform, string ownerId, CancellationToken ct)
     {
         var configured = await _settings.GetAsync(TargetKey, ct).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(configured) &&
-            SessionRefParser.TryParse(configured, _channel.Platform, out var parsed, out _))
+            SessionRefParser.TryParse(configured, platform, out var parsed, out _) &&
+            string.Equals(parsed.Platform, platform, StringComparison.OrdinalIgnoreCase))
         {
             return parsed;
         }
 
         return new ChatRef
         {
-            Platform = _channel.Platform,
+            Platform = platform,
             Type = ChatType.Private,
             Id = ownerId,
         };

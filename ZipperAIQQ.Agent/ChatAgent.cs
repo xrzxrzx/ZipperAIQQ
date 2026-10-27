@@ -304,7 +304,8 @@ public sealed class ChatAgent : IChatAgent
         // 能力声明：工具按角色隐藏时，模型会**幻觉**「我做了」——
         // 实测：普通成员被要求写文件，它回了「test2.txt 建好了」，实际什么都没建。
         // 所以必须**告诉它没有这个能力**，而不是让它自己猜（FR-6.4 的另一半）。
-        var capabilityNote = BuildCapabilityNote(_roles.Resolve(request.Sender.UserId));
+        var capabilityNote = BuildCapabilityNote(
+            _roles.Resolve(request.Sender.UserId, request.Chat.Platform));
         if (capabilityNote.Length > 0)
         {
             reinject.AppendLine().AppendLine(capabilityNote);
@@ -548,7 +549,7 @@ public sealed class ChatAgent : IChatAgent
         {
             Chat = request.Chat,
             Sender = request.Sender,
-            Role = _roles.Resolve(request.Sender.UserId),
+            Role = _roles.Resolve(request.Sender.UserId, request.Chat.Platform),
         };
 
         var tools = new List<AITool>

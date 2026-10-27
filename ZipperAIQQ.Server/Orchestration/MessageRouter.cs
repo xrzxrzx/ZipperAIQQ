@@ -155,7 +155,7 @@ public sealed class MessageRouter : BackgroundService
         //
         //    ⚠️ 群聊里必须 **@ 机器人** 才执行命令：
         //    否则群里任何人随手打一句 /help 都会触发，等于把机器人变成群里的公共命令台。
-        var role = _roles.Resolve(msg.Sender.UserId);
+        var role = _roles.Resolve(msg.Sender.UserId, msg.Chat.Platform);
         var selfId = ResolveSelfId(msg.Chat.Platform);
         var commandAllowed = msg.Chat.Type == ChatType.Private || _replyModes.IsMentioned(msg, selfId);
 

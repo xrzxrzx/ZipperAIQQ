@@ -66,8 +66,8 @@ public sealed class ChatFilterTests
         Assert.True(filter.IsAllowed(Group("1")));
         Assert.False(filter.IsAllowed(Group("9")));  // 黑名单
         Assert.False(filter.IsAllowed(Group("5")));  // 白名单外
-        Assert.Equal(1, filter.WhitelistCount);
-        Assert.Equal(1, filter.BlacklistCount);
+        Assert.Equal(1, filter.WhitelistCount("qq"));
+        Assert.Equal(1, filter.BlacklistCount("qq"));
     }
 
     [Fact]
@@ -88,13 +88,13 @@ public sealed class ChatFilterTests
     public void AlwaysAllow_can_be_replaced_at_runtime()
     {
         var filter = new ChatFilter(new ChatFilterOptions { AlwaysAllow = ["qq:p1"] });
-        Assert.Contains("qq:p1", filter.AlwaysAllow);
+        Assert.Contains("qq:p1", filter.AlwaysAllow("qq"));
 
-        filter.UpdateAlwaysAllow(["qq:g2"]);
+        filter.UpdateAlwaysAllow("qq", ["qq:g2"]);
 
         // 替换而不是追加：旧的主人私聊不再属于「无条件放行」
-        Assert.DoesNotContain("qq:p1", filter.AlwaysAllow);
-        Assert.Contains("qq:g2", filter.AlwaysAllow);
+        Assert.DoesNotContain("qq:p1", filter.AlwaysAllow("qq"));
+        Assert.Contains("qq:g2", filter.AlwaysAllow("qq"));
         Assert.True(filter.IsAllowed(Group("2")));
     }
 
@@ -104,7 +104,7 @@ public sealed class ChatFilterTests
         var filter = new ChatFilter(new ChatFilterOptions { Whitelist = ["qq:g1"] });
         Assert.False(filter.IsAllowed(Group("2")));
 
-        filter.Update(new ChatFilterOptions { Blacklist = ["qq:g2"] });
+        filter.Update("qq", new ChatFilterOptions { Blacklist = ["qq:g2"] });
         Assert.True(filter.IsAllowed(Group("1")));
         Assert.False(filter.IsAllowed(Group("2")));
     }
@@ -127,7 +127,7 @@ public sealed class ChatFilterTests
     {
         var filter = new ChatFilter(new ChatFilterOptions());
 
-        Assert.Throws<InvalidOperationException>(() => filter.Update(new ChatFilterOptions
+        Assert.Throws<InvalidOperationException>(() => filter.Update("qq", new ChatFilterOptions
         {
             Whitelist = ["qq:g1"],
             Blacklist = ["qq:g1"],
@@ -144,8 +144,61 @@ public sealed class ChatFilterTests
             AlwaysAllow = ["qq:p1", "qq:g3"],
         });
 
-        Assert.Equal(2, filter.WhitelistCount);
-        Assert.Equal(1, filter.BlacklistCount);
-        Assert.Equal(2, filter.AlwaysAllow.Count);
+        Assert.Equal(2, filter.WhitelistCount("qq"));
+        Assert.Equal(1, filter.BlacklistCount("qq"));
+        Assert.Equal(2, filter.AlwaysAllow("qq").Count);
+    }
+
+    // ─────────────────── S3-C：平台隔离（决策四） ───────────────────
+
+    [Fact]
+    public void Lists_are_isolated_per_platform()
+    {
+        // QQ 的白名单**不该**决定抖音收不收消息
+        var filter = new ChatFilter(new ChatFilterOptions
+        {
+            Whitelist = ["qq:g1"],
+        });
+
+        Assert.False(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "2" }));
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "douyin", Type = ChatType.Group, Id = "2" }));
+    }
+
+    [Fact]
+    public void Update_affects_only_target_platform()
+    {
+        var filter = new ChatFilter(new ChatFilterOptions { Whitelist = ["qq:g1"] });
+
+        filter.Update("douyin", new ChatFilterOptions { Blacklist = ["douyin:g7"] });
+
+        // qq 名单原样保留
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "1" }));
+        Assert.False(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "2" }));
+
+        // douyin 只有自己的黑名单
+        Assert.False(filter.IsAllowed(new ChatRef { Platform = "douyin", Type = ChatType.Group, Id = "7" }));
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "douyin", Type = ChatType.Group, Id = "8" }));
+        Assert.Empty(filter.Whitelist("douyin"));
+    }
+
+    [Fact]
+    public void AlwaysAllow_is_isolated_per_platform()
+    {
+        var filter = new ChatFilter(new ChatFilterOptions { Blacklist = ["qq:g10"] });
+
+        filter.UpdateAlwaysAllow("qq", ["qq:g10"]);
+
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "10" }));
+        Assert.Empty(filter.AlwaysAllow("douyin"));
+    }
+
+    [Fact]
+    public void Unconfigured_platform_allows_everything()
+    {
+        // 新平台刚接入时不该被"没配过"挡住
+        var filter = new ChatFilter();
+
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "telegram", Type = ChatType.Private, Id = "1" }));
+        Assert.Equal(0, filter.WhitelistCount("telegram"));
     }
 }

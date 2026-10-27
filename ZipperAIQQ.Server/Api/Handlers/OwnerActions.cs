@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Server.Access;
 using ZipperAIQQ.Server.Contacts;
 using ZipperAIQQ.Server.Dto;
 using ZipperAIQQ.Storage.Settings;
@@ -8,48 +9,57 @@ using ZipperAIQQ.Storage.Settings;
 namespace ZipperAIQQ.Server.Api.Handlers;
 
 /// <summary>
-/// 主人设定（第 17 项）：读当前主人 + 好友候选列表。
+/// 主人设定（第 17 项）：读当前主人 + 好友候选列表，**按平台**（S3-C）。
 /// </summary>
 public sealed class GetOwnerAction : IApiAction
 {
-    public const string OwnerKey = "owner.userId";
-    public const string OwnerNameKey = "owner.nickname";
-
     private readonly IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
-    private readonly IContactDirectory _contacts;
+    private readonly IContactDirectoryRegistry _directories;
 
-    public GetOwnerAction(IRuntimeSettingsStore settings, IRoleResolver roles, IContactDirectory contacts)
+    public GetOwnerAction(
+        IRuntimeSettingsStore settings,
+        IRoleResolver roles,
+        IContactDirectoryRegistry directories)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(roles);
-        ArgumentNullException.ThrowIfNull(contacts);
+        ArgumentNullException.ThrowIfNull(directories);
 
         _settings = settings;
         _roles = roles;
-        _contacts = contacts;
+        _directories = directories;
     }
 
     public string Name => "getOwner";
 
     public async Task<object?> HandleAsync(JsonElement payload, CancellationToken ct)
     {
-        var ownerId = await _settings.GetAsync(OwnerKey, ct).ConfigureAwait(false);
-        var ownerName = await _settings.GetAsync(OwnerNameKey, ct).ConfigureAwait(false);
+        var platform = AccessKeys.Normalize(PayloadReader.GetString(payload, "platform"));
+
+        var ownerId = await AccessSettings.GetOwnerAsync(_settings, platform, ct).ConfigureAwait(false);
+        var ownerName = await AccessSettings.GetOwnerNameAsync(_settings, platform, ct).ConfigureAwait(false);
 
         // 好友列表用于「选一个主人」；查不到就返回空（不阻断页面）
-        IReadOnlyList<ContactInfo> friends;
-        try
+        // 按平台取：抖音的好友不能拿来当 QQ 的主人（决策四）
+        var directory = _directories.For(platform);
+        IReadOnlyList<ContactInfo> friends = [];
+        if (directory is not null)
         {
-            friends = await _contacts.GetFriendsAsync(ct).ConfigureAwait(false);
-        }
-        catch
-        {
-            friends = [];
+            try
+            {
+                friends = await directory.GetFriendsAsync(ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                friends = [];
+            }
         }
 
         return new
         {
+            platform,
+            platforms = _directories.Platforms,
             ownerId,
             ownerName,
             candidates = friends
@@ -106,23 +116,32 @@ public sealed class SetOwnerAction : IApiAction
             ? nameElement.GetString()
             : null;
 
-        await _settings.SetAsync(GetOwnerAction.OwnerKey, userId, ct).ConfigureAwait(false);
-        await _settings.SetAsync(GetOwnerAction.OwnerNameKey, nickname ?? string.Empty, ct).ConfigureAwait(false);
+        var platform = AccessKeys.Normalize(PayloadReader.GetString(payload, "platform"));
 
-        // 立即生效：权限解析器持有一个内存里的 owner
+        await _settings.SetAsync(AccessKeys.Owner(platform), userId, ct).ConfigureAwait(false);
+        await _settings.SetAsync(AccessKeys.OwnerName(platform), nickname ?? string.Empty, ct).ConfigureAwait(false);
+
+        // 旧键也同步一份（仅 qq）：万一回退到旧版程序，主人不会突然"消失"
+        if (AccessKeys.HasLegacyKeys(platform))
+        {
+            await _settings.SetAsync(AccessKeys.LegacyOwnerKey, userId, ct).ConfigureAwait(false);
+            await _settings.SetAsync(AccessKeys.LegacyOwnerNameKey, nickname ?? string.Empty, ct).ConfigureAwait(false);
+        }
+
+        // 立即生效：权限解析器持有内存里的各平台 owner
         if (_roles is ConfiguredRoleResolver configured)
         {
-            configured.SetOwner(userId);
+            configured.SetOwner(platform, userId);
         }
 
         await _configs
-            .AppendAuditAsync("setOwner", "http-client", $"owner={userId}", ct)
+            .AppendAuditAsync("setOwner", "http-client", $"{platform}:owner={userId}", ct)
             .ConfigureAwait(false);
 
         // 主人变了 → 放行范围也要跟着变（私聊 + 主人所在的群）。
         // 不 await：解析群成员可能是几千毫秒，别让保存主人卡住；后台服务失败会自己重试。
         _ = _ownerScope.RefreshAsync();
 
-        return new { ownerId = userId, ownerName = nickname, effective = "immediate" };
+        return new { ownerId = userId, ownerName = nickname, platform, effective = "immediate" };
     }
 }
