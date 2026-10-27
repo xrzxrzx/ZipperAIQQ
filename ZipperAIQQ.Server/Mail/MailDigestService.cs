@@ -56,13 +56,24 @@ public class MailDigestService
     private readonly IMessageChannel _channel;
     private readonly IMailRepository _repository;
     private readonly MailOptions _options;
+    private readonly Agent.IChatAgentPool _agents;
     private readonly ILogger _logger;
+
+    /// <summary>
+    /// 汇总消息的"发送者"：这是系统事件，不是某个真人发的（与通知响应同一口径）。
+    /// </summary>
+    private static readonly SenderInfo SyntheticSender = new()
+    {
+        UserId = "system",
+        Nickname = "邮件助手",
+    };
 
     public MailDigestService(
         IRuntimeSettingsStore settings,
         IMessageChannel channel,
         IMailRepository repository,
         MailOptions options,
+        Agent.IChatAgentPool agents,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -75,6 +86,7 @@ public class MailDigestService
         _channel = channel;
         _repository = repository;
         _options = options;
+        _agents = agents;
         _logger = logger;
     }
 
@@ -146,6 +158,103 @@ public class MailDigestService
             Id = ownerId.Trim(),
         };
 
+        // ── 先交给**人格 agent** 去说（用户要求：AI 总结后由人格模拟的 agent 发给主人）──
+        // 为什么不让服务直接发：邮件汇总是"通知"，但主人要面对的是**这个人**。
+        // 直接发一段格式化文本，语气和人设是断的；交给 agent，它会用当前人设、当前语境去说。
+        var handedToAgent = await TryHandToAgentAsync(pending, text, target, ct).ConfigureAwait(false);
+        if (!handedToAgent)
+        {
+            // 人格 agent 没发出去（模型判断不必发 / 调用失败 / 没人设可用）→ 回落直发。
+            // 宁可语气平淡一次，也不能让主人收不到（验收标准 10：不静默丢）。
+            _logger.Warning("邮件汇总没能由人格 agent 发出，回落为直接发送（{Count} 封）", pending.Count);
+
+            var direct = await SendDirectAsync(text, target, pending.Count, ct).ConfigureAwait(false);
+            if (direct is not null)
+            {
+                return direct;
+            }
+        }
+
+        var ids = pending.Select(mail => mail.Id).ToList();
+        await _repository.MarkForwardedAsync(ids, ct: ct).ConfigureAwait(false);
+
+        _logger.Information(
+            "邮件汇总已转发：{Count} 封 → {Session}（{Via}）",
+            pending.Count,
+            target.SessionId,
+            handedToAgent ? "人格 agent" : "直发回落");
+
+        return new MailDigestResult(pending.Count, true, null);
+    }
+
+    /// <summary>
+    /// 把汇总交给主人私聊的 agent，让**它按人设**说给主人听。
+    /// </summary>
+    /// <returns>真的发出去了（≥1 条）为 <c>true</c>；否则 <c>false</c>（调用方回落直发）。</returns>
+    /// <remarks>
+    /// 三条硬约束写进指令里：不漏项、不编造、不把正文全文倒出来。
+    /// 模型偶尔会判断"不用回"（返回 0 条）——那不是错误，只是这条路径没成，回落即可。
+    /// </remarks>
+    private async Task<bool> TryHandToAgentAsync(
+        IReadOnlyList<StoredMail> pending,
+        string digestText,
+        ChatRef target,
+        CancellationToken ct)
+    {
+        var instruction = $"""
+            这是一次**邮件汇总**（{pending.Count} 封），请用你自己的语气转告主人。
+            要求：
+            1. 不要漏封；每封至少说清「谁发的、主题、要不要处理」。
+            2. 摘要里没有的信息**不要编**。
+            3. 不要把整段原文照抄过来，像人一样整理成一两条消息即可。
+            4. 主人没问的事别展开；发完就停。
+
+            下面是汇总数据（系统生成，供你参考）：
+            {digestText}
+            """;
+
+        try
+        {
+            var result = await _agents
+                .GetOrCreate(target)
+                .RunAsync(
+                    new Agent.AgentRunRequest
+                    {
+                        Chat = target,
+                        Sender = SyntheticSender,
+                        UserText = instruction,
+                        Segments = [new TextSegment(instruction)],
+                        Now = BeijingTime.Now,
+                    },
+                    ct)
+                .ConfigureAwait(false);
+
+            if (result.MessagesSent > 0)
+            {
+                return true;
+            }
+
+            _logger.Information("邮件汇总：人格 agent 本轮没有发送（MessagesSent=0），走直发回落");
+            return false;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "邮件汇总交给人格 agent 失败，走直发回落");
+            return false;
+        }
+    }
+
+    /// <summary>直发回落：带重试，失败返回结果（<c>null</c> = 发送成功）。</summary>
+    private async Task<MailDigestResult?> SendDirectAsync(
+        string text,
+        ChatRef target,
+        int mailCount,
+        CancellationToken ct)
+    {
         var retries = Math.Max(0, _options.ForwardRetryCount);
         var failureCount = 0;
 
@@ -163,7 +272,7 @@ public class MailDigestService
                         ct)
                     .ConfigureAwait(false);
 
-                break;
+                return null;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -177,10 +286,10 @@ public class MailDigestService
                     _logger.Error(
                         ex,
                         "邮件汇总发送失败（已重试 {Retries} 次），{Count} 封保持待转发",
-                        failureCount, pending.Count);
+                        failureCount, mailCount);
 
                     return new MailDigestResult(
-                        pending.Count,
+                        mailCount,
                         false,
                         $"发送到主人私聊失败：{ex.Message}（已重试 {failureCount} 次，邮件仍待转发）。");
                 }
@@ -195,14 +304,6 @@ public class MailDigestService
                 await Task.Delay(delay, ct).ConfigureAwait(false);
             }
         }
-
-        var ids = pending.Select(mail => mail.Id).ToList();
-        await _repository.MarkForwardedAsync(ids, ct: ct).ConfigureAwait(false);
-
-        _logger.Information(
-            "邮件汇总已转发：{Count} 封 → {Session}", pending.Count, target.SessionId);
-
-        return new MailDigestResult(pending.Count, true, null);
     }
 
     /// <summary>组汇总文本：标题 + 每封的 时间/发件人/主题/摘要/是否需处理，**不含正文**。</summary>

@@ -230,6 +230,8 @@ public static class ServiceRegistration
             sp.GetRequiredService<IMessageChannel>(),
             sp.GetRequiredService<IMailRepository>(),
             options.Mail,
+            // 汇总先交给人格 agent 去说（用户要求），失败才回落直发
+            sp.GetRequiredService<IChatAgentPool>(),
             sp.GetRequiredService<ILogger>()));
         services.AddHostedService<MailPipeline>();
         services.AddSingleton<IApiAction, ListMailsAction>();

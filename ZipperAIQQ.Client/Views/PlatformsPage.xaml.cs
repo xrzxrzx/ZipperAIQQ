@@ -172,17 +172,6 @@ public sealed partial class PlatformsPage : Page
             PasswordRevealMode = PasswordRevealMode.Hidden,
         };
 
-        // 凭据永远不回显：这里只说"有没有"
-        var secretState = new TextBlock
-        {
-            Text = existing is null
-                ? "还没有授权码"
-                : existing.HasSecret ? "授权码：已配置（不回显；要换就重填）" : "授权码：未配置",
-            FontSize = 12,
-            Opacity = 0.75,
-            TextWrapping = TextWrapping.Wrap,
-        };
-
         var enabled = new ToggleSwitch { Header = "启用", IsOn = existing?.Enabled ?? true };
 
         var error = new TextBlock
@@ -200,13 +189,34 @@ public sealed partial class PlatformsPage : Page
         hostRow.Children.Add(imapPort);
         Grid.SetColumn(imapPort, 1);
 
-        var panel = new StackPanel { Spacing = 10, MinWidth = 380 };
+        // ⚠️ RequestedTheme 必须设在**内容根**上：ContentDialog 的内容会被放进 popup 宿主，
+        // 只设在 dialog 上时，部分状态（焦点 / 悬停）仍会去取应用默认主题 —— 表现出来就是
+        // 「输入框在深色对话框里变成白底」（用户反馈的主题不一致）。
+        var panel = new StackPanel
+        {
+            Spacing = 10,
+            MinWidth = 380,
+            RequestedTheme = ElementTheme.Dark,
+        };
         panel.Children.Add(address);
         panel.Children.Add(hostRow);
         panel.Children.Add(useSsl);
         panel.Children.Add(username);
         panel.Children.Add(secret);
-        panel.Children.Add(secretState);
+
+        // 凭据永远不回显。**新建时不显示这行**：原来写的是"还没有授权码"，
+        // 看起来像可点的链接、点了却没有任何反应 —— 没实现的东西就不该写（用户反馈）。
+        if (existing is not null)
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = existing.HasSecret ? "授权码：已配置（不回显；要换就重填）" : "授权码：未配置",
+                FontSize = 12,
+                Opacity = 0.75,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
         panel.Children.Add(enabled);
         panel.Children.Add(error);
 

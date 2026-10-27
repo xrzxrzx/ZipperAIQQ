@@ -31,6 +31,9 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
     private readonly SqliteDatabase _db;
     private readonly SqliteMailRepository _repository;
 
+    /// <summary>人格 agent 的替身：默认"没发出去"，好让各条用例走直发回落分支。</summary>
+    private FakeAgentPool _agents = new(sentMessages: 0);
+
     public MailDigestServiceTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"zipper-mail-digest-{Guid.NewGuid():N}.db");
@@ -187,6 +190,56 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
         Assert.Single(channel.Sent);       // 只发了那一条
     }
 
+    [Fact]
+    public async Task FlushAsync_HandsDigestToPersonaAgent_AndSkipsDirectSend()
+    {
+        // 用户要求：汇总先交给「人格模拟 agent」，由她用自己语气发给主人
+        await SeedMailAsync("季度发票", "发票待报销");
+        var settings = new FakeSettings().Set(MailDigestService.OwnerKey, "10001");
+        var channel = new FakeChannel();
+
+        _agents = new FakeAgentPool(sentMessages: 1);
+        var service = Service(channel, settings);
+
+        var result = await service.FlushAsync(10);
+
+        Assert.True(result.Sent);
+        Assert.Equal(1, _agents.RunCount);
+
+        // 交给 agent 了：服务自己不再直发（否则主人会收到两份）
+        Assert.Empty(channel.Sent);
+
+        // 指令里必须带原始摘要数据，否则 agent 会漏封或编内容
+        var instruction = _agents.Agent.LastRequest!.UserText;
+        Assert.Contains("季度发票", instruction, StringComparison.Ordinal);
+        Assert.Contains("sender@example.com", instruction, StringComparison.Ordinal);
+        Assert.DoesNotContain(BodyMarker, instruction);
+
+        // 收件人 = 主人私聊
+        Assert.Equal("qq:p10001", _agents.Agent.LastRequest.Chat.SessionId);
+
+        // 已标记转发：下一轮不会再转一次
+        Assert.Equal(0, (await service.FlushAsync(10)).MailCount);
+    }
+
+    [Fact]
+    public async Task FlushAsync_AgentSendsNothing_FallsBackToDirectSend()
+    {
+        // 人格 agent 没发（MessagesSent=0）→ 回落直发，宁可语气平淡也不能让主人收不到
+        await SeedMailAsync("季度发票", "发票待报销");
+        var settings = new FakeSettings().Set(MailDigestService.OwnerKey, "10001");
+        var channel = new FakeChannel();
+
+        _agents = new FakeAgentPool(sentMessages: 0);
+        var service = Service(channel, settings);
+
+        var result = await service.FlushAsync(10);
+
+        Assert.True(result.Sent);
+        Assert.Equal(1, _agents.RunCount);
+        Assert.Single(channel.Sent);      // 直发兜住了
+    }
+
     // ─────────────────────────── 测试数据与小工具 ───────────────────────────
 
     private static MailOptions Options(int forwardRetryCount = 2) => new()
@@ -197,7 +250,7 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
     };
 
     private MailDigestService Service(IMessageChannel channel, IRuntimeSettingsStore settings, MailOptions? options = null) =>
-        new FastRetryDigestService(settings, channel, _repository, options ?? Options(), _logger);
+        new FastRetryDigestService(settings, channel, _repository, options ?? Options(), _agents, _logger);
 
     /// <summary>塞一封"摘要成功、还没转发"的邮件，返回主键。</summary>
     private async Task<long> SeedMailAsync(
@@ -240,8 +293,9 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
             IMessageChannel channel,
             IMailRepository repository,
             MailOptions options,
+            ZipperAIQQ.Agent.IChatAgentPool agents,
             ILogger logger)
-            : base(settings, channel, repository, options, logger)
+            : base(settings, channel, repository, options, agents, logger)
         {
         }
 
@@ -316,6 +370,61 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
 
             Sent.Add(message);
             return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// 人格 agent 的替身：记录"被叫了几次"，并按配置返回发送条数。
+    /// </summary>
+    /// <remarks>
+    /// 真实 agent 会跑模型、还要人设/工具，测试里不可能真跑 —— 这里只关心
+    /// 「有没有交给它」与「它报了几条」这两个分支。
+    /// </remarks>
+    private sealed class FakeAgentPool : ZipperAIQQ.Agent.IChatAgentPool
+    {
+        private readonly int _sentMessages;
+
+        public FakeAgentPool(int sentMessages)
+        {
+            _sentMessages = sentMessages;
+            Agent = new FakeAgent(_sentMessages);
+        }
+
+        public FakeAgent Agent { get; }
+
+        public int RunCount => Agent.RunCount;
+
+        public int LoadedCount => 1;
+
+        public ZipperAIQQ.Agent.IChatAgent GetOrCreate(ChatRef chat) => Agent;
+    }
+
+    private sealed class FakeAgent : ZipperAIQQ.Agent.IChatAgent
+    {
+        private readonly int _sentMessages;
+
+        public FakeAgent(int sentMessages) => _sentMessages = sentMessages;
+
+        public int RunCount { get; private set; }
+
+        public string SessionId => "qq:p10001";
+
+        public ZipperAIQQ.Agent.AgentRunRequest? LastRequest { get; private set; }
+
+        public Task<ZipperAIQQ.Agent.AgentRunResult> RunAsync(
+            ZipperAIQQ.Agent.AgentRunRequest request, CancellationToken ct = default)
+        {
+            RunCount++;
+            LastRequest = request;
+            return Task.FromResult(new ZipperAIQQ.Agent.AgentRunResult("ok", _sentMessages));
+        }
+
+        public void ResetHistory()
+        {
+        }
+
+        public void RememberCommand(string userMessage, string commandResponse)
+        {
         }
     }
 }
