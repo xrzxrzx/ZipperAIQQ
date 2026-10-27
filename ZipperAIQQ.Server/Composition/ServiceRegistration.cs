@@ -307,13 +307,27 @@ public static class ServiceRegistration
         services.AddSingleton<IOwnerScope>(sp => sp.GetRequiredService<OwnerScopeResolver>());
         services.AddHostedService(sp => sp.GetRequiredService<OwnerScopeResolver>());
 
+        // ── 复合通道（S3-A / 决策三）：入站合并 + 出站按 ChatRef.Platform 路由 ──
+        // 只包 IMessageChannel；邮件是 IMessageSource，由 MailPipeline 自己消费（不进这里）。
+        // 节流仍包在**最外层**（设计 §S3-A）：那是"全局发送节奏"，与哪个平台无关。
         services.AddSingleton<IMessageChannel>(sp =>
-            // 所有出站消息都过这里：全局最短间隔 + 连发冷却，跨会话共享
-            new ThrottledMessageChannel(
+        {
+            var channels = new List<IMessageChannel>
+            {
                 sp.GetRequiredService<NapCatChannel>(),
+                // 抖音（S3-E）：落地后在这里加一行 DouyinChannel 即可，上层零改动
+            };
+
+            var composite = new Channels.CompositeMessageChannel(
+                channels, sp.GetRequiredService<ILogger>());
+
+            // 所有出站消息都过这里：全局最短间隔 + 连发冷却，跨会话共享
+            return new ThrottledMessageChannel(
+                composite,
                 options.SendIntervalMs,
                 options.MaxConsecutive,
-                options.CooldownMs));
+                options.CooldownMs);
+        });
 
         // ── 向量与长期记忆 ──
         services.AddSingleton<IEmbeddingService>(_ =>

@@ -33,6 +33,21 @@ public interface IMessageChannel
     }
 
     /// <summary>
+    /// 指定平台上的自身账号。单平台实现沿用 <see cref="SelfId"/>。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 多平台实现（复合通道）必须按平台返回 —— 否则 QQ 的 selfId 会被当成抖音的，
+    /// 「@ 的是不是自己」与自激过滤会同时错判。
+    /// </para>
+    /// <para>
+    /// 写成**带默认实现的接口方法**（而不是抽象成员）是为了让它是加性变更：
+    /// 现有实现（含测试里的假通道）一行都不用改。
+    /// </para>
+    /// </remarks>
+    string? SelfIdFor(string platform) => SelfId;
+
+    /// <summary>
     /// 建立连接（若通道需要）。已连接的实现应幂等。
     /// </summary>
     Task StartAsync(CancellationToken ct = default);

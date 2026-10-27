@@ -89,14 +89,18 @@ public sealed class MessageRouter : BackgroundService
                         // M2-E：落库 + 按配置决定是否响应（默认只记录，FR-18.3）
                         // 自激兜底：通道层已按动态 SelfId 过滤过；这里再用配置里的自 ID 拦一次，
                         // 以防换成别的通道实现时漏判（问题记录 #39）
-                        if (NoticeSelfPolicy.ShouldDrop(notice, _options.SelfId))
+                        //
+                        // ⚠️ selfId 必须**按平台**取（S3-A）：QQ 号 ≠ 抖音 uid，
+                        // 拿 QQ 的 id 去判抖音通知，"是不是自己"必然判错。
+                        var noticeSelfId = ResolveSelfId(notice.Chat.Platform);
+                        if (NoticeSelfPolicy.ShouldDrop(notice, noticeSelfId))
                         {
                             _logger.Information(
                                 "丢弃自身相关通知（路由层兜底）：{Type}（Actor={Actor}, Target={Target}, Self={Self}）",
                                 notice.Type,
                                 notice.Actor?.UserId,
                                 notice.Target?.UserId,
-                                _options.SelfId);
+                                noticeSelfId);
                             break;
                         }
 
@@ -120,6 +124,18 @@ public sealed class MessageRouter : BackgroundService
 /// <summary>同一会话的收集窗口（毫秒）：这段时间内到达的消息合并成一批。</summary>
     private const int CollectWindowMs = 600;
 
+    /// <summary>
+    /// 取"我在这个平台上是谁"：优先通道运行时发现的，其次配置（S3-A 平台化）。
+    /// </summary>
+    /// <remarks>
+    /// 一定要按平台取：QQ 号与抖音 uid 完全无关，用错平台等于永远判错"有没有 @ 我"。
+    /// 两者都没有时返回空串 —— 上层据此走保守分支（群聊 mention 模式不回）。
+    /// </remarks>
+    private string ResolveSelfId(string platform) =>
+        _channel.SelfIdFor(platform)
+        ?? _options.SelfIdFor(platform)
+        ?? string.Empty;
+
     /// <summary>这条通知是不是自己触发的（配置里的自 ID 兜底判断）。</summary>
     private sealed class SessionBuffer
     {
@@ -140,7 +156,7 @@ public sealed class MessageRouter : BackgroundService
         //    ⚠️ 群聊里必须 **@ 机器人** 才执行命令：
         //    否则群里任何人随手打一句 /help 都会触发，等于把机器人变成群里的公共命令台。
         var role = _roles.Resolve(msg.Sender.UserId);
-        var selfId = _options.SelfId ?? string.Empty;
+        var selfId = ResolveSelfId(msg.Chat.Platform);
         var commandAllowed = msg.Chat.Type == ChatType.Private || _replyModes.IsMentioned(msg, selfId);
 
         if (!commandAllowed)
@@ -176,7 +192,7 @@ public sealed class MessageRouter : BackgroundService
             .GetModeAsync(msg.Chat.SessionId, ct)
             .ConfigureAwait(false);
 
-        if (!await _replyModes.ShouldReplyAsync(msg, _options.SelfId ?? string.Empty, ct).ConfigureAwait(false))
+        if (!await _replyModes.ShouldReplyAsync(msg, selfId, ct).ConfigureAwait(false))
         {
             _logger.Debug("回复模式 {Mode}：跳过 #{Id}（会话 {Session}）", mode, id, msg.Chat.SessionId);
             return;

@@ -105,7 +105,8 @@ public sealed class NoticeResponder
             return;
         }
 
-        var selfId = _channel.SelfId ?? _options.SelfId;
+        // 按平台取 selfId（S3-A）：多平台下 QQ 号不能拿来判抖音通知
+        var selfId = _channel.SelfIdFor(notice.Chat.Platform) ?? _options.SelfIdFor(notice.Chat.Platform);
         var text = Describe(notice, selfId);
 
         try

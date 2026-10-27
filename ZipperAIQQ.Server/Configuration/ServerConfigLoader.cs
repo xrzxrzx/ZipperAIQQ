@@ -88,6 +88,8 @@ public static class ServerConfigLoader
             NapCatWebSocketUrl = s.Str("napcat", "wsUrl", o.NapCatWebSocketUrl)!,
             NapCatAccessToken = s.Str("napcat", "token", o.NapCatAccessToken),
             SelfId = s.Str("napcat", "selfId", o.SelfId),
+            // 按平台的自身账号（多平台）：selfIds: { qq: "...", douyin: "..." }
+            SelfIds = s.MapSection("selfIds", o.SelfIds),
             SearchEnabled = s.Bool("search", "enabled", o.SearchEnabled),
             SearchBaseUrl = s.Str("search", "baseUrl", o.SearchBaseUrl),
             ExternalAllowSend = s.Bool("external", "allowSend", o.ExternalAllowSend),
@@ -216,5 +218,42 @@ public static class ServerConfigLoader
             && Enum.TryParse<TEnum>(s.Value, ignoreCase: true, out var v)
                 ? v
                 : fallback;
+
+        /// <summary>
+        /// 读一整节「标量 → 标量」的映射（如 <c>selfIds:</c>）。空节 / 全空值 → 回落。
+        /// </summary>
+        /// <remarks>
+        /// 与其它成员不同，这一节本身就是 map（不是 section→key→value 的两层查找）。
+        /// </remarks>
+        public IReadOnlyDictionary<string, string> MapSection(
+            string section, IReadOnlyDictionary<string, string> fallback)
+        {
+            if (!root.Children.TryGetValue(new YamlScalarNode(section), out var node) ||
+                node is not YamlMappingNode map)
+            {
+                return fallback;
+            }
+
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (keyNode, valueNode) in map.Children)
+            {
+                if (keyNode is not YamlScalarNode { Value: { } rawKey } ||
+                    valueNode is not YamlScalarNode { Value: { } rawValue })
+                {
+                    continue;
+                }
+
+                var key = rawKey.Trim();
+                var value = rawValue.Trim();
+                if (key.Length == 0 || value.Length == 0)
+                {
+                    continue;
+                }
+
+                result[key] = value;
+            }
+
+            return result.Count > 0 ? result : fallback;
+        }
     }
 }

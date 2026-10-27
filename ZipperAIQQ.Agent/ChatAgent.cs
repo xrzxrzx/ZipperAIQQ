@@ -321,7 +321,8 @@ public sealed class ChatAgent : IChatAgent
 
         // 自我身份（问题记录 02 #3/#4）：模型不知道自己的 QQ 号，
         // 就会把「A 戳了 B」当成「有人在戳我」。
-        var selfId = _channel.SelfId ?? _options.SelfId;
+        // ⚠️ 按会话所在平台取（S3-A）：多平台下 QQ 号不能当成抖音的"我自己"。
+        var selfId = _channel.SelfIdFor(request.Chat.Platform) ?? _options.SelfId;
         if (!string.IsNullOrWhiteSpace(selfId))
         {
             reinject.AppendLine().AppendLine()
@@ -856,7 +857,11 @@ public sealed class ChatAgent : IChatAgent
 
         try
         {
-            await _store.AppendOutgoingAsync(outgoing, _channel.SelfId ?? _options.SelfId ?? BotUserId, BeijingTime.Now, ct).ConfigureAwait(false);
+            await _store.AppendOutgoingAsync(
+                outgoing,
+                _channel.SelfIdFor(outgoing.Chat.Platform) ?? _options.SelfId ?? BotUserId,
+                BeijingTime.Now,
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
