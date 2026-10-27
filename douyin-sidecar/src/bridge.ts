@@ -1,0 +1,1631 @@
+#!/usr/bin/env node
+/**
+ * ZipperAIQQ 抖音 sidecar（桥）。
+ *
+ * 职责：把 `douyin-im` 的私聊 / 群聊事件翻成 Server 的 `/ws/channel` 帧，
+ * 并把 Server 下发的出站指令落成真实发送（设计 §2.1 拓扑、§3 协议、§4 映射）。
+ *
+ * 分层（**副作用集中**，便于以后单测）：
+ *   ① 翻译层 —— `normalizeInbound` / `toInboundFrame` / `buildOutboundPlan` 等**纯函数**，
+ *      不碰网络、不碰 douyin-im，可直接喂假数据测（设计 §9）。
+ *   ② `DouyinImAdapter` —— **唯一** import 并调用 douyin-im 的地方。
+ *   ③ `ChannelLink` —— **唯一**碰 WebSocket 的地方：连接 / 退避重连 / 心跳。
+ *   ④ `main` —— 把 ①②③ 接起来 + 帧分发（outbound → ack、query.* → result）。
+ *
+ * 为什么是 sidecar：`douyin-im` 是 Node 22.5+ / ESM / `node:sqlite`，.NET 调不动（设计 §1.3）。
+ * 为什么 sidecar **主动连入** Server：Server 常驻、sidecar 可重启，主动连入省掉端口分配，
+ * 且断线能自己重连（设计 §2.2）。
+ *
+ * 鉴权：**Bearer token 走 query 参数**（`?token=...`）。选 query 而不是 header 的原因：
+ * Node 内置的全局 `WebSocket`（WHATWG API）**不支持自定义请求头**，
+ * 用 header 就得额外引入 `ws` 依赖；而 loopback 部署本来免 token（设计 §6.2）。
+ * 详见 README「鉴权」一节（含"改用 header 要动哪一行"）。
+ */
+
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import process from "node:process";
+
+// ═══════════════════════════ 常量 ═══════════════════════════
+
+/** 协议版本（hello 帧里声明；与 Server 侧 `DouyinProtocol` 对齐）。 */
+const PROTOCOL_VERSION = "1";
+
+/** 平台标识（Server 侧 `ChatRef.Platform` / 会话前缀都用它）。 */
+const PLATFORM = "douyin";
+
+/** 能力集（设计 §3.3 hello 帧）。 */
+const CAPABILITIES = ["text", "image", "mention", "reply"] as const;
+
+const DEFAULT_SERVER_URL = "ws://127.0.0.1:5180/ws/channel";
+const DEFAULT_DATA_DIR = "data";
+const DEFAULT_MAX_TEXT_LENGTH = 16_000;
+const DEFAULT_HEARTBEAT_MS = 30_000;
+const DEFAULT_DEAD_AFTER_MS = 90_000;
+
+/** 重连退避：1s 起步，翻倍封顶 60s（设计 §2.2「断了自动重连」）。 */
+const RECONNECT_INITIAL_MS = 1_000;
+const RECONNECT_MAX_MS = 60_000;
+
+/** WebSocket.OPEN 的字面值：不依赖 DOM 的 lib，避免额外 tsconfig lib 配置。 */
+const SOCKET_OPEN = 1;
+
+/** 入站去重窗口：Server 侧也会按 messageId 去重（设计 §3.4），这里只是省一次往返。 */
+const SEEN_MESSAGE_CAP = 500;
+
+// ═══════════════════════════ 基础工具 ═══════════════════════════
+
+type AnyFn = (this: unknown, ...args: unknown[]) => unknown;
+
+function str(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function num(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/** 把任意抛出物转成一句可读原因 —— 出站失败要原样回给模型（设计 §10 #6）。 */
+function describeError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message.length > 0 ? err.message : err.name;
+  }
+
+  const text = str(err);
+  if (text) {
+    return text;
+  }
+
+  try {
+    return JSON.stringify(err) ?? String(err);
+  } catch {
+    return String(err);
+  }
+}
+
+function truncate(text: string, maxLength: number): string {
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength)}…`;
+}
+
+/** 打印 URL 时抹掉 token —— token **不落日志、不回显**（设计 §6.2）。 */
+function redactToken(url: string): string {
+  return url.replace(/([?&](?:token|access_token)=)[^&]*/gi, "$1***");
+}
+
+/**
+ * 平台时间戳 → UTC Unix 毫秒。
+ *
+ * 有的实现给秒、有的给毫秒，还有的给 ISO 字符串：`< 1e12` 一律按秒处理
+ * （1e12 毫秒 ≈ 2001 年，秒级时间戳要到 33658 年才会追上来）。
+ */
+function toEpochMs(value: unknown): number | undefined {
+  const numeric = num(value);
+  if (numeric !== undefined) {
+    if (numeric <= 0) {
+      return undefined;
+    }
+
+    return numeric < 1e12 ? Math.round(numeric * 1000) : Math.round(numeric);
+  }
+
+  const text = str(value);
+  if (!text) {
+    return undefined;
+  }
+
+  const parsed = Date.parse(text);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+/** 群 `@` 的 uid 必须是数字（设计 §10 #7），非数字的降级成纯文本。 */
+function isNumericUid(uid: string): boolean {
+  return /^\d+$/.test(uid);
+}
+
+// ═══════════════════════════ 日志 ═══════════════════════════
+
+type LogLevel = "debug" | "info" | "warn" | "error";
+
+const LOG_LEVELS: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
+
+interface Logger {
+  debug(message: string, extra?: unknown): void;
+  info(message: string, extra?: unknown): void;
+  warn(message: string, extra?: unknown): void;
+  error(message: string, extra?: unknown): void;
+  /**
+   * 需要**人**做的事（登录验证 URL、扫码提示）。
+   *
+   * 只走 stdout：远程宿主会把 stdout 抓走做代理 / 转发（设计 §10 #2），
+   * 诊断日志走 stderr，两者不要混。
+   */
+  prompt(lines: readonly string[]): void;
+  setLevel(level: LogLevel): void;
+}
+
+function createLogger(initialLevel: LogLevel): Logger {
+  let threshold = LOG_LEVELS[initialLevel];
+
+  const emit = (level: LogLevel, message: string, extra?: unknown): void => {
+    if (LOG_LEVELS[level] < threshold) {
+      return;
+    }
+
+    const line = `[${new Date().toISOString()}] [${level.toUpperCase()}] ${message}`;
+    process.stderr.write(extra === undefined ? `${line}\n` : `${line} ${safeJson(extra)}\n`);
+  };
+
+  return {
+    debug: (message, extra) => emit("debug", message, extra),
+    info: (message, extra) => emit("info", message, extra),
+    warn: (message, extra) => emit("warn", message, extra),
+    error: (message, extra) => emit("error", message, extra),
+    prompt: (lines) => {
+      const rule = "=".repeat(72);
+      process.stdout.write(`\n${rule}\n${lines.join("\n")}\n${rule}\n\n`);
+    },
+    setLevel: (level) => {
+      threshold = LOG_LEVELS[level];
+    },
+  };
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+// ═══════════════════════════ 配置 ═══════════════════════════
+
+/**
+ * sidecar 配置（设计 §6.3）。
+ *
+ * 文件：`douyin-sidecar/config.json`（可用环境变量 `ZIPPER_DOUYIN_CONFIG` 指到别处）。
+ * 环境变量优先级高于文件，方便容器 / 计划任务里注入 token 而不落文件。
+ */
+interface SidecarConfig {
+  serverUrl: string;
+  token: string | null;
+  dataDir: string;
+  maxTextLength: number;
+  heartbeatIntervalMs: number;
+  deadAfterMs: number;
+  logLevel: LogLevel;
+  configPath: string;
+}
+
+function parseLogLevel(value: unknown, fallback: LogLevel): LogLevel {
+  const text = str(value)?.toLowerCase();
+  if (text === "debug" || text === "info" || text === "warn" || text === "error") {
+    return text;
+  }
+
+  return fallback;
+}
+
+function positiveInt(value: unknown, fallback: number): number {
+  const numeric = num(value);
+  return numeric !== undefined && numeric > 0 ? Math.floor(numeric) : fallback;
+}
+
+async function loadConfig(log: Logger): Promise<SidecarConfig> {
+  const fromEnv = str(process.env.ZIPPER_DOUYIN_CONFIG);
+  const configPath = fromEnv ?? path.resolve(process.cwd(), "config.json");
+
+  let fileConfig: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(configPath, "utf8"));
+      fileConfig = asRecord(parsed) ?? {};
+      log.debug(`已读取配置文件：${configPath}`);
+    } catch (err) {
+      throw new Error(`配置文件解析失败（${configPath}）：${describeError(err)}`);
+    }
+  } else if (fromEnv) {
+    throw new Error(`ZIPPER_DOUYIN_CONFIG 指向的文件不存在：${configPath}`);
+  } else {
+    log.warn(`未找到 ${configPath}，改用默认值 + 环境变量（详见 README「配置」）`);
+  }
+
+  const fileToken = str(fileConfig.token);
+  const envToken = str(process.env.ZIPPER_DOUYIN_TOKEN);
+
+  return {
+    serverUrl:
+      str(process.env.ZIPPER_DOUYIN_SERVER_URL) ??
+      str(fileConfig.serverUrl) ??
+      str(fileConfig.server_url) ??
+      DEFAULT_SERVER_URL,
+    // 老规矩：token 只在内存里待着，绝不打印（设计 §6.2）
+    token: envToken ?? fileToken ?? null,
+    dataDir:
+      str(process.env.ZIPPER_DOUYIN_DATA_DIR) ??
+      str(fileConfig.dataDir) ??
+      str(fileConfig.data_dir) ??
+      DEFAULT_DATA_DIR,
+    maxTextLength: positiveInt(fileConfig.maxTextLength, DEFAULT_MAX_TEXT_LENGTH),
+    heartbeatIntervalMs: positiveInt(fileConfig.heartbeatIntervalMs, DEFAULT_HEARTBEAT_MS),
+    deadAfterMs: positiveInt(fileConfig.deadAfterMs, DEFAULT_DEAD_AFTER_MS),
+    logLevel: parseLogLevel(process.env.ZIPPER_DOUYIN_LOG_LEVEL ?? fileConfig.logLevel, "info"),
+    configPath,
+  };
+}
+
+// ═══════════════════════════ 帧与领域类型 ═══════════════════════════
+
+/** 帧外壳：`{type, time, data}`（设计 §3.1）。 */
+export interface Frame {
+  type: string;
+  time?: number;
+  data?: unknown;
+}
+
+export interface Mention {
+  uid: string;
+  name?: string;
+}
+
+/** `douyin-im` 事件归一化后的形状 —— 翻译层的输入，也是将来单测的输入。 */
+export interface NormalizedInbound {
+  chatType: "private" | "group" | "stranger";
+  threadId: string;
+  conversationShortId?: string;
+  messageId?: string;
+  senderUid: string;
+  senderNickname?: string;
+  senderDisplayName?: string;
+  text?: string;
+  /** 视频 / 表情 / 文件等第一版不解析的类型，降级成 `[视频]` 这类占位（设计 §4.1）。 */
+  placeholders: string[];
+  imageUrls: string[];
+  mentions: Mention[];
+  replyTo?: string;
+  occurredAtMs: number;
+  /** `false` = 平台没给时间戳，用了本地兜底（会记 warn 便于排查）。 */
+  timeFromPlatform: boolean;
+}
+
+export interface ContactItem {
+  userId: string;
+  nickname: string;
+  remark?: string;
+}
+
+export interface GroupItem {
+  groupId: string;
+  name: string;
+  memberCount?: number;
+}
+
+/** 出站计划：翻译层把一帧 `outbound` 拆成"发什么、发到哪"。 */
+export interface OutboundPlan {
+  chatType: "private" | "group";
+  threadId: string;
+  conversationShortId?: string;
+  /** 已按 `maxTextLength` 切好的文本块（设计 §4.2：超长自动分段）。 */
+  chunks: string[];
+  mentions: Mention[];
+  imageUrls: string[];
+  replyTo: string | null;
+}
+
+// ───────────────────── ① 翻译层（纯函数） ─────────────────────
+
+/** 会话 ID：`douyin:p<uid>` / `douyin:g<gid>`（与 QQ 的 `qq:p10001` 同构，设计 §3.3）。 */
+export function sessionIdFor(chatType: "private" | "group", threadId: string): string {
+  return `${PLATFORM}:${chatType === "group" ? "g" : "p"}${threadId}`;
+}
+
+export function parseSessionId(session: string): { chatType: "private" | "group"; threadId: string } {
+  const matched = /^douyin:([pg])(.+)$/.exec(session);
+  if (!matched) {
+    throw new Error(`无法识别的 session「${session}」—— 期望 douyin:p<uid> 或 douyin:g<gid>`);
+  }
+
+  return { chatType: matched[1] === "g" ? "group" : "private", threadId: matched[2] };
+}
+
+/**
+ * `douyin-im` 事件 → 归一化入站消息；不是消息事件时返回 `null`。
+ *
+ * ⚠️ 字段名来自设计 §1.3 + `douyin-im` README（**未真实账号验收**，设计 §10 #1）。
+ * 实际 fork 的字段若不同，只改这个函数即可 —— 其余层都不认平台字段。
+ */
+export function normalizeInbound(raw: unknown): NormalizedInbound | null {
+  const root = asRecord(raw);
+  if (!root) {
+    return null;
+  }
+
+  // 事件可能直接平铺，也可能包一层 {message} / {data} / {event}
+  const body = asRecord(root.message) ?? asRecord(root.data) ?? asRecord(root.event) ?? root;
+  const type = (str(root.type) ?? str(body.type) ?? "").toLowerCase();
+
+  let chatType: NormalizedInbound["chatType"] | null = null;
+  if (type.includes("private")) {
+    chatType = "private";
+  } else if (type.includes("group")) {
+    chatType = "group";
+  } else if (type.includes("stranger")) {
+    chatType = "stranger";
+  }
+
+  if (!chatType) {
+    // 登录状态 / 通知 / 心跳之类，不是消息
+    return null;
+  }
+
+  const threadId =
+    str(body.threadId) ??
+    str(body.thread_id) ??
+    str(body.conversationId) ??
+    str(body.groupId) ??
+    str(body.conversationShortId);
+  if (!threadId) {
+    return null;
+  }
+
+  const content = asRecord(body.content);
+  const contentKind = (str(content?.kind) ?? str(body.kind) ?? str(body.contentType) ?? "").toLowerCase();
+
+  const text = str(body.text) ?? str(content?.text);
+
+  const imageUrls: string[] = [];
+  const contentUrl = str(content?.url) ?? str(content?.uri) ?? str(content?.imageUrl);
+  if (contentUrl) {
+    imageUrls.push(contentUrl);
+  }
+
+  for (const item of asArray(body.imageUrls)) {
+    const url = str(item);
+    if (url) {
+      imageUrls.push(url);
+    }
+  }
+
+  // 第一版不解析的类型 → 占位文本，保证"有消息"这件事不丢（设计 §4.1）
+  const placeholders: string[] = [];
+  if (contentKind.length > 0 && !contentKind.includes("text") && !contentKind.includes("image")) {
+    if (contentKind.includes("video")) {
+      placeholders.push("[视频]");
+    } else if (contentKind.includes("emoji")) {
+      placeholders.push("[表情]");
+    } else if (contentKind.includes("file")) {
+      placeholders.push("[文件]");
+    } else {
+      placeholders.push(`[${contentKind}]`);
+    }
+  }
+
+  const mentions: Mention[] = [];
+  for (const item of asArray(body.mentions ?? body.mentionList)) {
+    const record = asRecord(item);
+    const uid = str(record?.uid) ?? str(record?.userId) ?? str(record?.id);
+    if (!uid) {
+      continue;
+    }
+
+    const name = str(record?.name) ?? str(record?.nickname) ?? str(record?.displayName);
+    mentions.push(name ? { uid, name } : { uid });
+  }
+
+  const reference = asRecord(body.referenceInfo) ?? asRecord(body.reference_info);
+  const replyTo =
+    str(reference?.serverMessageId) ??
+    str(reference?.server_message_id) ??
+    str(reference?.messageId) ??
+    str(body.replyTo);
+
+  const senderRecord = asRecord(body.sender);
+  const senderUid =
+    str(body.senderUid) ??
+    str(body.sender_uid) ??
+    str(body.uid) ??
+    str(senderRecord?.userId) ??
+    str(senderRecord?.uid) ??
+    "";
+
+  const senderNickname =
+    str(body.senderNickname) ??
+    str(body.sender_nickname) ??
+    str(senderRecord?.nickname) ??
+    str(senderRecord?.name);
+
+  const senderDisplayName = str(body.senderDisplayName) ?? str(senderRecord?.displayName);
+
+  const messageId =
+    str(body.serverMessageId) ??
+    str(body.server_message_id) ??
+    str(body.messageId) ??
+    str(body.msgId);
+
+  const platformTime = toEpochMs(
+    body.time ?? body.timestamp ?? body.createdAt ?? body.serverTime ?? body.occurredAt,
+  );
+
+  return {
+    chatType,
+    threadId,
+    conversationShortId: str(body.conversationShortId),
+    messageId,
+    senderUid,
+    senderNickname,
+    senderDisplayName,
+    text,
+    placeholders,
+    imageUrls,
+    mentions,
+    replyTo,
+    occurredAtMs: platformTime ?? Date.now(),
+    timeFromPlatform: platformTime !== undefined,
+  };
+}
+
+/**
+ * 归一化消息 → `inbound` 帧（设计 §3.3 / §4.1）。
+ *
+ * `stranger` 第一版**直接丢弃**（陌生人盒不响应）；返回 `null` 让调用方记 Debug。
+ */
+export function toInboundFrame(
+  event: NormalizedInbound,
+  warn?: (message: string) => void,
+): Frame | null {
+  if (event.chatType === "stranger") {
+    return null;
+  }
+
+  const segments: Record<string, unknown>[] = [];
+
+  if (event.text) {
+    segments.push({ type: "text", text: event.text });
+  }
+
+  for (const placeholder of event.placeholders) {
+    segments.push({ type: "text", text: placeholder });
+  }
+
+  for (const url of event.imageUrls) {
+    segments.push({ type: "image", url });
+  }
+
+  for (const mention of event.mentions) {
+    if (isNumericUid(mention.uid)) {
+      segments.push({ type: "mention", userId: mention.uid, ...(mention.name ? { name: mention.name } : {}) });
+    } else {
+      // 设计 §10 #7：群 @ 只接受数字 uid，非数字降级成纯文本
+      warn?.(`@ 的 uid 非数字（${mention.uid}），已降级为纯文本`);
+      segments.push({ type: "text", text: `@${mention.name ?? mention.uid}` });
+    }
+  }
+
+  if (segments.length === 0) {
+    segments.push({ type: "text", text: "[空消息]" });
+  }
+
+  return {
+    type: "inbound",
+    time: Date.now(),
+    data: {
+      session: sessionIdFor(event.chatType, event.threadId),
+      chatType: event.chatType,
+      messageId: event.messageId ?? null,
+      sender: {
+        userId: event.senderUid,
+        nickname: event.senderNickname ?? null,
+        displayName: event.senderDisplayName ?? null,
+      },
+      segments,
+      replyTo: event.replyTo ?? null,
+      // 内层 time = 平台时间（不取 UtcNow，设计 §4.1）；外层 time = 发出帧的时间
+      time: event.occurredAtMs,
+    },
+  };
+}
+
+/**
+ * 文本切块：单块 ≤ `maxLength`（与 douyin-im 的 16000 上限对齐，设计 §1.3）。
+ *
+ * 两个细节：不切断代理对（否则 emoji 变乱码）；尽量在换行 / 空格处断开，免得半句话。
+ */
+export function chunkText(text: string, maxLength: number): string[] {
+  if (maxLength <= 0) {
+    throw new Error(`maxTextLength 必须为正数，当前为 ${maxLength}`);
+  }
+
+  if (text.length === 0) {
+    return [];
+  }
+
+  if (text.length <= maxLength) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let rest = text;
+
+  while (rest.length > maxLength) {
+    let cut = maxLength;
+
+    // 高位代理项（0xD800–0xDBFF）落在切口上 → 往前退一位，别把 emoji 劈开
+    const lastCode = rest.charCodeAt(cut - 1);
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+      cut -= 1;
+    }
+
+    const window = rest.slice(0, cut);
+    const breakAt = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
+    if (breakAt > cut * 0.6) {
+      cut = breakAt + 1;
+    }
+
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+
+  if (rest.length > 0) {
+    chunks.push(rest);
+  }
+
+  return chunks;
+}
+
+/** `outbound` 帧 → 出站计划。缺 session / 段形状不对时抛错，理由会被 ack 回传。 */
+export function buildOutboundPlan(
+  frame: Frame,
+  options: { maxTextLength: number; warn?: (message: string) => void },
+): OutboundPlan {
+  const data = asRecord(frame.data) ?? {};
+  const session = str(data.session);
+  if (!session) {
+    throw new Error("outbound 帧缺少 session");
+  }
+
+  const { chatType, threadId } = parseSessionId(session);
+
+  const texts: string[] = [];
+  const mentions: Mention[] = [];
+  const imageUrls: string[] = [];
+  let replyTo = str(data.replyTo) ?? null;
+
+  const segments = asArray(data.segments);
+  if (segments.length === 0) {
+    // 容忍简写形状 {session, text}
+    const plainText = str(data.text);
+    if (plainText) {
+      texts.push(plainText);
+    }
+  }
+
+  for (const item of segments) {
+    const segment = asRecord(item);
+    const type = (str(segment?.type) ?? "").toLowerCase();
+
+    if (type === "text") {
+      const value = str(segment?.text);
+      if (value) {
+        texts.push(value);
+      }
+    } else if (type === "mention") {
+      const uid = str(segment?.userId) ?? str(segment?.uid);
+      if (uid && isNumericUid(uid)) {
+        const name = str(segment?.name);
+        mentions.push(name ? { uid, name } : { uid });
+      } else {
+        options.warn?.(`出站 @ 的 uid 非法（${uid ?? "空"}），已忽略该段`);
+      }
+    } else if (type === "image") {
+      const url = str(segment?.url);
+      if (url) {
+        imageUrls.push(url);
+      }
+    } else if (type === "reply") {
+      replyTo = str(segment?.referencedMessageId) ?? str(segment?.messageId) ?? replyTo;
+    } else {
+      options.warn?.(`未知出站段类型「${type}」，已忽略`);
+    }
+  }
+
+  return {
+    chatType,
+    threadId,
+    conversationShortId: str(data.conversationShortId),
+    chunks: chunkText(texts.join(""), options.maxTextLength),
+    mentions,
+    imageUrls,
+    replyTo,
+  };
+}
+
+/** 好友列表 → `query.contacts` 结果项（字段名容错：uid / userId / id 都认）。 */
+export function mapContacts(raw: unknown): ContactItem[] {
+  const list = Array.isArray(raw) ? raw : asArray(asRecord(raw)?.contacts ?? asRecord(raw)?.friends ?? asRecord(raw)?.list);
+  const contacts: ContactItem[] = [];
+
+  for (const item of list) {
+    const record = asRecord(item);
+    const userId = str(record?.userId) ?? str(record?.uid) ?? str(record?.id);
+    if (!userId) {
+      continue;
+    }
+
+    const remark = str(record?.remark) ?? str(record?.alias);
+    const nickname =
+      str(record?.nickname) ?? str(record?.name) ?? str(record?.displayName) ?? remark ?? userId;
+    contacts.push(remark ? { userId, nickname, remark } : { userId, nickname });
+  }
+
+  return contacts;
+}
+
+/** 群列表 → `query.groups` 结果项。 */
+export function mapGroups(raw: unknown): GroupItem[] {
+  const list = Array.isArray(raw) ? raw : asArray(asRecord(raw)?.groups ?? asRecord(raw)?.list);
+  const groups: GroupItem[] = [];
+
+  for (const item of list) {
+    const record = asRecord(item);
+    const groupId = str(record?.groupId) ?? str(record?.id) ?? str(record?.conversationId);
+    if (!groupId) {
+      continue;
+    }
+
+    const name = str(record?.name) ?? str(record?.groupName) ?? groupId;
+    const memberCount = num(record?.memberCount) ?? num(record?.member_count);
+    groups.push(memberCount === undefined ? { groupId, name } : { groupId, name, memberCount });
+  }
+
+  return groups;
+}
+
+function firstFunction(target: Record<string, unknown>, names: readonly string[]): AnyFn | null {
+  for (const name of names) {
+    const candidate = target[name];
+    if (typeof candidate === "function") {
+      return candidate as AnyFn;
+    }
+  }
+
+  return null;
+}
+
+// ═══════════════════════ ② douyin-im 适配层 ═══════════════════════
+
+/** douyin-im 客户端：先用结构化"可选成员"描述，缺什么方法就降级报错，而不是崩。 */
+type DouyinClient = Record<string, unknown>;
+
+interface DouyinAdapterOptions {
+  dataDir: string;
+  log: Logger;
+  /** 归一化后的消息（翻译层的输入）。 */
+  onInbound: (event: NormalizedInbound) => void;
+  /** 需要人机交互时的提示（验证 URL）。 */
+  onLoginPrompt: (url: string, hint: string) => void;
+}
+
+/**
+ * douyin-im 适配层：**唯一**碰 douyin-im 的地方。
+ *
+ * ⚠️ douyin-im 的导出名 / 方法名大量「未真实账号验收」（设计 §10 #1），
+ * 所以这里一律「探测 + 降级」：找到就用，找不到就抛一句人话，
+ * 不假装成功 —— 发送失败必须回填原因给模型（设计 §10 #6）。
+ */
+export class DouyinImAdapter {
+  private readonly dataDir: string;
+  private readonly log: Logger;
+  private readonly onInbound: (event: NormalizedInbound) => void;
+  private readonly onLoginPrompt: (url: string, hint: string) => void;
+
+  private client: DouyinClient | null = null;
+  private selfId = "";
+  private readonly seenMessageIds = new Set<string>();
+  /** threadId → conversationShortId：出站时 douyin-im 需要它，入站事件里顺手记下。 */
+  private readonly conversationCache = new Map<string, string>();
+
+  constructor(options: DouyinAdapterOptions) {
+    this.dataDir = options.dataDir;
+    this.log = options.log;
+    this.onInbound = options.onInbound;
+    this.onLoginPrompt = options.onLoginPrompt;
+  }
+
+  getSelfId(): string {
+    return this.selfId;
+  }
+
+  /** `hello` 帧（设计 §3.3）：登录完成后调用，`selfId` 可能为空。 */
+  buildHelloFrame(): Frame {
+    return {
+      type: "hello",
+      time: Date.now(),
+      data: {
+        version: PROTOCOL_VERSION,
+        platform: PLATFORM,
+        selfId: this.selfId,
+        capabilities: [...CAPABILITIES],
+      },
+    };
+  }
+
+  /**
+   * 启动 douyin-im 客户端并登录。
+   *
+   * **登录需要人机交互**（扫码 / 短信 / 滑块，设计 §10 #2）：这里可能阻塞到有人操作完成，
+   * 期间把验证 URL 打到 stdout（`onLoginPrompt`）。
+   */
+  async start(): Promise<void> {
+    const module = await importDouyinIm();
+    this.client = createClientFromModule(module, this.dataDir, this.log);
+
+    // 先挂事件再 start：登录过程中的验证事件不会漏掉
+    this.bindEvents(this.client);
+    this.selfId = await this.resolveSelfId(this.client);
+
+    const starter = firstFunction(this.client, ["start", "login", "connect", "init"]);
+    if (!starter) {
+      this.log.warn("douyin-im 客户端没有 start()/login()，跳过自动登录（请按实际 API 调整 firstFunction 的候选名）");
+      return;
+    }
+
+    this.log.info("正在启动 douyin-im（首次需要人机交互登录，见下方提示）");
+    await Promise.resolve(starter.call(this.client, { dataDir: this.dataDir, storageDir: this.dataDir }));
+
+    if (!this.selfId) {
+      this.selfId = await this.resolveSelfId(this.client);
+    }
+
+    this.log.info(`douyin-im 已就绪（selfId=${this.selfId || "未知"}）`);
+  }
+
+  async stop(): Promise<void> {
+    const client = this.client;
+    if (!client) {
+      return;
+    }
+
+    const stopper = firstFunction(client, ["stop", "close", "logout"]);
+    if (!stopper) {
+      return;
+    }
+
+    try {
+      await Promise.resolve(stopper.call(client));
+      this.log.debug("douyin-im 客户端已停止");
+    } catch (err) {
+      this.log.warn(`停止 douyin-im 客户端失败：${describeError(err)}`);
+    }
+  }
+
+  /** 按出站计划真实发送；失败抛错，由上层回 `ack.ok=false`。 */
+  async send(plan: OutboundPlan): Promise<void> {
+    const client = this.requireClient();
+
+    if (plan.chunks.length === 0 && plan.imageUrls.length === 0) {
+      throw new Error("出站内容为空（没有文本也没有图片）");
+    }
+
+    const conversationShortId = plan.conversationShortId ?? this.conversationCache.get(plan.threadId);
+    const mentions = plan.mentions.map((mention) =>
+      mention.name ? { uid: mention.uid, name: mention.name } : { uid: mention.uid },
+    );
+
+    // 纯文本 + 无引用：走设计 §1.3 里的 sendText 正路
+    const plain = plan.imageUrls.length === 0 && plan.replyTo === null;
+    const sendText = firstFunction(client, ["sendText"]);
+    if (plain && sendText) {
+      for (const chunk of plan.chunks) {
+        await Promise.resolve(
+          sendText.call(client, {
+            threadId: plan.threadId,
+            conversationShortId,
+            text: chunk,
+            mentions,
+          }),
+        );
+      }
+
+      return;
+    }
+
+    // 图片 / 引用：需要 sendMessage + segments（design §4.2）
+    const sendMessage = firstFunction(client, ["sendMessage"]);
+    if (!sendMessage) {
+      throw new Error("douyin-im 客户端没有 sendMessage()，无法发送图片 / 引用消息（未验收 API，见设计 §10 #1）");
+    }
+
+    const segments: Record<string, unknown>[] = plan.chunks.map((chunk) => ({ type: "text", text: chunk }));
+    for (const url of plan.imageUrls) {
+      segments.push(await this.uploadImage(client, url));
+    }
+
+    if (plan.replyTo) {
+      segments.push({ type: "reply", referencedMessageId: plan.replyTo });
+    }
+
+    await Promise.resolve(
+      sendMessage.call(client, {
+        threadId: plan.threadId,
+        conversationShortId,
+        segments,
+        mentions,
+        replyTo: plan.replyTo ?? undefined,
+      }),
+    );
+  }
+
+  /** `query.contacts` → `account.getFriendList()`（设计 §3.5）。 */
+  async getContacts(): Promise<ContactItem[]> {
+    const client = this.requireClient();
+    const getter = firstFunction(client, ["getFriendList", "getContacts", "getFriends"]);
+    if (!getter) {
+      throw new Error("douyin-im 客户端没有 getFriendList()（未验收 API，见设计 §10 #1）");
+    }
+
+    return mapContacts(await Promise.resolve(getter.call(client)));
+  }
+
+  /** `query.groups` → `account.getGroupList()`（设计 §3.5）。 */
+  async getGroups(): Promise<GroupItem[]> {
+    const client = this.requireClient();
+    const getter = firstFunction(client, ["getGroupList", "getGroups", "getConversationList"]);
+    if (!getter) {
+      throw new Error("douyin-im 客户端没有 getGroupList()（未验收 API，见设计 §10 #1）");
+    }
+
+    return mapGroups(await Promise.resolve(getter.call(client)));
+  }
+
+  private requireClient(): DouyinClient {
+    if (!this.client) {
+      throw new Error("douyin-im 尚未启动");
+    }
+
+    return this.client;
+  }
+
+  private async resolveSelfId(client: DouyinClient): Promise<string> {
+    const direct = str(client.selfId) ?? str(client.uid) ?? str(client.userId);
+    if (direct) {
+      return direct;
+    }
+
+    const numericDirect = num(client.selfId) ?? num(client.uid);
+    if (numericDirect !== undefined) {
+      return String(numericDirect);
+    }
+
+    const getter = firstFunction(client, ["getSelfInfo", "getCurrentUser", "getAccountInfo"]);
+    if (!getter) {
+      return "";
+    }
+
+    try {
+      const info = asRecord(await Promise.resolve(getter.call(client)));
+      return str(info?.uid) ?? str(info?.userId) ?? str(info?.id) ?? "";
+    } catch (err) {
+      this.log.warn(`读取 selfId 失败：${describeError(err)}`);
+      return "";
+    }
+  }
+
+  /**
+   * 订阅 douyin-im 的事件。
+   *
+   * 候选事件名一次订全（各 fork 命名不一），靠 `normalizeInbound` 判类型，
+   * 再用 `seenMessageIds` 去掉"多个事件名收到同一条"的重复。
+   */
+  private bindEvents(client: DouyinClient): void {
+    const on = firstFunction(client, ["on", "addListener", "subscribe"]);
+    if (on) {
+      for (const eventName of ["message", "messages", "message.private", "message.group", "message.stranger", "event"]) {
+        try {
+          (on as AnyFn).call(client, eventName, (payload: unknown) => this.handleRawEvent(eventName, payload));
+        } catch (err) {
+          this.log.debug(`订阅事件「${eventName}」失败（忽略）：${describeError(err)}`);
+        }
+      }
+    }
+
+    const onEvent = firstFunction(client, ["onEvent"]);
+    if (onEvent) {
+      (onEvent as AnyFn).call(client, (payload: unknown) => this.handleRawEvent("onEvent", payload));
+    }
+
+    if (!on && !onEvent) {
+      this.log.warn("douyin-im 客户端没有 on()/onEvent()，收不到任何消息（需按实际 fork 适配 bindEvents）");
+    }
+  }
+
+  /** 事件入口：**任何异常都不许逃回 douyin-im**（逃回去会把它的接收循环带崩）。 */
+  private handleRawEvent(source: string, payload: unknown): void {
+    try {
+      const prompt = extractLoginPrompt(payload);
+      if (prompt) {
+        this.onLoginPrompt(prompt.url, prompt.hint);
+        return;
+      }
+
+      const event = normalizeInbound(payload);
+      if (!event) {
+        this.log.debug(`忽略非消息事件（来源 ${source}）`);
+        return;
+      }
+
+      if (event.messageId) {
+        if (this.seenMessageIds.has(event.messageId)) {
+          this.log.debug(`重复事件已丢弃：messageId=${event.messageId}（来源 ${source}）`);
+          return;
+        }
+
+        this.rememberMessageId(event.messageId);
+      }
+
+      if (event.conversationShortId) {
+        this.conversationCache.set(event.threadId, event.conversationShortId);
+      }
+
+      if (!event.timeFromPlatform) {
+        this.log.warn(`平台未给时间戳，已用本地时间兜底：threadId=${event.threadId}`);
+      }
+
+      this.onInbound(event);
+    } catch (err) {
+      this.log.error(`处理 douyin-im 事件失败（来源 ${source}）：${describeError(err)}`);
+    }
+  }
+
+  private rememberMessageId(messageId: string): void {
+    this.seenMessageIds.add(messageId);
+    if (this.seenMessageIds.size <= SEEN_MESSAGE_CAP) {
+      return;
+    }
+
+    // Set 按插入序迭代：丢最早的那批即可
+    const overflow = this.seenMessageIds.size - SEEN_MESSAGE_CAP;
+    let removed = 0;
+    for (const oldest of this.seenMessageIds) {
+      if (removed >= overflow) {
+        break;
+      }
+
+      this.seenMessageIds.delete(oldest);
+      removed += 1;
+    }
+  }
+
+  /** 图片：sidecar 自己下载再上传（Server 只传 URL，设计 §4.2）。 */
+  private async uploadImage(client: DouyinClient, url: string): Promise<Record<string, unknown>> {
+    const upload = firstFunction(client, ["uploadImage", "uploadMedia", "upload"]);
+    if (!upload) {
+      throw new Error("douyin-im 客户端没有 uploadImage()，无法发送图片（未验收 API，见设计 §10 #1）");
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`下载图片失败：HTTP ${response.status}（${url}）`);
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const uploaded = asRecord(
+      await Promise.resolve(upload.call(client, { buffer, data: buffer, url, filename: path.basename(new URL(url).pathname) })),
+    );
+
+    const uri = str(uploaded?.uri) ?? str(uploaded?.url) ?? str(uploaded?.id);
+    return uri ? { type: "image", uri } : { type: "image" };
+  }
+}
+
+/** 从任意事件里捞登录验证信息 —— 远程宿主靠它代理人机交互（设计 §10 #2）。 */
+function extractLoginPrompt(payload: unknown): { url: string; hint: string } | null {
+  const root = asRecord(payload);
+  if (!root) {
+    return null;
+  }
+
+  const body = asRecord(root.data) ?? asRecord(root.payload) ?? root;
+  const candidates: unknown[] = [
+    body.verifyUrl,
+    body.verify_url,
+    body.url,
+    body.loginUrl,
+    body.qrcodeUrl,
+    body.qrCodeUrl,
+    body.qr_url,
+    root.verifyUrl,
+    root.url,
+  ];
+
+  for (const candidate of candidates) {
+    const url = str(candidate);
+    if (url && /^https?:\/\//i.test(url)) {
+      const text = str(body.message) ?? str(body.tip) ?? str(root.type) ?? "需要人机交互";
+      return { url, hint: text };
+    }
+  }
+
+  return null;
+}
+
+/** 动态 import：用变量做说明符，tsc 就不会在编译期解析这个包（装不装依赖都能过类型检查）。 */
+async function importDouyinIm(): Promise<Record<string, unknown>> {
+  const specifier = "douyin-im";
+  const loaded: unknown = await import(specifier);
+  const module = asRecord(loaded);
+  if (!module) {
+    throw new Error("douyin-im 模块加载结果不是对象，无法使用");
+  }
+
+  return module;
+}
+
+/**
+ * 按"工厂函数 / 构造函数 / 单字符串参数"三种常见写法轮试。
+ *
+ * 之所以这么啰嗦：`douyin-im` 的导出形状未验收，猜错一次就整个 sidecar 起不来。
+ */
+function createClientFromModule(module: Record<string, unknown>, dataDir: string, log: Logger): DouyinClient {
+  const candidates: unknown[] = [
+    module.createClient,
+    module.createDouyinClient,
+    module.DouyinClient,
+    module.DouyinImClient,
+    module.default,
+  ];
+
+  const factory = candidates.find((candidate): candidate is AnyFn => typeof candidate === "function");
+  if (!factory) {
+    throw new Error("douyin-im 没有导出客户端工厂（期望 createClient / DouyinClient / default 之一）—— 请按实际 fork 调整");
+  }
+
+  const options = { dataDir, storageDir: dataDir, profileDir: path.join(dataDir, "profile") };
+  const attempts: Array<() => unknown> = [
+    () => factory.call(module, options),
+    () => new (factory as unknown as new (opts?: unknown) => unknown)(options),
+    () => factory.call(module, dataDir),
+  ];
+
+  let lastError: unknown = null;
+  for (const attempt of attempts) {
+    try {
+      const client = asRecord(attempt());
+      if (client) {
+        log.debug("douyin-im 客户端已创建");
+        return client;
+      }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw new Error(`创建 douyin-im 客户端失败：${describeError(lastError)}`);
+}
+
+// ═══════════════════════ ③ /ws/channel 连接层 ═══════════════════════
+
+/** Node 内置 `WebSocket` 的最小结构类型（不引 DOM lib，也不引 `ws` 依赖）。 */
+interface SocketLike {
+  readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  addEventListener(type: string, handler: (event: unknown) => void): void;
+}
+
+interface SocketConstructor {
+  new (url: string): SocketLike;
+}
+
+function resolveSocketConstructor(): SocketConstructor {
+  const ctor = (globalThis as { WebSocket?: SocketConstructor }).WebSocket;
+  if (!ctor) {
+    throw new Error("当前 Node 没有全局 WebSocket（需要 Node 21+；本项目要求 Node 22.5+）");
+  }
+
+  return ctor;
+}
+
+interface ChannelLinkOptions {
+  url: string;
+  token: string | null;
+  /** 连上后立刻发 hello（设计 §3.2）。 */
+  buildHello: () => Frame;
+  onFrame: (frame: Frame) => void;
+  heartbeatIntervalMs: number;
+  deadAfterMs: number;
+  log: Logger;
+}
+
+/**
+ * 到 Server `/ws/channel` 的连接：连接、退避重连、心跳、死连接检测。
+ *
+ * 设计 §2.2：sidecar 主动连入，断了自动重连 —— 所以这里是"永远重试"的循环，
+ * 只有 `stop()` 才结束。
+ */
+export class ChannelLink {
+  private readonly options: ChannelLinkOptions;
+  private socket: SocketLike | null = null;
+  private stopped = false;
+  private attempt = 0;
+  private lastInboundAt = 0;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(options: ChannelLinkOptions) {
+    this.options = options;
+  }
+
+  /** 连接循环：直到 `stop()` 被调用。 */
+  async start(): Promise<void> {
+    while (!this.stopped) {
+      if (this.attempt > 0) {
+        const delay = this.backoffMs(this.attempt);
+        this.options.log.info(`${delay}ms 后重连（第 ${this.attempt} 次）`);
+        await sleep(delay);
+        if (this.stopped) {
+          return;
+        }
+      }
+
+      try {
+        await this.connectOnce();
+        // 连接建立过又断开（Server 重启 / 主动踢）：退到 1s 再试。
+        // 不退的话 attempt 已被 open 里的重置归零，会变成"断开→立刻连→再断开"的热循环。
+        this.attempt = Math.max(this.attempt, 1);
+      } catch (err) {
+        this.attempt += 1;
+        this.options.log.warn(`连接 /ws/channel 失败（第 ${this.attempt} 次）：${describeError(err)}`);
+      }
+    }
+  }
+
+  /** 发一帧；未连接直接抛错 —— 上层据此回 `ack.ok=false`（设计 §10 #6）。 */
+  send(frame: Frame): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== SOCKET_OPEN) {
+      throw new Error("与 Server 的连接未就绪（sidecar 正在重连）");
+    }
+
+    socket.send(JSON.stringify(frame));
+  }
+
+  stop(): void {
+    this.stopped = true;
+    this.stopHeartbeat();
+    const socket = this.socket;
+    this.socket = null;
+    if (socket) {
+      try {
+        socket.close(1000, "sidecar shutdown");
+      } catch {
+        // 关闭失败无所谓：进程都要退出了
+      }
+    }
+  }
+
+  /** 1s → 2s → 4s … 封顶 60s，带 ±20% 抖动（避免多个 sidecar 同时撞 Server）。 */
+  private backoffMs(attempt: number): number {
+    const base = Math.min(RECONNECT_MAX_MS, RECONNECT_INITIAL_MS * 2 ** (attempt - 1));
+    const jitter = 0.8 + Math.random() * 0.4;
+    return Math.round(Math.min(RECONNECT_MAX_MS, base * jitter));
+  }
+
+  private buildUrl(): string {
+    const { url, token } = this.options;
+    if (!token) {
+      return url;
+    }
+
+    const separator = url.includes("?") ? "&" : "?";
+    return `${url}${separator}token=${encodeURIComponent(token)}`;
+  }
+
+  private connectOnce(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const Constructor = resolveSocketConstructor();
+      const url = this.buildUrl();
+      let settled = false;
+
+      this.options.log.info(`正在连接 ${redactToken(url)}`);
+
+      let socket: SocketLike;
+      try {
+        socket = new Constructor(url);
+      } catch (err) {
+        reject(new Error(`创建 WebSocket 失败：${describeError(err)}`));
+        return;
+      }
+
+      this.socket = socket;
+
+      const finish = (error?: unknown): void => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        this.stopHeartbeat();
+        if (this.socket === socket) {
+          this.socket = null;
+        }
+
+        if (error === undefined) {
+          resolve();
+        } else {
+          reject(error);
+        }
+      };
+
+      socket.addEventListener("open", () => {
+        this.attempt = 0;
+        this.lastInboundAt = Date.now();
+        this.startHeartbeat(socket);
+        try {
+          socket.send(JSON.stringify(this.options.buildHello()));
+          this.options.log.info("已连上 Server，hello 已发送");
+        } catch (err) {
+          this.options.log.error(`发送 hello 失败：${describeError(err)}`);
+          try {
+            socket.close();
+          } catch {
+            // 关闭失败也无所谓，下面 finish 已经会推进重连
+          }
+
+          finish(err);
+        }
+      });
+
+      socket.addEventListener("message", (event) => {
+        this.lastInboundAt = Date.now();
+        const raw = (event as { data?: unknown }).data;
+        if (typeof raw !== "string") {
+          this.options.log.warn("收到非文本帧（已忽略）");
+          return;
+        }
+
+        const frame = parseFrame(raw);
+        if (!frame) {
+          this.options.log.warn(`收到无法解析的帧（已忽略）：${truncate(raw, 200)}`);
+          return;
+        }
+
+        // 分发逻辑里抛异常不能把接收循环带崩
+        try {
+          this.options.onFrame(frame);
+        } catch (err) {
+          this.options.log.error(`处理 Server 帧失败（type=${frame.type}）：${describeError(err)}`);
+        }
+      });
+
+      socket.addEventListener("error", (event) => {
+        this.options.log.warn(`WebSocket 出错：${describeSocketError(event)}`);
+      });
+
+      socket.addEventListener("close", (event) => {
+        const code = (event as { code?: unknown }).code;
+        const reason = (event as { reason?: unknown }).reason;
+        this.options.log.warn(`与 Server 的连接已断开（code=${String(code ?? "?")}，reason=${String(reason ?? "") || "-"}）`);
+        finish();
+      });
+    });
+  }
+
+  private startHeartbeat(socket: SocketLike): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (this.stopped || this.socket !== socket) {
+        return;
+      }
+
+      // 半死连接（拔网线、NAT 超时）不会触发 close：靠"多久没收到任何帧"判定
+      if (Date.now() - this.lastInboundAt > this.options.deadAfterMs) {
+        this.options.log.warn(`${this.options.deadAfterMs}ms 内没收到任何帧，判定连接已死，主动断开重连`);
+        this.closeSocket(socket);
+        return;
+      }
+
+      try {
+        socket.send(JSON.stringify({ type: "ping", time: Date.now() } satisfies Frame));
+      } catch (err) {
+        this.options.log.warn(`心跳发送失败：${describeError(err)}`);
+        this.closeSocket(socket);
+      }
+    }, this.options.heartbeatIntervalMs);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private closeSocket(socket: SocketLike): void {
+    try {
+      socket.close(4000, "heartbeat timeout");
+    } catch (err) {
+      this.options.log.debug(`关闭连接时出错（忽略）：${describeError(err)}`);
+    }
+  }
+}
+
+function describeSocketError(event: unknown): string {
+  const record = asRecord(event);
+  return str(record?.message) ?? str(record?.type) ?? "未知错误";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/** 解析一帧文本；结构不对返回 `null`（畸形 JSON 不许掀翻接收循环，设计 §9）。 */
+export function parseFrame(text: string): Frame | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  const record = asRecord(parsed);
+  const type = str(record?.type);
+  if (!record || !type) {
+    return null;
+  }
+
+  const time = num(record.time);
+  return time === undefined ? { type, data: record.data } : { type, time, data: record.data };
+}
+
+// ═══════════════════════ ④ 帧分发（编排层） ═══════════════════════
+
+function readRequestId(frame: Frame): string | undefined {
+  return str(asRecord(frame.data)?.requestId);
+}
+
+function handleServerFrame(
+  frame: Frame,
+  context: { adapter: DouyinImAdapter; link: () => ChannelLink | null; log: Logger; maxTextLength: number },
+): void {
+  const { link, log } = context;
+
+  switch (frame.type) {
+    case "ping":
+      // Server → sidecar ping / sidecar → Server pong（设计 §3.2）
+      try {
+        link()?.send({ type: "pong", time: Date.now() });
+      } catch (err) {
+        log.debug(`回 pong 失败（连接可能已断）：${describeError(err)}`);
+      }
+      return;
+
+    case "pong":
+    case "hello":
+      // hello 由 Server 回发时也接受（不同实现可能两边都发），不需要动作
+      return;
+
+    case "outbound":
+      void handleOutbound(frame, context);
+      return;
+
+    case "query.contacts":
+      void handleQuery(frame, context, "contacts");
+      return;
+
+    case "query.groups":
+      void handleQuery(frame, context, "groups");
+      return;
+
+    default:
+      log.warn(`未知帧类型「${frame.type}」（已忽略）`);
+  }
+}
+
+async function handleOutbound(
+  frame: Frame,
+  context: { adapter: DouyinImAdapter; link: () => ChannelLink | null; log: Logger; maxTextLength: number },
+): Promise<void> {
+  const { adapter, link, log, maxTextLength } = context;
+  const requestId = readRequestId(frame);
+  if (!requestId) {
+    // 没有 requestId 就没法配对 ack；还是尽量把消息发出去，只是不回执
+    log.warn("outbound 帧缺少 requestId：仍会尝试发送，但无法回 ack 配对");
+  }
+
+  const warnings: string[] = [];
+  try {
+    const plan = buildOutboundPlan(frame, {
+      maxTextLength,
+      warn: (message) => warnings.push(message),
+    });
+
+    for (const message of warnings) {
+      log.warn(`出站翻译告警：${message}`);
+    }
+
+    await adapter.send(plan);
+    log.info(`出站成功：session=${sessionIdFor(plan.chatType, plan.threadId)} 分段=${plan.chunks.length} requestId=${requestId ?? "(无)"}`);
+
+    if (requestId) {
+      link()?.send({ type: "ack", time: Date.now(), data: { requestId, ok: true, error: null } });
+    }
+  } catch (err) {
+    const reason = describeError(err);
+    log.warn(`出站失败：requestId=${requestId ?? "(无)"} 原因=${reason}`);
+
+    if (!requestId) {
+      return;
+    }
+
+    try {
+      link()?.send({ type: "ack", time: Date.now(), data: { requestId, ok: false, error: reason } });
+    } catch (sendErr) {
+      // 连 ack 都发不出去：说明连接断了，等重连后 Server 自己超时（设计 §3.4 会清理 pending）
+      log.error(`回 ack 失败：${describeError(sendErr)}`);
+    }
+  }
+}
+
+async function handleQuery(
+  frame: Frame,
+  context: { adapter: DouyinImAdapter; link: () => ChannelLink | null; log: Logger },
+  kind: "contacts" | "groups",
+): Promise<void> {
+  const { adapter, link, log } = context;
+  const requestId = readRequestId(frame);
+  if (!requestId) {
+    log.warn(`${kind} 查询缺少 requestId，结果无法配对（已忽略）`);
+    return;
+  }
+
+  try {
+    if (kind === "contacts") {
+      const contacts = await adapter.getContacts();
+      log.info(`query.contacts 返回 ${contacts.length} 个好友`);
+      link()?.send({
+        type: "result",
+        time: Date.now(),
+        data: { requestId, ok: true, error: null, contacts },
+      });
+      return;
+    }
+
+    const groups = await adapter.getGroups();
+    log.info(`query.groups 返回 ${groups.length} 个群`);
+    link()?.send({
+      type: "result",
+      time: Date.now(),
+      data: { requestId, ok: true, error: null, groups },
+    });
+  } catch (err) {
+    const reason = describeError(err);
+    log.warn(`query.${kind} 失败：${reason}`);
+
+    // 设计 §3.5：取不到候选**不阻塞**，返回空列表 + 错误原因
+    try {
+      link()?.send({
+        type: "result",
+        time: Date.now(),
+        data:
+          kind === "contacts"
+            ? { requestId, ok: false, error: reason, contacts: [] }
+            : { requestId, ok: false, error: reason, groups: [] },
+      });
+    } catch (sendErr) {
+      log.error(`回 result 失败：${describeError(sendErr)}`);
+    }
+  }
+}
+
+// ═══════════════════════ 入口 ═══════════════════════
+
+async function main(): Promise<void> {
+  const bootstrapLogger = createLogger("info");
+  const config = await loadConfig(bootstrapLogger);
+  const log = bootstrapLogger;
+  log.setLevel(config.logLevel);
+
+  log.info(
+    `抖音 sidecar 启动：server=${redactToken(config.serverUrl)} dataDir=${config.dataDir} ` +
+      `token=${config.token ? "已配置（不外显）" : "未配置（loopback 免验）"} node=${process.version}`,
+  );
+
+  // 连接层要等登录完成后才建（先登录再连 Server），入站回调通过这个引用拿到它
+  let linkRef: ChannelLink | null = null;
+
+  const adapter = new DouyinImAdapter({
+    dataDir: config.dataDir,
+    log,
+    onInbound: (event) => {
+      // 入站：归一化事件 → 设计 §3.3 的 inbound 帧（stranger 在翻译层就被丢掉）
+      const frame = toInboundFrame(event, (message) => log.warn(`入站翻译告警：${message}`));
+      if (!frame) {
+        log.debug(`陌生人消息已丢弃（设计 §4.1）：threadId=${event.threadId}`);
+        return;
+      }
+
+      try {
+        linkRef?.send(frame);
+        log.info(
+          `入站已转发：session=${sessionIdFor(event.chatType, event.threadId)} ` +
+            `messageId=${event.messageId ?? "(无)"}`,
+        );
+      } catch (err) {
+        // 断线期间收到的消息发不出去：douyin-im 重连后会补拉，Server 侧还有 messageId 去重兜底
+        log.warn(`入站消息未能转发（连接未就绪）：${describeError(err)}`);
+      }
+    },
+    onLoginPrompt: (url, hint) => {
+      // 登录要人机交互：URL 打到 stdout，远程宿主抓 stdout 后在自己浏览器里打开
+      log.prompt([
+        "【需要人工登录】抖音登录要人机交互（扫码 / 短信 / 滑块），sidecar 不能自己完成。",
+        `原因 / 提示：${hint}`,
+        `验证地址：${url}`,
+        "",
+        "远程部署时：把上面这个地址复制到本机浏览器打开，登录完成后 sidecar 会自动继续。",
+        "登录态保存在 data/ 目录 —— 该目录必须备份，且绝不入库。",
+      ]);
+    },
+  });
+
+  // ① 先起 douyin-im（可能阻塞到有人完成登录）
+  await adapter.start();
+
+  // ② 再连 Server；Server 没起来也不致命，会一直退避重连
+  const context = {
+    adapter,
+    log,
+    maxTextLength: config.maxTextLength,
+    link: (): ChannelLink | null => linkRef,
+  };
+
+  const link = new ChannelLink({
+    url: config.serverUrl,
+    token: config.token,
+    buildHello: () => adapter.buildHelloFrame(),
+    heartbeatIntervalMs: config.heartbeatIntervalMs,
+    deadAfterMs: config.deadAfterMs,
+    log,
+    onFrame: (frame) => handleServerFrame(frame, context),
+  });
+  // 入站回调通过 linkRef 拿到连接层（`context.link` 也读它）
+  linkRef = link;
+
+  const shutdown = (signal: string): void => {
+    log.info(`收到 ${signal}，正在退出`);
+    link.stop();
+  };
+
+  process.once("SIGINT", () => {
+    shutdown("SIGINT");
+  });
+  process.once("SIGTERM", () => {
+    shutdown("SIGTERM");
+  });
+  process.on("unhandledRejection", (reason) => {
+    log.error(`未处理的 Promise 拒绝：${describeError(reason)}`);
+  });
+
+  try {
+    await link.start();
+  } finally {
+    await adapter.stop();
+  }
+
+  log.info("抖音 sidecar 已退出");
+}
+
+main().catch((err: unknown) => {
+  process.stderr.write(`[FATAL] 抖音 sidecar 启动失败：${describeError(err)}\n`);
+  process.exitCode = 1;
+});
