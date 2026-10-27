@@ -542,6 +542,8 @@ public sealed class ChatAgent : IChatAgent
     /// <remarks>
     /// 不可用的工具**连 schema 都不给模型** —— 比「看得见但调不动」更省 token，也少试探。
     /// 但可见性**不是**唯一防线：每个文件工具执行前还会再过一次门禁。
+    /// 过滤口径三层：**平台归属 → 策略开关 → 角色**。平台放最前，是因为它由会话本身决定，
+    /// 不该靠人工去策略页里关（一台机器同时接两个平台时那种关法必然关错）。
     /// </remarks>
     private List<AITool> BuildTools(AgentRunRequest request, AIFunction sendMessage)
     {
@@ -591,6 +593,15 @@ public sealed class ChatAgent : IChatAgent
         var allowed = new List<AITool>(tools.Count);
         foreach (var tool in tools)
         {
+            // 平台专用工具（戳一戳 / 改签名 / NapCat API 查询）只在自己的平台上给模型看。
+            // 为什么必须在**可见性**这层拦：抖音会话下复合通道的 IContactDirectory 是转发
+            // QQ 主平台的，工具会被原样塞进列表 —— 模型于是以为"抖音也能戳一戳"，
+            // 调用失败了它还会把失败当成功回给用户（幻觉成功）。连 schema 都不给，就没有这个念头。
+            if (!ToolCatalog.IsAvailableOn(tool.Name, request.Chat.Platform))
+            {
+                continue;
+            }
+
             var capability = ToolCatalog.CapabilityOf(tool.Name);
             var fallback = capability is null ? Role.Normal : PermissionGate.DefaultRoleOf(capability.Value);
 

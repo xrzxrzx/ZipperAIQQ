@@ -31,8 +31,33 @@ public sealed class GetToolCatalogAction : IApiAction
                 role = _policy.MinRole(item.Category, item.Key, item.DefaultRole).ToString(),
                 defaultRole = item.DefaultRole.ToString(),
                 hardFloor = item.HardFloor?.ToString(),
+
+                // 平台归属（S3-D / 决策五）：客户端按平台分组展示。
+                // 命令与平台 API 两类不是"工具"，一律给全部平台（前端会归到「通用」组）。
+                platforms = ToPlatformIds(item.Platforms),
             })
             .ToList());
+
+    /// <summary>把平台标志位拆成平台标识数组（供客户端分组）。</summary>
+    /// <remarks>
+    /// ⚠️ 这里**刻意用字面量** `qq` / `douyin`：Agent 层的 <c>ToolPlatforms</c> 是标志位，
+    /// 而这里是 wire 契约里的平台标识，两者同名但不是一回事（后者与 <c>ChatRef.Platform</c> 同口径）。
+    /// </remarks>
+    private static List<string> ToPlatformIds(ToolPlatform platforms)
+    {
+        var ids = new List<string>(2);
+        if (platforms.HasFlag(ToolPlatform.Qq))
+        {
+            ids.Add("qq");
+        }
+
+        if (platforms.HasFlag(ToolPlatform.Douyin))
+        {
+            ids.Add("douyin");
+        }
+
+        return ids;
+    }
 
     private static string CategoryLabel(PolicyCategory category) => category switch
     {

@@ -1,5 +1,6 @@
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Storage.Settings;
 
 namespace ZipperAIQQ.Server.Commands;
@@ -40,15 +41,19 @@ public sealed class NoticeCommand : ICommand
 
         if (parts.Length == 0)
         {
-            var lines = new List<string> { "通知响应状态（默认全关）：" };
+            // 按**本会话所在平台**读（S3-D）：命令在哪个平台发，就报哪个平台的开关
+            var statusPlatform = GetBehaviorAction.NormalizePlatform(context.Chat.Platform);
+            var statusLines = new List<string> { $"通知响应状态（{statusPlatform}，默认全关）：" };
             foreach (var type in Replyable)
             {
-                var value = await _settings.GetAsync(KeyPrefix + type, ct).ConfigureAwait(false);
-                lines.Add($"- {type}：{(value is "1" or "true" ? "开" : "关")}");
+                var current = await GetBehaviorAction
+                    .ReadNoticeValueAsync(_settings, statusPlatform, type, ct)
+                    .ConfigureAwait(false);
+                statusLines.Add($"- {type}：{(current is "1" or "true" ? "开" : "关")}");
             }
 
-            lines.Add("用法：`/notice on|off poke`（可选：" + string.Join(" / ", Replyable) + "）");
-            return string.Join('\n', lines);
+            statusLines.Add("用法：`/notice on|off poke`（可选：" + string.Join(" / ", Replyable) + "）");
+            return string.Join('\n', statusLines);
         }
 
         if (parts.Length < 2)
@@ -68,7 +73,24 @@ public sealed class NoticeCommand : ICommand
             return $"不支持的通知类型：{parts[1]}。可选：{string.Join(" / ", Replyable)}";
         }
 
-        await _settings.SetAsync(KeyPrefix + noticeType, action == "on" ? "1" : "0", ct).ConfigureAwait(false);
-        return $"已{(action == "on" ? "开启" : "关闭")} {noticeType} 的通知响应（下一轮生效）。";
+        // ⚠️ 必须写**平台键**（S3-D / 决策六）：老写法只写 `notice.reply:{type}`，
+        // 一旦客户端保存过 `notice.reply:qq:{type}`，/notice 写老键就会出现
+        // 「命令说开了、行为页显示关」的读写分歧 —— 平台化把它变成了真 bug，这里修掉。
+        var targetPlatform = GetBehaviorAction.NormalizePlatform(context.Chat.Platform);
+        var flag = action == "on" ? "1" : "0";
+
+        await _settings
+            .SetAsync(GetBehaviorAction.NoticeKey(targetPlatform, noticeType), flag, ct)
+            .ConfigureAwait(false);
+
+        if (GetBehaviorAction.HasLegacyKeys(targetPlatform))
+        {
+            // qq 镜像写老键：回退到旧版程序时开关不会丢
+            await _settings
+                .SetAsync(GetBehaviorAction.LegacyNoticeKey(noticeType), flag, ct)
+                .ConfigureAwait(false);
+        }
+
+        return $"已{(action == "on" ? "开启" : "关闭")} {noticeType} 的通知响应（{targetPlatform}，下一轮生效）。";
     }
 }
