@@ -13,6 +13,18 @@
             <TextBlock Text="人员管「谁能指挥它动手」，名单管「它愿意理谁」—— 两张卡分开保存"
                        Style="{StaticResource CaptionStyle}" Margin="0,-8,0,4" />
 
+            <!-- 平台（S3-C C7）：人员与名单按平台分开配置，切换后整页重拉 -->
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="平台" Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                <ComboBox MinWidth="160"
+                          VerticalAlignment="Center"
+                          ItemsSource="{x:Bind Vm.Platforms}"
+                          SelectedItem="{x:Bind Vm.SelectedPlatform, Mode=TwoWay}" />
+                <TextBlock Text="{x:Bind Vm.PlatformStatus, Mode=OneWay}"
+                           Style="{StaticResource CaptionStyle}" VerticalAlignment="Center"
+                           MaxWidth="460" TextWrapping="Wrap" />
+            </StackPanel>
+
             <!-- 人员（#19） -->
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="12">
