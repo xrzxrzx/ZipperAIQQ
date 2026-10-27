@@ -85,7 +85,7 @@ public static class MessageTools
                     return $"没搜到含「{keyword}」的历史消息（只搜本会话）。";
                 }
 
-                return $"搜到 {rows.Count} 条（关键词「{keyword}」）：\n" + Format(rows);
+                return $"搜到 {rows.Count} 条（关键词「{keyword}」）：\n" + FormatForModel(rows);
             },
             name: SearchToolName,
             description:
@@ -114,7 +114,7 @@ public static class MessageTools
 
                 return rows.Count == 0
                     ? "这个时间范围内没有消息。"
-                    : $"这段时间内 {rows.Count} 条：\n" + Format(rows);
+                    : $"这段时间内 {rows.Count} 条：\n" + FormatForModel(rows);
             },
             name: BetweenToolName,
             description:
@@ -132,7 +132,7 @@ public static class MessageTools
                     return "本会话还没有历史消息。";
                 }
 
-                return $"最近 {rows.Count} 条：\n" + Format(rows);
+                return $"最近 {rows.Count} 条：\n" + FormatForModel(rows);
             },
             name: RecentToolName,
             description:
@@ -143,7 +143,7 @@ public static class MessageTools
         if (allowCrossSession)
         {
             yield return AIFunctionFactory.Create(
-                async (string keyword, int? limit, CancellationToken ct) =>
+                async (string keyword, string? platform, int? limit, CancellationToken ct) =>
                 {
                     if (string.IsNullOrWhiteSpace(keyword))
                     {
@@ -151,33 +151,52 @@ public static class MessageTools
                     }
 
                     var take = Math.Clamp(limit ?? 10, 1, cap);
+                    var scope = string.IsNullOrWhiteSpace(platform) ? null : platform.Trim();
+
                     var rows = await store
-                        .SearchAcrossSessionsAsync(keyword.Trim(), take, chat.SessionId, ct)
+                        .SearchAcrossSessionsAsync(keyword.Trim(), take, chat.SessionId, scope, ct)
                         .ConfigureAwait(false);
 
                     if (rows.Count == 0)
                     {
-                        return $"没搜到含「{keyword}」的消息（已搜其他所有会话）。";
+                        return scope is null
+                            ? $"没搜到含「{keyword}」的消息（已搜其他所有会话、所有平台）。"
+                            : $"没搜到含「{keyword}」的消息（只搜了 {scope} 平台的其他会话）。";
                     }
 
-                    return $"在**其他会话**里搜到 {rows.Count} 条（关键词「{keyword}」）：\n" + Format(rows);
+                    var where = scope is null ? "其他会话（所有平台）" : $"其他会话（仅 {scope} 平台）";
+                    return $"在**{where}**里搜到 {rows.Count} 条（关键词「{keyword}」）：\n"
+                        + FormatForModel(rows);
                 },
                 name: CrossSessionSearchToolName,
                 description:
-                    "按关键词搜索**其他所有会话**的历史消息（不含当前会话）。\n" +
+                    "按关键词搜索**其他所有会话**的历史消息（不含当前会话）。结果每条都带 [平台:会话] 来源标签。\n" +
                     "当你需要回答「谁跟你说过什么 / 别的群里聊过什么」时用它。\n" +
-                    "注意：这是别人的对话内容，只能用于回答提问，不要无缘无故翻别人的聊天。\n" +
-                    "参数：keyword（关键词）、limit（最多几条，默认 10）。");
+                    "参数：keyword（关键词）、platform（可选，只搜某个平台：qq / douyin）、limit（最多几条，默认 10）。\n" +
+                    "注意：这是别人的对话内容，只能用于回答提问，不要无缘无故翻别人的聊天。");
         }
     }
 
-    private static string Format(IReadOnlyList<StoredMessage> rows) =>
+    /// <summary>
+    /// 把消息渲染成给模型看的行（S3-G / 决策十：**每条都带来源**）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 格式：<c>[平台:会话] [时间] 发送者：内容</c>。例：<c>[qq:g123456] [10-27 14:00] 张三：……</c>
+    /// </para>
+    /// <para>
+    /// 为什么必须带来源：多平台后模型会拿到 QQ 与抖音的混合历史；
+    /// 不标来源它就分不清"这话是哪个平台谁说的"，答案会串平台。
+    /// 本会话工具也带 —— 统一格式比"这个工具带、那个不带"更好记。
+    /// </para>
+    /// </remarks>
+    public static string FormatForModel(IReadOnlyList<StoredMessage> rows) =>
         string.Join(
             '\n',
             rows.Select(r =>
             {
                 var who = r.IsOutgoing ? "我" : r.Message.Sender.DisplayName;
                 var text = (r.Message.PlainText ?? string.Empty).Replace('\n', ' ');
-                return $"[{BeijingTime.Format(r.ReceivedAt)}] {who}：{text}";
+                return $"[{r.Message.Chat.SessionId}] [{BeijingTime.Format(r.ReceivedAt)}] {who}：{text}";
             }));
 }

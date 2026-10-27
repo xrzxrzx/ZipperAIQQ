@@ -324,22 +324,29 @@ public sealed class ChatAgent : IChatAgent
         reinject.AppendLine();
         reinject.Append(await BuildRelationshipNoteAsync(request.Sender.UserId, ct).ConfigureAwait(false));
 
-        // 自我身份（问题记录 02 #3/#4）：模型不知道自己的 QQ 号，
+        // 自我身份（问题记录 02 #3/#4）：模型不知道自己的账号，
         // 就会把「A 戳了 B」当成「有人在戳我」。
         // ⚠️ 按会话所在平台取（S3-A）：多平台下 QQ 号不能当成抖音的"我自己"。
         var selfId = _channel.SelfIdFor(request.Chat.Platform) ?? _options.SelfId;
         if (!string.IsNullOrWhiteSpace(selfId))
         {
             reinject.AppendLine().AppendLine()
-                    .AppendLine($"【你自己是谁】你的 QQ 号是 {selfId}；群里/消息里出现这个号，指的就是你本人。");
+                    .AppendLine($"【你自己是谁】你在 {PlatformLabel(request.Chat.Platform)} 上的账号是 {selfId}；" +
+                                "这条会话里出现这个号，指的就是你本人。");
         }
+
+        // 当前平台（S3-G / 决策十）：多平台后模型必须知道自己"在哪边说话"，
+        // 否则用户问"你在哪"它答不上来，查历史时也分不清条目属于哪个平台。
+        reinject.AppendLine()
+                .AppendLine($"【你现在的平台】{request.Chat.Platform}" +
+                            $"（会话 {request.Chat.SessionId}）。跨平台查到别的会话时，结果前面会标 [会话] 来源。");
 
         // 人设守卫（第 20 项）：每次重注入都带，位置紧贴当前消息 ——
         // 长对话里人设会被上下文稀释，靠这一条把它拉回来。
         // 主人有例外（问题记录 02 #2）：主人要求改设定/称呼/扮演时照做。
-        var ownerId = await _settings.GetAsync("owner.userId", ct).ConfigureAwait(false);
-        var isOwner = !string.IsNullOrWhiteSpace(ownerId) &&
-                      string.Equals(request.Sender.UserId, ownerId, StringComparison.Ordinal);
+        // ⚠️ 用**角色解析**判主人（S3-C：每平台一套主人），不再读写死的 "owner.userId" ——
+        //    那个键只代表 QQ，抖音会话里会把它的人也当主人。
+        var isOwner = _roles.Resolve(request.Sender.UserId, request.Chat.Platform) == Role.Owner;
         reinject.AppendLine().AppendLine(PromptRules.PersonaGuard(isOwner));
 
         var messages = new List<ChatMessage>
@@ -770,6 +777,18 @@ public sealed class ChatAgent : IChatAgent
     /// 工具不可见时**必须显式告知**，否则模型会编造"已完成" ——
     /// 这是实测抓到的：普通成员要求写文件，它回「test2.txt 建好了」，工作区空空如也。
     /// </remarks>
+    /// <summary>平台的中文名（只用于给模型看的文字，未登记的平台原样返回）。</summary>
+    /// <remarks>
+    /// 与客户端展示名分开维护是有意的：这是**提示词**里的字，改了会影响模型措辞；
+    /// 客户端文案变了不该牵动模型的自我认知。
+    /// </remarks>
+    private static string PlatformLabel(string platform) => platform?.ToLowerInvariant() switch
+    {
+        "qq" => "QQ",
+        "douyin" => "抖音",
+        _ => string.IsNullOrWhiteSpace(platform) ? "未知平台" : platform,
+    };
+
     private string BuildCapabilityNote(Role role)
     {
         var missing = new List<string>();
