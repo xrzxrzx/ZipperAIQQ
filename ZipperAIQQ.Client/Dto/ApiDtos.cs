@@ -445,7 +445,7 @@ public sealed class KindStatsDto
         : $"{InputTokens:N0} / {OutputTokens:N0}";
 }
 
-/// <summary>行为设置（<c>getBehavior</c>）：回复模式 + 通知响应开关。</summary>
+/// <summary>行为设置（<c>getBehavior</c>）：回复模式 + 通知响应开关（S3-D 起按平台）。</summary>
 public sealed class BehaviorDto
 {
     [JsonPropertyName("replyMode")]
@@ -456,6 +456,13 @@ public sealed class BehaviorDto
 
     [JsonPropertyName("notices")]
     public List<NoticeToggleDto> Notices { get; set; } = [];
+
+    /// <summary>
+    /// 可切换的平台列表（如 <c>["qq"]</c>，S3-D / 决策六）。**旧服务端不返回 → 空列表**，
+    /// 客户端退化成只有请求时带的那个平台（缺省 <c>qq</c>），不报错。
+    /// </summary>
+    [JsonPropertyName("platforms")]
+    public List<string> Platforms { get; set; } = [];
 }
 
 public sealed class NoticeToggleDto
@@ -465,6 +472,13 @@ public sealed class NoticeToggleDto
 
     [JsonPropertyName("label")]
     public string Label { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 这条通知属于哪个平台（S3-D / 决策六，如 <c>"qq"</c>）。
+    /// **旧服务端不返回 → 缺省 <c>qq</c>**（现有通知类型全是 QQ 语义），不报错。
+    /// </summary>
+    [JsonPropertyName("platform")]
+    public string Platform { get; set; } = "qq";
 
     /// <summary>common / other（#34：常用单独一组）。</summary>
     [JsonPropertyName("group")]
@@ -503,6 +517,13 @@ public sealed class ToolCatalogItemDto
 
     [JsonPropertyName("hardFloor")]
     public string? HardFloor { get; set; }
+
+    /// <summary>
+    /// 该能力适用的平台码（S3-D / 决策五，如 <c>["qq"]</c> 表示 QQ 专用、<c>["qq","douyin"]</c> 表示通用）。
+    /// **空表 = 通用**：旧服务端不返回 <c>platforms</c> 时就是空表，界面归到「通用」组，不报错。
+    /// </summary>
+    [JsonPropertyName("platforms")]
+    public List<string> Platforms { get; set; } = [];
 }
 
 /// <summary>人设（<c>getPersona</c>）：形象 / 性格分开。</summary>

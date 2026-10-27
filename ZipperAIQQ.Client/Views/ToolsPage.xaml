@@ -32,13 +32,22 @@
                            TextWrapping="Wrap" />
             </Grid>
         </DataTemplate>
+
+        <!-- 平台分组（S3-D D1.4）：标题 + 该组的行；分组只影响显示，保存仍是全量全平台 -->
+        <DataTemplate x:Key="PolicyGroupTemplate" x:DataType="vm:ToolPolicyGroup">
+            <StackPanel Spacing="2" Margin="0,4,0,10">
+                <TextBlock Text="{x:Bind Title}" FontWeight="SemiBold" FontSize="13"
+                           Foreground="{ThemeResource JpAccentBrush}" Margin="0,0,0,4" />
+                <ItemsControl ItemsSource="{x:Bind Rows}" ItemTemplate="{StaticResource PolicyRowTemplate}" />
+            </StackPanel>
+        </DataTemplate>
     </Page.Resources>
 
     <ScrollViewer Padding="32">
         <StackPanel Spacing="16" HorizontalAlignment="Stretch">
 
             <TextBlock Text="工具管理" Style="{StaticResource PageTitleStyle}" />
-            <TextBlock Text="工具 / 命令 / NapCat API 的开关与最低角色；保存后立即生效"
+            <TextBlock Text="工具 / 命令 / NapCat API 的开关与最低角色；保存后立即生效。每类按平台分组：通用 / QQ 专用 / 抖音专用"
                        Style="{StaticResource CaptionStyle}" Margin="0,-8,0,4" />
 
             <StackPanel Orientation="Horizontal" Spacing="10">
@@ -56,7 +65,7 @@
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="8">
                     <TextBlock Text="工具" Style="{StaticResource SectionHeaderStyle}" />
-                    <ItemsControl ItemsSource="{x:Bind Vm.Tools}" ItemTemplate="{StaticResource PolicyRowTemplate}" />
+                    <ItemsControl ItemsSource="{x:Bind Vm.Tools}" ItemTemplate="{StaticResource PolicyGroupTemplate}" />
                 </StackPanel>
             </Border>
 
@@ -65,7 +74,7 @@
                     <TextBlock Text="命令" Style="{StaticResource SectionHeaderStyle}" />
                     <TextBlock Text="命令权限：Normal = 所有人；Admin = 管理员；Owner = 仅主人"
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-                    <ItemsControl ItemsSource="{x:Bind Vm.Commands}" ItemTemplate="{StaticResource PolicyRowTemplate}" />
+                    <ItemsControl ItemsSource="{x:Bind Vm.Commands}" ItemTemplate="{StaticResource PolicyGroupTemplate}" />
                 </StackPanel>
             </Border>
 
@@ -74,7 +83,7 @@
                     <TextBlock Text="NapCat API" Style="{StaticResource SectionHeaderStyle}" />
                     <TextBlock Text="只读 API 默认所有人可用；写操作默认仅管理员。这里只能收紧，不能放开白名单。"
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-                    <ItemsControl ItemsSource="{x:Bind Vm.ChannelApis}" ItemTemplate="{StaticResource PolicyRowTemplate}" />
+                    <ItemsControl ItemsSource="{x:Bind Vm.ChannelApis}" ItemTemplate="{StaticResource PolicyGroupTemplate}" />
                 </StackPanel>
             </Border>
         </StackPanel>
