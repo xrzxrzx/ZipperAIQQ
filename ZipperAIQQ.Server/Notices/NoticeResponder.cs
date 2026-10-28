@@ -3,6 +3,7 @@ using ZipperAIQQ.Agent;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Feedback;
 using ZipperAIQQ.Storage.Notices;
@@ -22,11 +23,16 @@ namespace ZipperAIQQ.Server.Notices;
 /// 开启后把通知**描述成一条消息**交给 Agent —— 这样回复能带人设，
 /// 而不是一段固定模板。
 /// </para>
+/// <para>
+/// **开关按平台读**（决策六 / S3-D）：键是 <c>notice.reply:{platform}:{type}</c>，
+/// 平台取<b>通知发生的那个会话</b>（<see cref="InboundEvent.Chat"/> 的 Platform），
+/// 不是通道的默认平台 —— 复合通道下"在哪收到的"才决定"该读哪一端的开关"。
+/// 读取统一走 <see cref="GetBehaviorAction.ReadNoticeValueAsync"/>：那里管着
+/// 「新键优先、仅 qq 回退旧键」的唯一口径，本类**不要**自己拼键。
+/// </para>
 /// </remarks>
 public sealed class NoticeResponder
 {
-    private const string KeyPrefix = "notice.reply:";
-
     private static readonly SenderInfo SyntheticSender = new()
     {
         UserId = "system",
@@ -91,21 +97,26 @@ public sealed class NoticeResponder
             _logger.Warning(ex, "主人反馈处理失败（{Type}）", notice.Type);
         }
 
-        // 请求类（加好友 / 加群）**只记录不响应**：自动通过等于替主人做决定
+        // 请求类（加好友 / 加群）**只记录不响应**：自动通过等于替主人做决定。
+        // ⚠️ 只针对 QQ 这两个类型：抖音的 DouyinFriendRequest / DouyinGroupRequest **不进这里** ——
+        // 它们在「运行与行为」页有独立开关（默认关 = 同样只记录），开关管的是"要不要说句话"，
+        // 不是"要不要替主人通过请求"（本项目没有自动通过能力）。
         if (notice.Type is NoticeType.FriendRequest or NoticeType.GroupRequest)
         {
             _logger.Information("请求已记录（{Raw}）：不自动处理", notice.RawType);
             return;
         }
 
-        if (!await IsEnabledAsync(notice.Type, ct).ConfigureAwait(false))
+        // 开关按**通知发生的会话所在平台**读（决策六）：复合通道下不能用通道默认平台
+        if (!await IsEnabledAsync(notice.Type, notice.Chat.Platform, ct).ConfigureAwait(false))
         {
             _logger.Information("通知 {Type}（{Raw}）已记录，未开启响应（会话 {Session}）",
                 notice.Type, notice.RawType, notice.Chat.SessionId);
             return;
         }
 
-        var selfId = _channel.SelfId ?? _options.SelfId;
+        // 按平台取 selfId（S3-A）：多平台下 QQ 号不能拿来判抖音通知
+        var selfId = _channel.SelfIdFor(notice.Chat.Platform) ?? _options.SelfIdFor(notice.Chat.Platform);
         var text = Describe(notice, selfId);
 
         try
@@ -125,10 +136,29 @@ public sealed class NoticeResponder
         }
     }
 
-    /// <summary>某类通知是否开启了响应（默认关）。</summary>
-    public async Task<bool> IsEnabledAsync(NoticeType type, CancellationToken ct = default)
+    /// <summary>
+    /// 某平台上的某类通知是否开启了响应（**默认关**：键不存在 = 关）。
+    /// </summary>
+    /// <param name="type">通知类型。</param>
+    /// <param name="platform">通知发生的平台（<see cref="ChatRef.Platform"/>）。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <remarks>
+    /// 读键的口径统一交给 <see cref="GetBehaviorAction.ReadNoticeValueAsync"/>：
+    /// 新键 <c>notice.reply:{platform}:{type}</c> 优先，**仅 qq** 回退单平台时代的老键
+    /// <c>notice.reply:{type}</c>。两处各写一遍回退逻辑迟早漂移（一边漏了回退、
+    /// 一边把平台段写错），所以这里只做"值 → 布尔"的翻译。
+    /// </remarks>
+    public async Task<bool> IsEnabledAsync(
+        NoticeType type,
+        string platform,
+        CancellationToken ct = default)
     {
-        var value = await _settings.GetAsync(KeyPrefix + type, ct).ConfigureAwait(false);
+        ArgumentException.ThrowIfNullOrWhiteSpace(platform);
+
+        var value = await GetBehaviorAction
+            .ReadNoticeValueAsync(_settings, platform, type, ct)
+            .ConfigureAwait(false);
+
         return value is "1" or "true";
     }
 
@@ -157,6 +187,14 @@ public sealed class NoticeResponder
         NoticeType.BotOffline => "[离线] 机器人已离线",
         NoticeType.FriendRequest => $"[好友请求] {Who(notice.Actor)} 请求添加好友",
         NoticeType.GroupRequest => $"[加群请求] {Who(notice.Actor)} 请求加入群",
+
+        // 抖音语义（决策六 / S3-E）：措辞不带 QQ 术语（没有"群名片/群精华"这类概念），
+        // 只说清"谁做了什么"，让模型自己组织人设化回复。
+        NoticeType.DouyinFriendRequest => $"[抖音好友申请] {Who(notice.Actor)} 请求添加好友",
+        NoticeType.DouyinGroupRequest => $"[抖音入群申请] {Who(notice.Actor)} 申请加入群聊",
+        NoticeType.DouyinMemberChanged => $"[抖音成员变化] {Who(notice.Target ?? notice.Actor)} 的成员状态发生变化（操作者：{Who(notice.Actor)}）",
+        NoticeType.DouyinSessionSynced => $"[抖音会话同步] 会话信息已同步（涉及：{Who(notice.Actor ?? notice.Target)}）",
+
         _ => $"[通知] {notice.RawType}",
     };
 

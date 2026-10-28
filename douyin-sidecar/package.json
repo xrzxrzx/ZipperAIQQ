@@ -1,0 +1,25 @@
+{
+  "name": "zipperaiqq-douyin-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ZipperAIQQ 抖音 sidecar：把 douyin-im 的私聊/群聊消息翻成 /ws/channel 帧，并执行出站发送",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "main": "dist/bridge.js",
+  "scripts": {
+    "build": "tsc src/bridge.ts --outDir dist --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node",
+    "start": "node dist/bridge.js",
+    "dev": "tsx src/bridge.ts",
+    "typecheck": "tsc src/bridge.ts --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node"
+  },
+  "dependencies": {
+    "douyin-im": "1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

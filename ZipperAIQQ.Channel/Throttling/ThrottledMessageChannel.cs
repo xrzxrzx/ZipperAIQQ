@@ -66,6 +66,9 @@ public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory
 
     public string? SelfId => _inner.SelfId;
 
+    /// <summary>按平台转发（复合通道下每个平台有自己的 selfId，节流只该管发送节奏）。</summary>
+    public string? SelfIdFor(string platform) => _inner.SelfIdFor(platform);
+
     public event Action<string>? SelfIdChanged
     {
         add => _inner.SelfIdChanged += value;

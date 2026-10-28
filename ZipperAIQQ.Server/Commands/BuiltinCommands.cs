@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Server.Commands;
 /// 它自己就是一条命令，会形成循环依赖（DI 会直接报 circular dependency）。
 /// 改成执行时从容器取（延迟解析，构造期已过，不会循环）。
 /// </remarks>
-public sealed class HelpCommand : ICommand
+public sealed class HelpCommand : ICommand, IImageCommand
 {
     private readonly IServiceProvider _services;
 
@@ -33,13 +33,64 @@ public sealed class HelpCommand : ICommand
     public string Description => "列出可用命令";
     public Role MinRole => Role.Normal;
 
-    public Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default)
+    public Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default) =>
+        Task.FromResult(BuildText(context));
+
+    /// <summary>
+    /// 出图版（决策八）：命令名 / 说明 / 最低角色画成表格。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 为什么改图：对齐后的三列文本在 QQ 里会错位（与 <c>/status</c> 当初同一个问题）。
+    /// </para>
+    /// <para>
+    /// <b>必须有文本兜底</b>：渲染依赖 SkiaSharp 与字体，服务器缺字体时会抛 ——
+    /// 那时退回文本，命令本身不能失效。
+    /// </para>
+    /// </remarks>
+    public Task<(string Text, byte[]? Png)> ExecuteWithImageAsync(
+        CommandContext context, string args, CancellationToken ct = default)
     {
-        var visible = _services.GetServices<ICommand>()
+        var visible = VisibleCommands(context).ToList();
+        var text = BuildText(context, visible);
+
+        try
+        {
+            var rows = visible
+                .Select(c => new[] { $"/{c.Name}", c.Description, c.MinRole.ToString() })
+                .ToArray();
+
+            var png = StatusImageRenderer.Render(
+                "可用命令",
+                $"共 {visible.Count} 条 · 你当前是 {context.Role}",
+                [
+                    new StatusImageRenderer.Table(
+                        "命令",
+                        ["命令", "说明", "最低角色"],
+                        rows),
+                ]);
+
+            // 图里信息齐全，文本只留一句说明（避免同一份内容发两遍）
+            return Task.FromResult<(string, byte[]?)>(
+                ($"/help 共 {visible.Count} 条命令，见上图（你当前是 {context.Role}）。", png));
+        }
+        catch (Exception)
+        {
+            // 渲染失败（缺字体 / SkiaSharp 不可用）→ 回落纯文本，命令不能失效
+            return Task.FromResult<(string, byte[]?)>((text, null));
+        }
+    }
+
+    private List<ICommand> VisibleCommands(CommandContext context) =>
+        _services.GetServices<ICommand>()
             .Where(c => context.Role >= c.MinRole)
             .OrderBy(c => c.Name, StringComparer.Ordinal)
             .ToList();
 
+    private string BuildText(CommandContext context) => BuildText(context, VisibleCommands(context));
+
+    private static string BuildText(CommandContext context, IReadOnlyCollection<ICommand> visible)
+    {
         var sb = new StringBuilder();
         sb.AppendLine($"可用命令（{visible.Count} 条，你当前是 {context.Role}）：");
         foreach (var command in visible)
@@ -47,7 +98,7 @@ public sealed class HelpCommand : ICommand
             sb.AppendLine($"- `/{command.Name}` — {command.Description}");
         }
 
-        return Task.FromResult(sb.ToString().TrimEnd());
+        return sb.ToString().TrimEnd();
     }
 }
 

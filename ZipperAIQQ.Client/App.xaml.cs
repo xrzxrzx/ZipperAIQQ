@@ -29,6 +29,7 @@ public partial class App : Application
         services.AddSingleton<AccessViewModel>();
         services.AddSingleton<ToolsViewModel>();
         services.AddSingleton<ExternalViewModel>();
+        services.AddSingleton<PlatformsViewModel>();
         services.AddSingleton<LogsViewModel>();
         services.AddSingleton<ShellViewModel>();
 

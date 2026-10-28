@@ -1,0 +1,17 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 登录态（Cookie / 设备身份 / 票据）—— 一旦泄露等于账号被接管，绝不入库
+data/
+**/data/
+
+# 本地配置里有 Server 的 Bearer token，不入库（配置样例见 README）
+config.json
+config.local.json
+
+# 日志与系统垃圾
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

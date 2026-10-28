@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Server.Access;
 using ZipperAIQQ.Storage.Config;
 using ZipperAIQQ.Storage.Settings;
 
@@ -28,9 +29,7 @@ namespace ZipperAIQQ.Server.Commands;
 /// </remarks>
 public sealed class OwnerCommand : ICommand
 {
-    /// <summary>与 <c>GetOwnerAction</c> 用同一个存储键。</summary>
-    private const string OwnerKey = "owner.userId";
-
+    /// <summary>与 <c>GetOwnerAction</c> 同一套键（S3-C：按平台）。</summary>
     private const string Actor = "command:owner";
 
     private readonly IRuntimeSettingsStore _settings;
@@ -57,7 +56,9 @@ public sealed class OwnerCommand : ICommand
 
     public async Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default)
     {
-        var current = await _settings.GetAsync(OwnerKey, ct).ConfigureAwait(false);
+        // 主人是"某个平台上的某个人"（S3-C）：在 QQ 会话里转移的只能是 QQ 的主人
+        var platform = AccessKeys.Normalize(context.Chat.Platform);
+        var current = await AccessSettings.GetOwnerAsync(_settings, platform, ct).ConfigureAwait(false);
         var trimmed = args.Trim();
 
         // ── 不带参数：报当前主人 ──
@@ -65,46 +66,67 @@ public sealed class OwnerCommand : ICommand
         {
             var who = string.IsNullOrWhiteSpace(current) ? "（未设置）" : current;
             return $"""
-                当前主人：{who}
+                当前主人（{platform}）：{who}
                 你：{context.Sender.UserId}（{context.Role}）
 
-                转移主人：/owner <QQ号>
+                转移主人：/owner <账号>
                 ⚠️ 转移后你自己就失去主人权限，不可撤销。
                 """;
         }
 
         // ── 带参数：转移 ──
         var first = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
-        if (!long.TryParse(first, NumberStyles.Integer, CultureInfo.InvariantCulture, out var target) || target <= 0)
-        {
-            return "参数看起来不是 QQ 号。用法：/owner <QQ号>";
-        }
 
-        var newOwner = target.ToString(CultureInfo.InvariantCulture);
+        // QQ 号必须是纯数字；其它平台（如抖音 uid）允许字母等字符
+        string newOwner;
+        if (string.Equals(platform, AccessKeys.DefaultPlatform, StringComparison.Ordinal))
+        {
+            if (!long.TryParse(first, NumberStyles.Integer, CultureInfo.InvariantCulture, out var target) ||
+                target <= 0)
+            {
+                return "参数看起来不是 QQ 号。用法：/owner <QQ号>";
+            }
+
+            newOwner = target.ToString(CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            if (first.Length == 0)
+            {
+                return $"参数看起来不是有效的 {platform} 账号。用法：/owner <账号>";
+            }
+
+            newOwner = first;
+        }
 
         if (string.Equals(newOwner, current, StringComparison.Ordinal))
         {
             return $"主人已经是 {newOwner} 了，不用改。";
         }
 
-        await _settings.SetAsync(OwnerKey, newOwner, ct).ConfigureAwait(false);
+        await _settings.SetAsync(AccessKeys.Owner(platform), newOwner, ct).ConfigureAwait(false);
+        if (AccessKeys.HasLegacyKeys(platform))
+        {
+            // 旧键同步一份：回退到旧版程序时主人不会消失
+            await _settings.SetAsync(AccessKeys.LegacyOwnerKey, newOwner, ct).ConfigureAwait(false);
+        }
 
-        // 立即生效：权限解析器持有一个内存里的 owner
+        // 立即生效：权限解析器持有内存里的各平台 owner
         if (_roles is ConfiguredRoleResolver configured)
         {
-            configured.SetOwner(newOwner);
+            configured.SetOwner(platform, newOwner);
         }
 
         await _configs
             .AppendAuditAsync(
                 "transferOwner",
                 Actor,
-                $"{(string.IsNullOrWhiteSpace(current) ? "（空）" : current)} → {newOwner}",
+                $"{platform}:{(string.IsNullOrWhiteSpace(current) ? "（空）" : current)} → {newOwner}",
                 ct)
             .ConfigureAwait(false);
 
         var sb = new StringBuilder();
-        sb.AppendLine($"主人已转移：{(string.IsNullOrWhiteSpace(current) ? "（空）" : current)} → {newOwner}");
+        sb.AppendLine($"主人已转移（{platform}）：{(string.IsNullOrWhiteSpace(current) ? "（空）" : current)} → {newOwner}");
         sb.AppendLine();
         sb.AppendLine("⚠️ 你（原主人）现在只是普通权限了。");
         sb.AppendLine("新主人下一条命令起就生效（内存里的 owner 已同步）。");

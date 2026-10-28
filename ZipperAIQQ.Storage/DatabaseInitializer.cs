@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 12;
+    public const int CurrentSchemaVersion = 13;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -56,6 +56,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, ConfigTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, RuntimeSettingsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, NoticesTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, MailTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -426,5 +427,73 @@ public sealed class DatabaseInitializer
 
         CREATE INDEX IF NOT EXISTS IX_Notices_Session
             ON Notices (SessionId, OccurredAtMs);
+        """;
+
+    /// <summary>
+    /// 邮件接入（schema v13）：账号 / 邮件 / 摘要+转发状态。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>不进 <c>Messages</c> 表</b>：邮件是通知流，不是对话流
+    /// （邮件接入设计 §1.2 / §4.4）。混进去会污染检索、摘要与向量化。
+    /// </para>
+    /// <para>
+    /// <c>MailAccounts.SecretCipher</c> 是**加密后的授权码**，明文永不落库。
+    /// <c>LastUid</c> 是增量同步水位（实施微调 M5：设计 §4.1 表结构漏了该列）。
+    /// </para>
+    /// <para>
+    /// <c>MailSummaries.ForwardedAtMs</c> 是「汇总已转发」的状态位（实施微调 M6）：
+    /// 没有它，interval / daily 模式每次都会把同一批邮件再转一遍。
+    /// </para>
+    /// </remarks>
+    private const string MailTables = """
+        CREATE TABLE IF NOT EXISTS MailAccounts (
+            Id           TEXT    NOT NULL PRIMARY KEY,
+            Address      TEXT    NOT NULL,
+            DisplayName  TEXT,
+            ImapHost     TEXT    NOT NULL,
+            ImapPort     INTEGER NOT NULL,
+            UseSsl       INTEGER NOT NULL,
+            Username     TEXT    NOT NULL,
+            SecretCipher TEXT    NOT NULL,
+            Enabled      INTEGER NOT NULL,
+            LastUid      INTEGER NOT NULL DEFAULT 0,
+            LastSyncAtMs INTEGER,
+            LastError    TEXT,
+            CreatedAtMs  INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS Mails (
+            Id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            AccountId      TEXT    NOT NULL,
+            MessageId      TEXT,
+            Subject        TEXT    NOT NULL,
+            FromAddress    TEXT    NOT NULL,
+            FromName       TEXT,
+            BodyText       TEXT    NOT NULL,
+            HasAttachments INTEGER NOT NULL,
+            SentAtMs       INTEGER NOT NULL,
+            ReceivedAtMs   INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS UX_Mails_Account_MessageId
+            ON Mails (AccountId, MessageId)
+            WHERE MessageId IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS IX_Mails_ReceivedAt
+            ON Mails (ReceivedAtMs);
+
+        CREATE TABLE IF NOT EXISTS MailSummaries (
+            MailId        INTEGER NOT NULL PRIMARY KEY,
+            Summary       TEXT    NOT NULL,
+            NeedsAction   INTEGER NOT NULL,
+            Status        TEXT    NOT NULL,
+            Error         TEXT,
+            UpdatedAtMs   INTEGER NOT NULL,
+            ForwardedAtMs INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_MailSummaries_Forwarded
+            ON MailSummaries (ForwardedAtMs);
         """;
 }

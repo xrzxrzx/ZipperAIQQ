@@ -6,6 +6,21 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="mc">
 
+    <Page.Resources>
+        <!-- 一条通知开关：名称 + 开关（各平台分组内复用） -->
+        <DataTemplate x:Key="NoticeToggleTemplate" x:DataType="vm:NoticeToggleItem">
+            <Grid ColumnSpacing="12" Padding="0,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{x:Bind Label}"
+                           VerticalAlignment="Center" TextWrapping="Wrap" />
+                <ToggleSwitch Grid.Column="1" IsOn="{x:Bind Enabled, Mode=TwoWay}" />
+            </Grid>
+        </DataTemplate>
+    </Page.Resources>
+
     <ScrollViewer Padding="32">
         <StackPanel Spacing="16" HorizontalAlignment="Stretch">
 
@@ -78,58 +93,49 @@
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
                     <TextBlock Text="通知响应" FontWeight="SemiBold" Margin="0,8,0,0" />
+                    <TextBlock Text="按平台分组：每个平台一组（组标题带平台名），关掉某平台的通知不影响另一个平台。"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
                     <TextBox PlaceholderText="搜索通知类型…" MinWidth="260" HorizontalAlignment="Left"
                              Text="{x:Bind Vm.NoticeSearch, Mode=TwoWay}" />
 
-                    <!-- 常用 / 其他 左右并列 -->
-                    <Grid ColumnSpacing="16">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
+                    <!-- 平台分组（S3-D D2.5 / 决策六）：一个平台一组，组内仍分「常用 / 其他」两列 -->
+                    <ItemsControl ItemsSource="{x:Bind Vm.NoticeGroups}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:NoticePlatformGroup">
+                                <StackPanel Spacing="8" Margin="0,4,0,12">
+                                    <TextBlock Text="{x:Bind Title}" FontWeight="SemiBold" />
 
-                        <StackPanel Grid.Column="0" Spacing="6">
-                            <TextBlock Text="常用" Style="{StaticResource CaptionStyle}" />
-                            <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto">
-                                <ItemsControl ItemsSource="{x:Bind Vm.CommonNotices}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:NoticeToggleItem">
-                                            <Grid ColumnSpacing="12" Padding="0,3">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Column="0" Text="{x:Bind Label}"
-                                                           VerticalAlignment="Center" TextWrapping="Wrap" />
-                                                <ToggleSwitch Grid.Column="1" IsOn="{x:Bind Enabled, Mode=TwoWay}" />
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
-                        </StackPanel>
+                                    <Grid ColumnSpacing="16">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
 
-                        <StackPanel Grid.Column="1" Spacing="6">
-                            <TextBlock Text="其他" Style="{StaticResource CaptionStyle}" />
-                            <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto">
-                                <ItemsControl ItemsSource="{x:Bind Vm.OtherNotices}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:NoticeToggleItem">
-                                            <Grid ColumnSpacing="12" Padding="0,3">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Column="0" Text="{x:Bind Label}"
-                                                           VerticalAlignment="Center" TextWrapping="Wrap" />
-                                                <ToggleSwitch Grid.Column="1" IsOn="{x:Bind Enabled, Mode=TwoWay}" />
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
-                        </StackPanel>
-                    </Grid>
+                                        <StackPanel Grid.Column="0" Spacing="6">
+                                            <TextBlock Text="常用" Style="{StaticResource CaptionStyle}" />
+                                            <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto">
+                                                <ItemsControl ItemsSource="{x:Bind CommonNotices}"
+                                                              ItemTemplate="{StaticResource NoticeToggleTemplate}" />
+                                            </ScrollViewer>
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Column="1" Spacing="6">
+                                            <TextBlock Text="其他" Style="{StaticResource CaptionStyle}" />
+                                            <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto">
+                                                <ItemsControl ItemsSource="{x:Bind OtherNotices}"
+                                                              ItemTemplate="{StaticResource NoticeToggleTemplate}" />
+                                            </ScrollViewer>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- 服务端没有通知类型 / 搜索无匹配（免得空白一片） -->
+                    <TextBlock Text="{x:Bind Vm.NoticeEmptyHint, Mode=OneWay}"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
                     <StackPanel Orientation="Horizontal" Spacing="10">
                         <Button Content="保存行为设置" Style="{StaticResource JpAccentButtonStyle}"

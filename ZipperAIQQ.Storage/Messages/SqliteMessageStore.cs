@@ -402,7 +402,11 @@ public sealed class SqliteMessageStore : IMessageStore
 
     /// <summary>跨会话关键词搜索；参数化，绝不拼字符串。</summary>
     public Task<IReadOnlyList<StoredMessage>> SearchAcrossSessionsAsync(
-        string keyword, int limit, string? excludeSessionId = null, CancellationToken ct = default)
+        string keyword,
+        int limit,
+        string? excludeSessionId = null,
+        string? platform = null,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyword);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
@@ -413,6 +417,9 @@ public sealed class SqliteMessageStore : IMessageStore
             cmd.CommandText = SelectCrossSessionSearchSql;
             cmd.Parameters.AddWithValue("@pattern", "%" + keyword + "%");
             cmd.Parameters.AddWithValue("@exclude", excludeSessionId ?? string.Empty);
+
+            // 空串 = 不按平台收窄（与 @exclude 同口径，避免动态拼 SQL）
+            cmd.Parameters.AddWithValue("@platform", string.IsNullOrWhiteSpace(platform) ? string.Empty : platform.Trim());
             cmd.Parameters.AddWithValue("@limit", limit);
 
             var buffer = new List<StoredMessage>(capacity: Math.Min(limit, 128));
@@ -435,6 +442,7 @@ public sealed class SqliteMessageStore : IMessageStore
         FROM Messages
         WHERE PlainText LIKE @pattern
           AND (@exclude = '' OR SessionId <> @exclude)
+          AND (@platform = '' OR Platform = @platform)
         ORDER BY SentAtMs DESC, Id DESC
         LIMIT @limit;
         """;

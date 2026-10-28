@@ -354,7 +354,10 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
 
         _logger.Information(
             "NapCat 通道已连接：{Url}（白名单 {White} 条 / 黑名单 {Black} 条 / 主人放行 {Allow} 条；语音转写 {Stt}）",
-            uri, _filter.WhitelistCount, _filter.BlacklistCount, _filter.AlwaysAllow.Count,
+            uri,
+            _filter.WhitelistCount(Platform),
+            _filter.BlacklistCount(Platform),
+            _filter.AlwaysAllow(Platform).Count,
             _speechOptions.Enabled ? "启用" : "关闭");
     }
 

@@ -103,32 +103,53 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
 
     var app = builder.Build();
 
-    // 第 17 项：把库里记的主人灌进权限解析器（否则重启后主人身份丢失）
-    // 顺带灌管理员：setAccess 写的管理员在重启后也要生效，否则「配置里有、权限里没有」
+    // 第 17 项 / S3-C：把库里记的主人 / 管理员 / 名单**按平台**灌进运行时
+    // 不灌的后果：重启后主人身份丢失、管理员名单回退到环境变量、名单回到"全放行"（曾经就是这样）
     try
     {
         var settingsStore = app.Services.GetRequiredService<ZipperAIQQ.Storage.Settings.IRuntimeSettingsStore>();
-        var ownerId = await settingsStore.GetAsync(ZipperAIQQ.Server.Api.Handlers.GetOwnerAction.OwnerKey);
         var resolver = app.Services.GetRequiredService<ZipperAIQQ.Agent.Security.IRoleResolver>()
             as ZipperAIQQ.Agent.Security.ConfiguredRoleResolver;
+        var filter = app.Services.GetRequiredService<ZipperAIQQ.Channel.Filtering.IChatFilter>();
+        var directories = app.Services.GetRequiredService<ZipperAIQQ.Server.Contacts.IContactDirectoryRegistry>();
 
-        if (!string.IsNullOrWhiteSpace(ownerId) && resolver is not null)
+        foreach (var platform in directories.Platforms)
         {
-            resolver.SetOwner(ownerId);
-            Log.Logger.Information("主人已加载：{Owner}", ownerId);
-        }
+            var ownerId = await ZipperAIQQ.Server.Access.AccessSettings
+                .GetOwnerAsync(settingsStore, platform, CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(ownerId) && resolver is not null)
+            {
+                resolver.SetOwner(platform, ownerId);
+                Log.Logger.Information("{Platform} 主人已加载：{Owner}", platform, ownerId);
+            }
 
-        var adminsRaw = await settingsStore.GetAsync(ZipperAIQQ.Server.Api.Handlers.GetAccessAction.AdminsKey);
-        if (!string.IsNullOrWhiteSpace(adminsRaw) && resolver is not null)
-        {
-            var admins = adminsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            resolver.SetAdmins(admins);
-            Log.Logger.Information("管理员已加载：{Count} 人", admins.Length);
+            var admins = await ZipperAIQQ.Server.Access.AccessSettings
+                .GetAdminsAsync(settingsStore, platform, CancellationToken.None);
+            if (admins.Count > 0 && resolver is not null)
+            {
+                resolver.SetAdmins(platform, admins);
+                Log.Logger.Information("{Platform} 管理员已加载：{Count} 人", platform, admins.Count);
+            }
+
+            var (whitelist, blacklist) = await ZipperAIQQ.Server.Access.AccessSettings
+                .GetListsAsync(settingsStore, platform, CancellationToken.None);
+            if (whitelist.Count > 0 || blacklist.Count > 0)
+            {
+                filter.Update(platform, new ZipperAIQQ.Channel.Filtering.ChatFilterOptions
+                {
+                    Whitelist = whitelist,
+                    Blacklist = blacklist,
+                    AlwaysAllow = filter.AlwaysAllow(platform).ToList(),
+                });
+                Log.Logger.Information(
+                    "{Platform} 名单已加载：白 {White} / 黑 {Black}",
+                    platform, whitelist.Count, blacklist.Count);
+            }
         }
     }
     catch (Exception ex)
     {
-        Log.Logger.Warning(ex, "加载主人 / 管理员失败（不影响启动）");
+        Log.Logger.Warning(ex, "加载主人 / 管理员 / 名单失败（不影响启动）");
     }
 
     // 强制解析鉴权策略：非 loopback 又没 token → 这里直接抛，拒绝启动（不裸奔）
@@ -144,12 +165,24 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     // 网页搜索配置（与模型独立）先读回库
     await app.Services.GetRequiredService<SearchOptionsService>().InitializeAsync();
 
+    // 邮件接入的运行时开关（S3-F 补）：先读回库，管道随后按它决定起点 / 停源
+    await app.Services.GetRequiredService<ZipperAIQQ.Server.Mail.MailOptionsService>().InitializeAsync();
+
+    // 抖音 sidecar 配置（S3-F / 决策七）：先读回库，再把变更推给通道
+    var douyinOptions = app.Services.GetRequiredService<ZipperAIQQ.Server.Channels.DouyinOptionsService>();
+    var douyinChannel = app.Services.GetRequiredService<ZipperAIQQ.Server.Channels.DouyinChannel>();
+    await douyinOptions.InitializeAsync();
+    douyinChannel.UpdateOptions(douyinOptions.Current.ToOptions());
+    douyinOptions.Changed += () => douyinChannel.UpdateOptions(douyinOptions.Current.ToOptions());
+
     // 按运行配置建（或重建）LLM 客户端；配置写错只会保留旧客户端，不会起不来
     await app.Services.GetRequiredService<IChatClientProvider>().ReloadAsync();
 
     ApiEndpoint.Map(app);
     EventEndpoint.Map(app);
     ExternalWsEndpoint.Map(app);
+    // 抖音 sidecar 的通道端点（S3-E）：未启用时端点内部直接 404
+    WsChannelEndpoint.Map(app);
 
     SubscribeAgentEvents(app.Services);
 

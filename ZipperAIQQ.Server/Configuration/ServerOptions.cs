@@ -90,8 +90,38 @@ public sealed record ServerOptions
     /// </summary>
     /// <remarks>
     /// 留空时：mention 模式只回私聊（群聊里没法判断 @ 指向谁，宁可保守）。
+    /// 多平台下这是 `qq` 的单值写法（旧配置），平台化写法见 <see cref="SelfIds"/>。
     /// </remarks>
     public string? SelfId { get; init; }
+
+    /// <summary>
+    /// 按平台的自身账号（键 = 平台，如 <c>qq</c> / <c>douyin</c>）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 为什么不能只有一个值（决策三 / S3-A）：QQ 号与抖音 uid 完全无关，
+    /// 用 QQ 的 selfId 去判断"抖音这条消息有没有 @ 我"，结果只会是永远判错。
+    /// </para>
+    /// <para>
+    /// 配置形态：YAML 的 <c>selfIds:</c> 节。<c>qq</c> 缺省时回落到旧单值 <see cref="SelfId"/>，
+    /// 老配置不需要改（迁移策略：只在读的时候回落，不往文件里写）。
+    /// </para>
+    /// </remarks>
+    public IReadOnlyDictionary<string, string> SelfIds { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>取某平台的自身账号；未配置该平台时 `qq` 回落单值，其余返回 <c>null</c>。</summary>
+    public string? SelfIdFor(string platform)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(platform);
+
+        if (SelfIds.TryGetValue(platform, out var configured) && !string.IsNullOrWhiteSpace(configured))
+        {
+            return configured;
+        }
+
+        return string.Equals(platform, "qq", StringComparison.OrdinalIgnoreCase) ? SelfId : null;
+    }
 
     /// <summary>网页搜索开关（默认开；关掉时模型看不到 web_search/fetch_url）。</summary>
     public bool SearchEnabled { get; init; } = true;
@@ -115,10 +145,31 @@ public sealed record ServerOptions
     /// <summary>反向 WS 额外监听块（host:port；启动时生效）。</summary>
     public IReadOnlyList<External.ExternalReverseServer> ExternalReverseServers { get; init; } = [];
 
+    // ── 抖音接入（多平台通道接入 · 决策二）──
+
+    /// <summary>
+    /// 抖音 sidecar 参数（<c>douyin</c> 配置节）。
+    /// </summary>
+    /// <remarks>
+    /// sidecar 主动连入 <c>/ws/channel</c>；默认 <see cref="Channels.DouyinOptions.Enabled"/> = false，
+    /// 关着的时候端点直接 404，服务照常跑（只是多平台里少一个平台）。
+    /// </remarks>
+    public Channels.DouyinOptions Douyin { get; init; } = new();
+
+    // ── 邮件接入（多平台通道接入 · 决策一 / 九）──
+
+    /// <summary>
+    /// 邮件运行参数（<c>mail</c> 配置节）。
+    /// </summary>
+    /// <remarks>
+    /// 账号与凭据**不在这里**：它们存在 <c>MailAccounts</c> 表里（客户端可改），
+    /// 这里只放策略参数。默认 <see cref="Mail.MailOptions.Enabled"/> = false（不启用就不连 IMAP）。
+    /// </remarks>
+    public Mail.MailOptions Mail { get; init; } = new();
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;
-
     /// <summary>连续快发到多少条后进入冷却。</summary>
     public int MaxConsecutive { get; init; } = 10;
 

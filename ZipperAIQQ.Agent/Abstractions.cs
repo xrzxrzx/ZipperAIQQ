@@ -102,6 +102,15 @@ public sealed record ChatAgentDependencies
     /// <summary>权限门禁（接缝 C，FR-6）。</summary>
     public required Security.IPermissionGate PermissionGate { get; init; }
 
+    /// <summary>
+    /// 按平台查主人（id + 昵称）；由 Server 用 <c>AccessSettings</c> 实现。
+    /// </summary>
+    /// <remarks>
+    /// 可选：不传时退回"读旧键 <c>owner.userId</c>"的老逻辑
+    /// （测试与旧调用点不必改；但那样只有 QQ 认得出主人）。
+    /// </remarks>
+    public IOwnerLookup? OwnerLookup { get; init; }
+
     /// <summary>工具 / 命令 / 平台 API 的开关与最低角色（#28/#29）。</summary>
     public required Security.IExecutionPolicy Policy { get; init; }
 
@@ -116,6 +125,12 @@ public sealed record ChatAgentDependencies
 
     /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
     public required Security.IRoleResolver Roles { get; init; }
+
+    /// <summary>
+    /// 按平台取联系人目录（S3-E / 决策四）：抖音专用工具靠它判断"这个平台接没接"。
+    /// </summary>
+    /// <remarks>未注册（单平台部署）时为 <c>null</c>：平台专用工具一律不出现。</remarks>
+    public Channel.IPlatformContacts? PlatformContacts { get; init; }
 
     /// <summary>会话工作区（路径穿越拦截，FR-7）。</summary>
     public required Security.WorkspacePathResolver Workspace { get; init; }

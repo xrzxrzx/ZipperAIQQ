@@ -88,6 +88,8 @@ public static class ServerConfigLoader
             NapCatWebSocketUrl = s.Str("napcat", "wsUrl", o.NapCatWebSocketUrl)!,
             NapCatAccessToken = s.Str("napcat", "token", o.NapCatAccessToken),
             SelfId = s.Str("napcat", "selfId", o.SelfId),
+            // 按平台的自身账号（多平台）：selfIds: { qq: "...", douyin: "..." }
+            SelfIds = s.MapSection("selfIds", o.SelfIds),
             SearchEnabled = s.Bool("search", "enabled", o.SearchEnabled),
             SearchBaseUrl = s.Str("search", "baseUrl", o.SearchBaseUrl),
             ExternalAllowSend = s.Bool("external", "allowSend", o.ExternalAllowSend),
@@ -96,11 +98,40 @@ public static class ServerConfigLoader
             ExternalForwardUrl = s.Str("external", "forwardUrl", o.ExternalForwardUrl),
             ExternalForwardToken = s.Str("external", "forwardToken", o.ExternalForwardToken),
 
+            // ── douyin（多平台通道接入 · 抖音 sidecar）──
+            Douyin = o.Douyin with
+            {
+                Enabled = s.Bool("douyin", "enabled", o.Douyin.Enabled),
+                Token = s.Str("douyin", "token", o.Douyin.Token),
+                AllowedSessions = (s.Str("douyin", "allowedSessions", string.Join(',', o.Douyin.AllowedSessions)) ?? string.Empty)
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                SendTimeoutMs = s.Int("douyin", "sendTimeoutMs", o.Douyin.SendTimeoutMs),
+                MaxTextLength = s.Int("douyin", "maxTextLength", o.Douyin.MaxTextLength),
+                QueryTimeoutMs = s.Int("douyin", "queryTimeoutMs", o.Douyin.QueryTimeoutMs),
+            },
+
             // ── llm ──
             LlmApiKey = s.Str("llm", "apiKey", o.LlmApiKey)!,
             LlmBaseUrl = s.Str("llm", "baseUrl", o.LlmBaseUrl)!,
             LlmModel = s.Str("llm", "model", o.LlmModel)!,
             LlmApiKind = s.ApiKind("llm", "apiKind", o.LlmApiKind),
+
+            // ── mail（多平台通道接入 · 邮件）──
+            Mail = o.Mail with
+            {
+                Enabled = s.Bool("mail", "enabled", o.Mail.Enabled),
+                InitialDays = s.Int("mail", "initialDays", o.Mail.InitialDays),
+                PollIntervalSeconds = s.Int("mail", "pollIntervalSeconds", o.Mail.PollIntervalSeconds),
+                MaxBodyChars = s.Int("mail", "maxBodyChars", o.Mail.MaxBodyChars),
+                SummaryEnabled = s.Bool("mail", "summaryEnabled", o.Mail.SummaryEnabled),
+                MaxConcurrentSummaries = s.Int("mail", "maxConcurrentSummaries", o.Mail.MaxConcurrentSummaries),
+                SummaryRetryCount = s.Int("mail", "summaryRetryCount", o.Mail.SummaryRetryCount),
+                PersonaDigest = s.Bool("mail", "personaDigest", o.Mail.PersonaDigest),
+                DigestMode = s.EnumValue("mail", "digestMode", o.Mail.DigestMode),
+                DigestIntervalMinutes = s.Int("mail", "digestIntervalMinutes", o.Mail.DigestIntervalMinutes),
+                DailyAtHour = s.Int("mail", "dailyAtHour", o.Mail.DailyAtHour),
+                ForwardRetryCount = s.Int("mail", "forwardRetryCount", o.Mail.ForwardRetryCount),
+            },
 
             // ── limits ──
             SendIntervalMs = s.Int("limits", "sendIntervalMs", o.SendIntervalMs),
@@ -192,5 +223,50 @@ public static class ServerConfigLoader
             && Enum.TryParse<LlmApiKind>(s.Value, ignoreCase: true, out var v)
                 ? v
                 : fallback;
+
+        /// <summary>任意枚举（大小写不敏感）；写错就回落默认值，不让一个拼写错误把服务卡住。</summary>
+        public TEnum EnumValue<TEnum>(string section, string key, TEnum fallback)
+            where TEnum : struct, Enum =>
+            Node(section, key) is YamlScalarNode s
+            && Enum.TryParse<TEnum>(s.Value, ignoreCase: true, out var v)
+                ? v
+                : fallback;
+
+        /// <summary>
+        /// 读一整节「标量 → 标量」的映射（如 <c>selfIds:</c>）。空节 / 全空值 → 回落。
+        /// </summary>
+        /// <remarks>
+        /// 与其它成员不同，这一节本身就是 map（不是 section→key→value 的两层查找）。
+        /// </remarks>
+        public IReadOnlyDictionary<string, string> MapSection(
+            string section, IReadOnlyDictionary<string, string> fallback)
+        {
+            if (!root.Children.TryGetValue(new YamlScalarNode(section), out var node) ||
+                node is not YamlMappingNode map)
+            {
+                return fallback;
+            }
+
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (keyNode, valueNode) in map.Children)
+            {
+                if (keyNode is not YamlScalarNode { Value: { } rawKey } ||
+                    valueNode is not YamlScalarNode { Value: { } rawValue })
+                {
+                    continue;
+                }
+
+                var key = rawKey.Trim();
+                var value = rawValue.Trim();
+                if (key.Length == 0 || value.Length == 0)
+                {
+                    continue;
+                }
+
+                result[key] = value;
+            }
+
+            return result.Count > 0 ? result : fallback;
+        }
     }
 }

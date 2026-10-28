@@ -1,7 +1,8 @@
 using System.Text.Json;
 using ZipperAIQQ.Agent.Security;
-using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Filtering;
+using ZipperAIQQ.Server.Access;
+using ZipperAIQQ.Server.Contacts;
 using ZipperAIQQ.Server.Dto;
 using ZipperAIQQ.Storage.Config;
 using ZipperAIQQ.Storage.Settings;
@@ -13,9 +14,12 @@ namespace ZipperAIQQ.Server.Api.Handlers;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 2026-10-23 起名单模型改为**黑白两份并存 + 同条目互斥**（问题记录 #20）：
-/// 旧键 <c>access.filterMode</c> / <c>access.filterEntries</c> 只用于惰性迁移与旧客户端兼容，
-/// 新键是 <c>access.whitelist</c> / <c>access.blacklist</c>。
+/// 2026-10-23 起名单模型改为**黑白两份并存 + 同条目互斥**（问题记录 #20）。
+/// </para>
+/// <para>
+/// **S3-C（决策四）起按平台**：入参 <c>platform</c>（缺省 <c>qq</c>，兼容旧客户端），
+/// 键统一走 <see cref="AccessKeys"/>，旧键只读回退（见 <see cref="AccessSettings"/>）。
+/// 候选人也按平台取（<see cref="IContactDirectoryRegistry"/>）—— 抖音的好友不能拿来当 QQ 的主人。
 /// </para>
 /// <para>
 /// 主人放行范围（私聊 + 主人所在的群）不在这里写 —— 由 <c>OwnerScopeResolver</c> 计算后
@@ -24,106 +28,89 @@ namespace ZipperAIQQ.Server.Api.Handlers;
 /// </remarks>
 public sealed class GetAccessAction : IApiAction
 {
-    public const string AdminsKey = "access.admins";
-    public const string WhitelistKey = "access.whitelist";
-    public const string BlacklistKey = "access.blacklist";
-
-    /// <summary>旧键：只保留读取（迁移用），新写入不再使用。</summary>
-    public const string LegacyModeKey = "access.filterMode";
-
-    /// <summary>旧键：只保留读取（迁移用）。</summary>
-    public const string LegacyEntriesKey = "access.filterEntries";
-
     private readonly IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
     private readonly IChatFilter _filter;
-    private readonly IContactDirectory _contacts;
+    private readonly IContactDirectoryRegistry _directories;
 
     public GetAccessAction(
         IRuntimeSettingsStore settings,
         IRoleResolver roles,
         IChatFilter filter,
-        IContactDirectory contacts)
+        IContactDirectoryRegistry directories)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(roles);
         ArgumentNullException.ThrowIfNull(filter);
-        ArgumentNullException.ThrowIfNull(contacts);
+        ArgumentNullException.ThrowIfNull(directories);
 
         _settings = settings;
         _roles = roles;
         _filter = filter;
-        _contacts = contacts;
+        _directories = directories;
     }
 
     public string Name => "getAccess";
 
     public async Task<object?> HandleAsync(JsonElement payload, CancellationToken ct)
     {
-        var adminsRaw = await _settings.GetAsync(AdminsKey, ct).ConfigureAwait(false);
-        var whitelistRaw = await _settings.GetAsync(WhitelistKey, ct).ConfigureAwait(false);
-        var blacklistRaw = await _settings.GetAsync(BlacklistKey, ct).ConfigureAwait(false);
-        var ownerId = await _settings.GetAsync(GetOwnerAction.OwnerKey, ct).ConfigureAwait(false);
+        var platform = AccessKeys.Normalize(PayloadReader.GetString(payload, "platform"));
 
-        var admins = string.IsNullOrWhiteSpace(adminsRaw)
-            ? (_roles is ConfiguredRoleResolver c ? c.Admins.ToList() : [])
-            : SplitList(adminsRaw);
+        var ownerId = await AccessSettings.GetOwnerAsync(_settings, platform, ct).ConfigureAwait(false);
 
-        var whitelist = SplitList(whitelistRaw);
-        var blacklist = SplitList(blacklistRaw);
-
-        // 惰性迁移：新键都为空时，把旧「模式 + 单名单」读成对应的一份
-        if (whitelist.Count == 0 && blacklist.Count == 0)
+        var admins = (await AccessSettings.GetAdminsAsync(_settings, platform, ct).ConfigureAwait(false)).ToList();
+        if (admins.Count == 0 && _roles is ConfiguredRoleResolver resolver)
         {
-            var legacyEntries = SplitList(await _settings.GetAsync(LegacyEntriesKey, ct).ConfigureAwait(false));
-            if (legacyEntries.Count > 0)
+            // 库里没写就展示启动配置里的那份（环境变量 / YAML 的 admins）
+            admins = resolver.Admins(platform).ToList();
+        }
+
+        var (whitelist, blacklist) = await AccessSettings
+            .GetListsAsync(_settings, platform, ct).ConfigureAwait(false);
+
+        // 候选人：该平台的联系人目录（抖音未接入时为空，不是"假装没有好友"）
+        var directory = _directories.For(platform);
+        IReadOnlyList<Channel.ContactInfo> friends = [];
+        IReadOnlyList<Channel.GroupInfo> groups = [];
+        if (directory is not null)
+        {
+            try
             {
-                var legacyMode = await _settings.GetAsync(LegacyModeKey, ct).ConfigureAwait(false);
-                if (string.Equals(legacyMode, nameof(ChatListMode.Whitelist), StringComparison.OrdinalIgnoreCase))
-                {
-                    whitelist = legacyEntries;
-                }
-                else
-                {
-                    blacklist = legacyEntries;
-                }
+                friends = await directory.GetFriendsAsync(ct).ConfigureAwait(false);
             }
-        }
+            catch
+            {
+                friends = [];
+            }
 
-        IReadOnlyList<ContactInfo> friends;
-        try
-        {
-            friends = await _contacts.GetFriendsAsync(ct).ConfigureAwait(false);
-        }
-        catch
-        {
-            friends = [];
-        }
-
-        // 名单条目的候选需要群会话（#26）：好友填不了 qq:g…
-        IReadOnlyList<GroupInfo> groups;
-        try
-        {
-            groups = await _contacts.GetGroupsAsync(ct).ConfigureAwait(false);
-        }
-        catch
-        {
-            groups = [];
+            try
+            {
+                groups = await directory.GetGroupsAsync(ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                groups = [];
+            }
         }
 
         return new
         {
+            platform,
+            // 平台下拉框的数据源：有联系人目录 = 人员可配的平台（**邮件不在此列**，它只收不回）
+            platforms = _directories.Platforms,
+
             ownerId,
             admins,
 
-            // 新模型：两份名单 + 主人放行范围
-            whitelist,
-            blacklist,
-            alwaysAllow = _filter.AlwaysAllow,
+            whitelist = whitelist.ToList(),
+            blacklist = blacklist.ToList(),
+            alwaysAllow = _filter.AlwaysAllow(platform),
 
             // 旧字段（B4 之前的老客户端还在用）：按「白名单优先」折算成单份
-            filterMode = whitelist.Count > 0 ? nameof(ChatListMode.Whitelist) : nameof(ChatListMode.Blacklist),
-            filterEntries = whitelist.Count > 0 ? whitelist : blacklist,
+            filterMode = whitelist.Count > 0
+                ? nameof(ChatListMode.Whitelist)
+                : nameof(ChatListMode.Blacklist),
+            filterEntries = whitelist.Count > 0 ? whitelist.ToList() : blacklist.ToList(),
             filterCount = whitelist.Count + blacklist.Count,
 
             candidates = friends
@@ -139,16 +126,11 @@ public sealed class GetAccessAction : IApiAction
                 {
                     groupId = g.GroupId,
                     name = g.Name,
-                    sessionId = $"qq:g{g.GroupId}",
+                    sessionId = $"{platform}:g{g.GroupId}",
                 })
                 .ToList(),
         };
     }
-
-    internal static List<string> SplitList(string? raw) =>
-        string.IsNullOrWhiteSpace(raw)
-            ? []
-            : raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 }
 
 /// <summary>
@@ -156,16 +138,16 @@ public sealed class GetAccessAction : IApiAction
 /// </summary>
 /// <remarks>
 /// <para>
-/// 新 payload：<c>{ "admins": ["123"], "whitelist": ["qq:p123"], "blacklist": ["qq:g456"] }</c>，
-/// 三者都可单独给。
+/// payload：<c>{ "platform": "qq", "admins": ["123"], "whitelist": ["qq:p123"], "blacklist": ["qq:g456"] }</c>，
+/// 都可单独给；<c>platform</c> 缺省 <c>qq</c>。
 /// </para>
 /// <para>
-/// 旧 payload（<c>filterMode</c> + <c>filterEntries</c>）继续接受：折算成单份名单，另一份清空 ——
-/// 这样老客户端在 B4 上线前仍然可用。
+/// 旧 payload（<c>filterMode</c> + <c>filterEntries</c>）继续接受：折算成该平台的单份名单，另一份清空。
 /// </para>
 /// <para>
 /// <b>管理员 × 黑名单冲突</b>（问题记录 #23）：首次提交若发现管理员在黑名单里，返回 <c>409</c>
 /// 并列出冲突账号；带 <c>confirmDemoteAdmins: true</c> 重发则**剥夺管理员并拉黑**。
+/// 冲突判定**只看同一平台**：QQ 拉黑某人，不该影响他在抖音的管理员身份。
 /// </para>
 /// </remarks>
 public sealed class SetAccessAction : IApiAction
@@ -201,6 +183,7 @@ public sealed class SetAccessAction : IApiAction
             throw new ApiException(ApiResponse.BadRequest, "payload 必须是对象。");
         }
 
+        var platform = AccessKeys.Normalize(PayloadReader.GetString(payload, "platform"));
         var changed = new List<string>();
 
         // ── ① 管理员 ──
@@ -225,6 +208,13 @@ public sealed class SetAccessAction : IApiAction
             ? ReadStringArray(entriesElement, "filterEntries")
             : null;
 
+        // 有没有提交"可识别字段"：决定末尾"什么都没写"时是 400（垃圾 payload）还是 skipped（没变化）
+        var sawKnownField = admins is not null
+            || whitelistInput is not null
+            || blacklistInput is not null
+            || legacyMode is not null
+            || legacyEntries is not null;
+
         if (legacyMode is not null || legacyEntries is not null)
         {
             if (whitelistInput is not null || blacklistInput is not null)
@@ -234,11 +224,13 @@ public sealed class SetAccessAction : IApiAction
             }
 
             var mode = legacyMode
-                ?? (_filter.WhitelistCount > 0 ? nameof(ChatListMode.Whitelist) : nameof(ChatListMode.Blacklist));
+                ?? (_filter.WhitelistCount(platform) > 0
+                    ? nameof(ChatListMode.Whitelist)
+                    : nameof(ChatListMode.Blacklist));
             var entries = legacyEntries
                 ?? (mode == nameof(ChatListMode.Whitelist)
-                    ? _filter.Whitelist.ToList()
-                    : _filter.Blacklist.ToList());
+                    ? _filter.Whitelist(platform).ToList()
+                    : _filter.Blacklist(platform).ToList());
 
             // 旧语义是「单模式 + 单名单」：写进对应那份，另一份清空
             if (mode == nameof(ChatListMode.Whitelist))
@@ -253,8 +245,8 @@ public sealed class SetAccessAction : IApiAction
             }
         }
 
-        var nextWhitelist = whitelistInput ?? _filter.Whitelist.ToList();
-        var nextBlacklist = blacklistInput ?? _filter.Blacklist.ToList();
+        var nextWhitelist = whitelistInput ?? _filter.Whitelist(platform).ToList();
+        var nextBlacklist = blacklistInput ?? _filter.Blacklist(platform).ToList();
 
         var overlap = nextWhitelist
             .Intersect(nextBlacklist, StringComparer.OrdinalIgnoreCase)
@@ -265,11 +257,11 @@ public sealed class SetAccessAction : IApiAction
                 $"同一条目不能同时在白名单与黑名单：{string.Join("、", overlap)}");
         }
 
-        // ── ③ 管理员 × 黑名单冲突（#23）──
+        // ── ③ 管理员 × 黑名单冲突（#23，仅同平台）──
         if (admins is not null)
         {
             var conflicts = admins
-                .Where(a => nextBlacklist.Any(e => IsPrivateSessionOf(e, a)))
+                .Where(a => nextBlacklist.Any(e => IsPrivateSessionOf(platform, e, a)))
                 .ToList();
 
             if (conflicts.Count > 0)
@@ -283,17 +275,11 @@ public sealed class SetAccessAction : IApiAction
                         ApiResponse.Conflict,
                         $"以下管理员在黑名单里：{string.Join("、", conflicts)}。" +
                         "确认后将剥夺其管理员身份并拉黑；请带 confirmDemoteAdmins=true 重发。",
-                        new { code = "admin_in_blacklist", admins = conflicts });
+                        new { code = "admin_in_blacklist", admins = conflicts, platform });
                 }
 
                 admins = admins.Except(conflicts, StringComparer.OrdinalIgnoreCase).ToList();
-                await _settings.SetAsync(GetAccessAction.AdminsKey, string.Join(',', admins), ct)
-                    .ConfigureAwait(false);
-
-                if (_roles is ConfiguredRoleResolver resolver)
-                {
-                    resolver.SetAdmins(admins);
-                }
+                await PersistAdminsAsync(platform, admins, ct).ConfigureAwait(false);
 
                 await _configs
                     .AppendAuditAsync("demoteAdmin", "http-client", string.Join(",", conflicts), ct)
@@ -304,23 +290,17 @@ public sealed class SetAccessAction : IApiAction
             else
             {
                 // #10：与库里当前管理员一致 → 不写、不审计（但不要提前返回：名单可能还在后面要写）
-                var storedAdmins = GetAccessAction.SplitList(
-                    await _settings.GetAsync(GetAccessAction.AdminsKey, ct).ConfigureAwait(false));
+                var currentAdmins = (await AccessSettings
+                    .GetAdminsAsync(_settings, platform, ct).ConfigureAwait(false)).ToList();
 
-                var currentAdmins = storedAdmins.Count > 0
-                    ? storedAdmins
-                    : ((_roles as ConfiguredRoleResolver)?.Admins ?? []).ToList();
+                if (currentAdmins.Count == 0 && _roles is ConfiguredRoleResolver resolver)
+                {
+                    currentAdmins = resolver.Admins(platform).ToList();
+                }
 
                 if (!SameSet(admins, currentAdmins))
                 {
-                    await _settings.SetAsync(GetAccessAction.AdminsKey, string.Join(',', admins), ct)
-                        .ConfigureAwait(false);
-
-                    if (_roles is ConfiguredRoleResolver resolver)
-                    {
-                        resolver.SetAdmins(admins);
-                    }
-
+                    await PersistAdminsAsync(platform, admins, ct).ConfigureAwait(false);
                     changed.Add($"admins={admins.Count}");
                 }
             }
@@ -331,33 +311,43 @@ public sealed class SetAccessAction : IApiAction
         {
             // #10：运行中的名单与提交值一致 → 跳过（列表没变就不该每次写审计）
             var listsUnchanged =
-                SameSet(nextWhitelist, _filter.Whitelist) &&
-                SameSet(nextBlacklist, _filter.Blacklist);
+                SameSet(nextWhitelist, _filter.Whitelist(platform)) &&
+                SameSet(nextBlacklist, _filter.Blacklist(platform));
 
             if (listsUnchanged)
             {
-                // 名单没变：跳过写库与审计，但仍要回落「有没有别的字段变更」
                 if (changed.Count == 0)
                 {
-                    return new { updated = 0, skipped = true, changed };
+                    return new { updated = 0, skipped = true, changed, platform };
                 }
             }
             else
             {
-                await _settings.SetAsync(GetAccessAction.WhitelistKey, string.Join(',', nextWhitelist), ct)
-                    .ConfigureAwait(false);
-                await _settings.SetAsync(GetAccessAction.BlacklistKey, string.Join(',', nextBlacklist), ct)
-                    .ConfigureAwait(false);
+                await _settings.SetAsync(
+                    AccessKeys.Whitelist(platform), string.Join(',', nextWhitelist), ct).ConfigureAwait(false);
+                await _settings.SetAsync(
+                    AccessKeys.Blacklist(platform), string.Join(',', nextBlacklist), ct).ConfigureAwait(false);
 
-                // 清掉旧键：否则下次读取会拿旧值做「惰性迁移」，看起来像名单自己变回来了
-                await _settings.SetAsync(GetAccessAction.LegacyModeKey, string.Empty, ct).ConfigureAwait(false);
-                await _settings.SetAsync(GetAccessAction.LegacyEntriesKey, string.Empty, ct).ConfigureAwait(false);
+                // 旧键处理（仅 qq）：
+                //  · 名单**镜像写**旧的 access.whitelist / blacklist —— 回退到旧版程序时名单不凭空消失，
+                //    且"用户显式清空"也能被旧键如实表达（旧键同样写成空串，不会把更旧的条目复活）。
+                //  · 更旧的「模式 + 单名单」（filterMode / filterEntries）必须**清空**：
+                //    否则两份新键都空时，读取会回退到那对旧键，看起来像"名单自己变回来了"。
+                if (AccessKeys.HasLegacyKeys(platform))
+                {
+                    await _settings.SetAsync(
+                        AccessKeys.LegacyWhitelistKey, string.Join(',', nextWhitelist), ct).ConfigureAwait(false);
+                    await _settings.SetAsync(
+                        AccessKeys.LegacyBlacklistKey, string.Join(',', nextBlacklist), ct).ConfigureAwait(false);
+                    await _settings.SetAsync(AccessKeys.LegacyFilterModeKey, string.Empty, ct).ConfigureAwait(false);
+                    await _settings.SetAsync(AccessKeys.LegacyFilterEntriesKey, string.Empty, ct).ConfigureAwait(false);
+                }
 
-                _filter.Update(new ChatFilterOptions
+                _filter.Update(platform, new ChatFilterOptions
                 {
                     Whitelist = nextWhitelist,
                     Blacklist = nextBlacklist,
-                    AlwaysAllow = _filter.AlwaysAllow.ToList(),
+                    AlwaysAllow = _filter.AlwaysAllow(platform).ToList(),
                 });
 
                 changed.Add($"whitelist={nextWhitelist.Count}/blacklist={nextBlacklist.Count}");
@@ -366,15 +356,39 @@ public sealed class SetAccessAction : IApiAction
 
         if (changed.Count == 0)
         {
+            // 提交了可识别字段但值没变化（例如客户端把管理员原样再存一次）→ **不是错误**，
+            // 报 200 + skipped。只有"一个可识别字段都没带"才是真的坏 payload。
+            if (sawKnownField)
+            {
+                return new { updated = 0, skipped = true, changed, platform };
+            }
+
             throw new ApiException(ApiResponse.BadRequest,
                 "没有可写入的字段（admins / whitelist / blacklist / filterMode / filterEntries）。");
         }
 
         await _configs
-            .AppendAuditAsync("setAccess", "http-client", string.Join(",", changed), ct)
+            .AppendAuditAsync("setAccess", "http-client", $"{platform}:{string.Join(",", changed)}", ct)
             .ConfigureAwait(false);
 
-        return new { updated = changed.Count, changed, skipped = false };
+        return new { updated = changed.Count, changed, skipped = false, platform };
+    }
+
+    /// <summary>写管理员（新键）+ 让运行中的解析器立即生效。</summary>
+    private async Task PersistAdminsAsync(string platform, List<string> admins, CancellationToken ct)
+    {
+        await _settings.SetAsync(AccessKeys.Admins(platform), string.Join(',', admins), ct).ConfigureAwait(false);
+
+        if (_roles is ConfiguredRoleResolver resolver)
+        {
+            resolver.SetAdmins(platform, admins);
+        }
+
+        if (AccessKeys.HasLegacyKeys(platform))
+        {
+            // 旧键也写一份：万一回退到旧版程序，管理员表不会突然变空
+            await _settings.SetAsync(AccessKeys.LegacyAdminsKey, string.Join(',', admins), ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>两个集合是否等价（忽略顺序与大小写）。</summary>
@@ -382,9 +396,9 @@ public sealed class SetAccessAction : IApiAction
         new HashSet<string>(a, StringComparer.OrdinalIgnoreCase)
             .SetEquals(b);
 
-    /// <summary>条目是否是某账号的私聊会话（<c>qq:p123</c>）。</summary>
-    private static bool IsPrivateSessionOf(string entry, string userId) =>
-        entry.EndsWith(":p" + userId, StringComparison.OrdinalIgnoreCase);
+    /// <summary>条目是否是「该平台上某账号的私聊会话」（<c>qq:p123</c>）。</summary>
+    private static bool IsPrivateSessionOf(string platform, string entry, string userId) =>
+        string.Equals(entry.Trim(), $"{platform}:p{userId}", StringComparison.OrdinalIgnoreCase);
 
     private static string ParseMode(string? raw)
     {

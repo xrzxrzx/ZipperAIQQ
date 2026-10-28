@@ -111,10 +111,18 @@ public interface IMessageStore
     /// <param name="keyword">关键词（LIKE 模糊匹配）。</param>
     /// <param name="limit">最多几条。</param>
     /// <param name="excludeSessionId">要排除的会话（通常是当前会话），可为 null。</param>
+    /// <param name="platform">
+    /// 只看某个平台（<c>qq</c> / <c>douyin</c>）；<c>null</c> = 全部平台。
+    /// </param>
+    /// <remarks>
+    /// S3-G / 决策十：多平台后"跨会话搜索"天然是跨平台的，所以要能按平台收窄 ——
+    /// 模型答"QQ 群里谁提过 X"时不该被抖音消息干扰。
+    /// </remarks>
     Task<IReadOnlyList<StoredMessage>> SearchAcrossSessionsAsync(
         string keyword,
         int limit,
         string? excludeSessionId = null,
+        string? platform = null,
         CancellationToken ct = default);
 
     /// <summary>会话概览（按最后消息时间倒序），供 M2 客户端列出"当前在接收的聊天"。</summary>

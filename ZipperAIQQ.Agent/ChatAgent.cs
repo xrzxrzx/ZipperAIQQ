@@ -54,7 +54,13 @@ public sealed class ChatAgent : IChatAgent
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
+
+    /// <summary>按平台查主人（Server 用 AccessSettings 实现）；不传时退回旧键逻辑。</summary>
+    private readonly IOwnerLookup? _ownerLookup;
     private readonly WorkspacePathResolver _workspace;
+
+    /// <summary>按平台取联系人目录（S3-E）：抖音专用工具靠它判断"这个平台接没接"。</summary>
+    private readonly Channel.IPlatformContacts? _platformContacts;
     private readonly int _fileMaxBytes;
     private readonly IScheduleStore _schedules;
     private readonly ChatAgentOptions _options;
@@ -101,7 +107,9 @@ public sealed class ChatAgent : IChatAgent
         _configs = configs;
         _settings = settings;
         _roles = deps.Roles;
+        _ownerLookup = deps.OwnerLookup;
         _workspace = deps.Workspace;
+        _platformContacts = deps.PlatformContacts;
         _fileMaxBytes = deps.FileMaxBytes;
         _schedules = deps.Schedules;
         _options = deps.Options;
@@ -304,7 +312,8 @@ public sealed class ChatAgent : IChatAgent
         // 能力声明：工具按角色隐藏时，模型会**幻觉**「我做了」——
         // 实测：普通成员被要求写文件，它回了「test2.txt 建好了」，实际什么都没建。
         // 所以必须**告诉它没有这个能力**，而不是让它自己猜（FR-6.4 的另一半）。
-        var capabilityNote = BuildCapabilityNote(_roles.Resolve(request.Sender.UserId));
+        var capabilityNote = BuildCapabilityNote(
+            _roles.Resolve(request.Sender.UserId, request.Chat.Platform));
         if (capabilityNote.Length > 0)
         {
             reinject.AppendLine().AppendLine(capabilityNote);
@@ -317,23 +326,31 @@ public sealed class ChatAgent : IChatAgent
         // 关系段：光有"主人是 10001"这个号码，模型认不出这个人是谁
         // （实测它只会照着念号码，不会联想到"这是拉链"）—— 所以把**昵称 + 当前身份**都给出来
         reinject.AppendLine();
-        reinject.Append(await BuildRelationshipNoteAsync(request.Sender.UserId, ct).ConfigureAwait(false));
+        reinject.Append(await BuildRelationshipNoteAsync(request.Sender.UserId, request.Chat.Platform, ct).ConfigureAwait(false));
 
-        // 自我身份（问题记录 02 #3/#4）：模型不知道自己的 QQ 号，
+        // 自我身份（问题记录 02 #3/#4）：模型不知道自己的账号，
         // 就会把「A 戳了 B」当成「有人在戳我」。
-        var selfId = _channel.SelfId ?? _options.SelfId;
+        // ⚠️ 按会话所在平台取（S3-A）：多平台下 QQ 号不能当成抖音的"我自己"。
+        var selfId = _channel.SelfIdFor(request.Chat.Platform) ?? _options.SelfId;
         if (!string.IsNullOrWhiteSpace(selfId))
         {
             reinject.AppendLine().AppendLine()
-                    .AppendLine($"【你自己是谁】你的 QQ 号是 {selfId}；群里/消息里出现这个号，指的就是你本人。");
+                    .AppendLine($"【你自己是谁】你在 {PlatformLabel(request.Chat.Platform)} 上的账号是 {selfId}；" +
+                                "这条会话里出现这个号，指的就是你本人。");
         }
+
+        // 当前平台（S3-G / 决策十）：多平台后模型必须知道自己"在哪边说话"，
+        // 否则用户问"你在哪"它答不上来，查历史时也分不清条目属于哪个平台。
+        reinject.AppendLine()
+                .AppendLine($"【你现在的平台】{request.Chat.Platform}" +
+                            $"（会话 {request.Chat.SessionId}）。跨平台查到别的会话时，结果前面会标 [会话] 来源。");
 
         // 人设守卫（第 20 项）：每次重注入都带，位置紧贴当前消息 ——
         // 长对话里人设会被上下文稀释，靠这一条把它拉回来。
         // 主人有例外（问题记录 02 #2）：主人要求改设定/称呼/扮演时照做。
-        var ownerId = await _settings.GetAsync("owner.userId", ct).ConfigureAwait(false);
-        var isOwner = !string.IsNullOrWhiteSpace(ownerId) &&
-                      string.Equals(request.Sender.UserId, ownerId, StringComparison.Ordinal);
+        // ⚠️ 用**角色解析**判主人（S3-C：每平台一套主人），不再读写死的 "owner.userId" ——
+        //    那个键只代表 QQ，抖音会话里会把它的人也当主人。
+        var isOwner = _roles.Resolve(request.Sender.UserId, request.Chat.Platform) == Role.Owner;
         reinject.AppendLine().AppendLine(PromptRules.PersonaGuard(isOwner));
 
         var messages = new List<ChatMessage>
@@ -540,6 +557,8 @@ public sealed class ChatAgent : IChatAgent
     /// <remarks>
     /// 不可用的工具**连 schema 都不给模型** —— 比「看得见但调不动」更省 token，也少试探。
     /// 但可见性**不是**唯一防线：每个文件工具执行前还会再过一次门禁。
+    /// 过滤口径三层：**平台归属 → 策略开关 → 角色**。平台放最前，是因为它由会话本身决定，
+    /// 不该靠人工去策略页里关（一台机器同时接两个平台时那种关法必然关错）。
     /// </remarks>
     private List<AITool> BuildTools(AgentRunRequest request, AIFunction sendMessage)
     {
@@ -547,7 +566,7 @@ public sealed class ChatAgent : IChatAgent
         {
             Chat = request.Chat,
             Sender = request.Sender,
-            Role = _roles.Resolve(request.Sender.UserId),
+            Role = _roles.Resolve(request.Sender.UserId, request.Chat.Platform),
         };
 
         var tools = new List<AITool>
@@ -586,9 +605,25 @@ public sealed class ChatAgent : IChatAgent
             tools.AddRange(WebSearchTool.Create(_webSearch));
         }
 
+        // 平台专用工具（决策五 / S3-E）：抖音侧要单独的数据源（sidecar 的 query.contacts），
+        // 所以按平台取目录；取不到（抖音未接入）这组工具**不出现**，而不是出现后报错。
+        if (_platformContacts is not null)
+        {
+            tools.AddRange(DouyinTools.Create(_platformContacts, context, _policy));
+        }
+
         var allowed = new List<AITool>(tools.Count);
         foreach (var tool in tools)
         {
+            // 平台专用工具（戳一戳 / 改签名 / NapCat API 查询）只在自己的平台上给模型看。
+            // 为什么必须在**可见性**这层拦：抖音会话下复合通道的 IContactDirectory 是转发
+            // QQ 主平台的，工具会被原样塞进列表 —— 模型于是以为"抖音也能戳一戳"，
+            // 调用失败了它还会把失败当成功回给用户（幻觉成功）。连 schema 都不给，就没有这个念头。
+            if (!ToolCatalog.IsAvailableOn(tool.Name, request.Chat.Platform))
+            {
+                continue;
+            }
+
             var capability = ToolCatalog.CapabilityOf(tool.Name);
             var fallback = capability is null ? Role.Normal : PermissionGate.DefaultRoleOf(capability.Value);
 
@@ -638,28 +673,65 @@ public sealed class ChatAgent : IChatAgent
     /// 「拉链」对应起来，于是对话里完全不认人（实测）。
     /// 所以这里同时给**昵称**和**当前身份判断**。
     /// </remarks>
-    private async Task<string> BuildRelationshipNoteAsync(string senderId, CancellationToken ct)
+    private async Task<string> BuildRelationshipNoteAsync(
+        string senderId,
+        string platform,
+        CancellationToken ct)
     {
         string? ownerId = null;
         string? ownerName = null;
 
-        try
+        // 优先走注入的 IOwnerLookup（Server 用 AccessSettings 实现：每平台一套 owner + 旧键回退）。
+        // 老逻辑直接读死键 owner.userId —— 那只代表 QQ，抖音会话里主人永远认不出来（2026-10-28 实测）。
+        if (_ownerLookup is not null)
         {
-            ownerId = await _settings.GetAsync("owner.userId", ct).ConfigureAwait(false);
-            ownerName = await _settings.GetAsync("owner.name", ct).ConfigureAwait(false);
+            try
+            {
+                (ownerId, ownerName) = await _ownerLookup.GetAsync(platform, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                // 查不到就当没设主人，不影响这一轮对话
+            }
         }
-        catch
+        else
         {
-            // 读不到就当没设主人
+            try
+            {
+                ownerId = await _settings.GetAsync("owner.userId", ct).ConfigureAwait(false);
+                ownerName = await _settings.GetAsync("owner.name", ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                // 读不到就当没设主人
+            }
         }
 
         var hasOwner = !string.IsNullOrWhiteSpace(ownerId);
-        var isOwner = hasOwner && string.Equals(senderId, ownerId, StringComparison.Ordinal);
+
+        // 「是不是主人」以**角色解析**为准（每平台一套）；id 相等只是兜底，
+        // 万一角色还没加载出来也能认出本人。
+        var isOwner = hasOwner &&
+            (string.Equals(senderId, ownerId, StringComparison.Ordinal) ||
+             _roles.Resolve(senderId, platform) == Role.Owner);
+
         var ownerLabel = string.IsNullOrWhiteSpace(ownerName) ? "（未命名）" : ownerName;
 
         var sb = new StringBuilder();
         sb.AppendLine("【你和当前说话的人的关系】");
         sb.Append(PromptRules.Relationship(hasOwner, isOwner, ownerLabel, ownerId));
+
+        // 明确"当前这个人的身份"：只写"主人是 X"不够 —— 换个会话模型就分不清眼前这位是谁，
+        // 于是把主人当陌生人（2026-10-28 用户实测：其他会话里"不认识我"）。
+        var role = _roles.Resolve(senderId, platform);
+        var roleLabel = role switch
+        {
+            Role.Owner => "主人（你自己人，要认得、要有称呼）",
+            Role.Admin => "管理员（可以指挥你的常客，但不是主人）",
+            _ => "普通成员 / 陌生人（按人设正常应对，别当成熟人）",
+        };
+
+        sb.AppendLine().Append($"【当前说话的人】{senderId} —— 在这套配置里是：{roleLabel}");
 
         return sb.ToString().TrimEnd();
     }
@@ -746,6 +818,18 @@ public sealed class ChatAgent : IChatAgent
     /// 工具不可见时**必须显式告知**，否则模型会编造"已完成" ——
     /// 这是实测抓到的：普通成员要求写文件，它回「test2.txt 建好了」，工作区空空如也。
     /// </remarks>
+    /// <summary>平台的中文名（只用于给模型看的文字，未登记的平台原样返回）。</summary>
+    /// <remarks>
+    /// 与客户端展示名分开维护是有意的：这是**提示词**里的字，改了会影响模型措辞；
+    /// 客户端文案变了不该牵动模型的自我认知。
+    /// </remarks>
+    private static string PlatformLabel(string platform) => platform?.ToLowerInvariant() switch
+    {
+        "qq" => "QQ",
+        "douyin" => "抖音",
+        _ => string.IsNullOrWhiteSpace(platform) ? "未知平台" : platform,
+    };
+
     private string BuildCapabilityNote(Role role)
     {
         var missing = new List<string>();
@@ -856,7 +940,11 @@ public sealed class ChatAgent : IChatAgent
 
         try
         {
-            await _store.AppendOutgoingAsync(outgoing, _channel.SelfId ?? _options.SelfId ?? BotUserId, BeijingTime.Now, ct).ConfigureAwait(false);
+            await _store.AppendOutgoingAsync(
+                outgoing,
+                _channel.SelfIdFor(outgoing.Chat.Platform) ?? _options.SelfId ?? BotUserId,
+                BeijingTime.Now,
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

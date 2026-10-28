@@ -39,7 +39,7 @@ public sealed partial class SessionsPage : Page
         var toPicker = new DatePicker { Header = "结束日期", Date = today };
         var unlimited = new CheckBox { Content = "不限时间（导出当前已加载）" };
 
-        var panel = new StackPanel { Spacing = 10, MinWidth = 300 };
+        var panel = DialogTheme.Panel(minWidth: 300);
         panel.Children.Add(fromPicker);
         panel.Children.Add(toPicker);
         panel.Children.Add(unlimited);
@@ -54,6 +54,8 @@ public sealed partial class SessionsPage : Page
             DefaultButton = ContentDialogButton.Primary,
         };
 
+        DialogTheme.Apply(dialog);
+
         if (await dialog.ShowAsync() != ContentDialogResult.Primary)
         {
             return;
@@ -67,23 +69,29 @@ public sealed partial class SessionsPage : Page
                     new DateTimeOffset(fromPicker.Date.Date, TimeSpan.Zero).ToLocalTime(),
                     new DateTimeOffset(toPicker.Date.Date.AddDays(1).AddMilliseconds(-1), TimeSpan.Zero).ToLocalTime());
 
-            await new ContentDialog
+            var done = new ContentDialog
             {
                 XamlRoot = XamlRoot,
                 Title = "已导出",
                 Content = file,
                 CloseButtonText = "好",
-            }.ShowAsync();
+            };
+
+            DialogTheme.Apply(done);
+            await done.ShowAsync();
         }
         catch (Exception ex)
         {
-            await new ContentDialog
+            var failed = new ContentDialog
             {
                 XamlRoot = XamlRoot,
                 Title = "导出失败",
                 Content = ex.Message,
                 CloseButtonText = "好",
-            }.ShowAsync();
+            };
+
+            DialogTheme.Apply(failed);
+            await failed.ShowAsync();
         }
     }
 

@@ -21,8 +21,38 @@ public sealed partial class FilterableComboBox : UserControl
 
         // 聚焦时恢复完整候选：选中一次后 ItemsSource 会被搜成只剩一项，
         // 不重置的话第二次点开就"下拉不了"（用户实测反馈）。
-        Box.GotFocus += (_, _) => ResetItems();
+        //
+        // 2026-10-28：**聚焦就展开候选列表**。之前只有"打字"才弹建议，
+        // 点进去什么都不显示，用户以为"下拉框没了"。现在点一下就能看到全部候选，
+        // 想筛再打字 —— 既像下拉，又保留模糊搜索。
+        Box.GotFocus += (_, _) =>
+        {
+            ResetItems();
+            OpenSuggestions();
+        };
+
         Box.Loaded += (_, _) => ResetItems();
+
+        // 点右侧放大镜：没输入任何字时也当"打开下拉"处理（否则点了像没反应）
+        Box.QuerySubmitted += (_, args) =>
+        {
+            if (string.IsNullOrWhiteSpace(args.QueryText))
+            {
+                ResetItems();
+                OpenSuggestions();
+            }
+        };
+    }
+
+    /// <summary>展开候选列表（AutoSuggestBox 的"下拉"就是建议浮层）。</summary>
+    private void OpenSuggestions()
+    {
+        if (_all.Count == 0)
+        {
+            return;      // 没有候选就别弹一个空框
+        }
+
+        Box.IsSuggestionListOpen = true;
     }
 
     private void ResetItems()
