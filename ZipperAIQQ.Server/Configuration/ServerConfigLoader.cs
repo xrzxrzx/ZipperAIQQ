@@ -39,9 +39,29 @@ public static class ServerConfigLoader
         if (!File.Exists(path))
         {
             logger?.Information("没有配置文件 {Path}，沿用环境变量", path);
+            options.ValidateRequired();
             return options;
         }
 
+        var (merged, loaded) = ReadFromFile(path, options, logger);
+        merged.ValidateRequired();
+
+        if (loaded)
+        {
+            logger?.Information("已加载配置文件 {Path}", path);
+        }
+
+        return merged;
+    }
+
+    /// <summary>
+    /// 读 YAML 并覆盖环境变量；**读失败只告警并回退**（配置写错不该让服务起不来）。
+    /// 必需项校验放在调用方 —— 回退后的配置同样要校验。
+    /// </summary>
+    /// <returns>合并结果，以及「文件是否真的被读入」（日志只在读入时打"已加载"）。</returns>
+    private static (ServerOptions Options, bool Loaded) ReadFromFile(
+        string path, ServerOptions fallback, ILogger? logger)
+    {
         try
         {
             var yaml = new YamlStream();
@@ -53,21 +73,16 @@ public static class ServerConfigLoader
             if (yaml.Documents.Count == 0 || yaml.Documents[0].RootNode is not YamlMappingNode root)
             {
                 logger?.Warning("配置文件 {Path} 是空的或格式不对，沿用环境变量", path);
-                return options;
+                return (fallback, false);
             }
 
-            var merged = Apply(root, options);
-
-            // 敏感值不打印，只报"来自文件"
-            logger?.Information("已加载配置文件 {Path}", path);
-
-            return merged;
+            return (Apply(root, fallback), true);
         }
         catch (Exception ex)
         {
             // 配置写错不该让服务起不来 —— 明确告警后沿用环境变量
             logger?.Warning(ex, "读取配置文件 {Path} 失败，沿用环境变量", path);
-            return options;
+            return (fallback, false);
         }
     }
 

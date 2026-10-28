@@ -115,25 +115,30 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
 
         foreach (var platform in directories.Platforms)
         {
-            var ownerId = await ZipperAIQQ.Server.Access.AccessSettings
-                .GetOwnerAsync(settingsStore, platform, CancellationToken.None);
-            if (!string.IsNullOrWhiteSpace(ownerId) && resolver is not null)
+            var (ownerFound, ownerId, _) = await ZipperAIQQ.Server.Access.AccessSettings
+                .TryGetOwnerAsync(settingsStore, platform, CancellationToken.None);
+            if (ownerFound && resolver is not null)
             {
+                // 显式清空也要应用（ownerId 为 null = 清掉运行时的主人）
                 resolver.SetOwner(platform, ownerId);
-                Log.Logger.Information("{Platform} 主人已加载：{Owner}", platform, ownerId);
+                Log.Logger.Information(
+                    "{Platform} 主人已加载：{Owner}",
+                    platform,
+                    string.IsNullOrWhiteSpace(ownerId) ? "(已清空)" : ownerId);
             }
 
-            var admins = await ZipperAIQQ.Server.Access.AccessSettings
-                .GetAdminsAsync(settingsStore, platform, CancellationToken.None);
-            if (admins.Count > 0 && resolver is not null)
+            var (adminsFound, admins) = await ZipperAIQQ.Server.Access.AccessSettings
+                .TryGetAdminsAsync(settingsStore, platform, CancellationToken.None);
+            if (adminsFound && resolver is not null)
             {
+                // 空列表也是有效状态：用户清空管理员后，重启不能把旧名单带回来
                 resolver.SetAdmins(platform, admins);
                 Log.Logger.Information("{Platform} 管理员已加载：{Count} 人", platform, admins.Count);
             }
 
-            var (whitelist, blacklist) = await ZipperAIQQ.Server.Access.AccessSettings
-                .GetListsAsync(settingsStore, platform, CancellationToken.None);
-            if (whitelist.Count > 0 || blacklist.Count > 0)
+            var (listsFound, whitelist, blacklist) = await ZipperAIQQ.Server.Access.AccessSettings
+                .TryGetListsAsync(settingsStore, platform, CancellationToken.None);
+            if (listsFound)
             {
                 filter.Update(platform, new ZipperAIQQ.Channel.Filtering.ChatFilterOptions
                 {

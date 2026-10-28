@@ -110,7 +110,21 @@ public sealed class MailPipeline : BackgroundService
 
                 // 每轮对账：开关开 → 起源 + 起泵；开关关 → 停泵 + 停源。
                 // 不用"启动时判断一次"——那样客户端点了开关还得重启服务。
-                await EnsureSourceStateAsync(stoppingToken).ConfigureAwait(false);
+                // 源启动失败（读账号时数据库抖动等）只影响本轮：下一轮继续重试，
+                // 不能让它把 BackgroundService 带崩（否则摘要/转发会永久停摆到下次重启）。
+                try
+                {
+                    await EnsureSourceStateAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error(ex, "邮件源启动失败，等待下一轮巡检重试");
+                    continue;
+                }
 
                 if (!_switch.Enabled)
                 {

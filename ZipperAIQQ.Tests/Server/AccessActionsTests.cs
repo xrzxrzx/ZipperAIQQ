@@ -204,6 +204,56 @@ public sealed class AccessActionsTests : IAsyncLifetime
         Assert.Equal(Role.Owner, _roles.Resolve("dy-9", "douyin"));
     }
 
+    // ─────────────────────────── 显式清空 ≠ 从未配置 ───────────────────────────
+
+    [Fact]
+    public async Task Cleared_admins_are_not_revived_by_legacy_key()
+    {
+        await _settings.SetAsync(AccessKeys.LegacyAdminsKey, "10001", CancellationToken.None);
+        await _settings.SetAsync(AccessKeys.Admins("qq"), string.Empty, CancellationToken.None);
+
+        var (found, values) = await AccessSettings.TryGetAdminsAsync(_settings, "qq", CancellationToken.None);
+
+        Assert.True(found);
+        Assert.Empty(values);
+    }
+
+    [Fact]
+    public async Task Absent_new_key_falls_back_to_legacy()
+    {
+        await _settings.SetAsync(AccessKeys.LegacyAdminsKey, "10001,10002", CancellationToken.None);
+
+        var (found, values) = await AccessSettings.TryGetAdminsAsync(_settings, "qq", CancellationToken.None);
+
+        Assert.True(found);
+        Assert.Equal(["10001", "10002"], values);
+    }
+
+    [Fact]
+    public async Task Never_configured_is_not_found()
+    {
+        var (found, values) = await AccessSettings.TryGetAdminsAsync(_settings, "douyin", CancellationToken.None);
+
+        Assert.False(found);
+        Assert.Empty(values);
+    }
+
+    [Fact]
+    public async Task Cleared_lists_are_not_revived_by_legacy_filter_mode()
+    {
+        await _settings.SetAsync(AccessKeys.LegacyFilterEntriesKey, "10001", CancellationToken.None);
+        await _settings.SetAsync(AccessKeys.LegacyFilterModeKey, "Whitelist", CancellationToken.None);
+        await _settings.SetAsync(AccessKeys.Whitelist("qq"), string.Empty, CancellationToken.None);
+        await _settings.SetAsync(AccessKeys.Blacklist("qq"), string.Empty, CancellationToken.None);
+
+        var (found, whitelist, blacklist) =
+            await AccessSettings.TryGetListsAsync(_settings, "qq", CancellationToken.None);
+
+        Assert.True(found);
+        Assert.Empty(whitelist);
+        Assert.Empty(blacklist);
+    }
+
     // ─────────────────────────── 帮手 ───────────────────────────
 
     private GetAccessAction NewGetAccess() => new(_settings, _roles, _filter, _directories);
