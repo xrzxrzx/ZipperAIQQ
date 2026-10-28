@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Serilog;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Server.Channels;
 
@@ -112,6 +113,7 @@ public sealed class DouyinChannelTests
         // S3-F 补：客户端关掉抖音后，即使 sidecar 还连着，也不许再收 / 再发
         await using var channel = new DouyinChannel(
             new DouyinOptions { Enabled = false },
+            new ChatFilter(new ChatFilterOptions(), DouyinChannel.PlatformName),
             Logger);
 
         var connection = new FakeDouyinConnection { Respond = AutoAck };
@@ -142,7 +144,7 @@ public sealed class DouyinChannelTests
     public async Task UpdateOptions_EnableAtRuntime_TakesEffectImmediately()
     {
         // 运行时打开：同一个通道实例，改配置后立刻能发（不必重建对象/重启服务）
-        await using var channel = new DouyinChannel(new DouyinOptions { Enabled = false }, Logger);
+        await using var channel = new DouyinChannel(new DouyinOptions { Enabled = false }, new ChatFilter(new ChatFilterOptions(), DouyinChannel.PlatformName), Logger);
         var connection = new FakeDouyinConnection { Respond = AutoAck };
         await channel.AttachAsync(connection);
 
@@ -467,6 +469,8 @@ public sealed class DouyinChannelTests
                 QueryTimeoutMs = queryTimeoutMs,
                 MaxTextLength = maxTextLength,
             },
+            // 会话过滤与 QQ 同一套：空名单 = 全部放行（各用例默认走放行分支）
+            new ChatFilter(new ChatFilterOptions(), DouyinChannel.PlatformName),
             Logger);
 
     /// <summary>拼一帧：<c>{type, time, data}</c>。</summary>

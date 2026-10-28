@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Serilog;
+using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Server.Api;
@@ -69,7 +70,10 @@ public sealed class PlatformActionsTests : IAsyncLifetime
         _mailSwitch = new MailOptionsService(_settings, new MailOptions(), Logger);
         await _mailSwitch.InitializeAsync();
 
-        _douyin = new DouyinChannel(_douyinOptions.Current.ToOptions(), Logger);
+        _douyin = new DouyinChannel(
+            _douyinOptions.Current.ToOptions(),
+            new ChatFilter(new ChatFilterOptions(), DouyinChannel.PlatformName),
+            Logger);
         _channel = new FakeChannel();
     }
 
@@ -129,7 +133,7 @@ public sealed class PlatformActionsTests : IAsyncLifetime
         var action = new SaveDouyinAction(_douyinOptions, _douyin, _configs);
 
         var json = ToJson(await action.HandleAsync(
-            Payload("""{ "enabled": false, "allowedSessions": ["douyin:p1"] }"""),
+            Payload("""{ "enabled": false, "maxTextLength": 9000 }"""),
             CancellationToken.None));
 
         Assert.Equal(JsonValueKind.Number, json.GetProperty("saved").ValueKind);
@@ -139,10 +143,10 @@ public sealed class PlatformActionsTests : IAsyncLifetime
         Assert.Equal(JsonValueKind.Array, json.GetProperty("changed").ValueKind);
         Assert.True(json.GetProperty("connected").ValueKind is JsonValueKind.True or JsonValueKind.False);
 
-        // changed 里只放**字段名**，别把值拼进去（界面上会显示成「allowedSessions=1」这种怪东西）
+        // changed 里只放**字段名**，别把值拼进去（界面上会显示成「maxTextLength=9000」这种怪东西）
         var changed = json.GetProperty("changed").EnumerateArray().Select(x => x.GetString()).ToList();
         Assert.Contains("enabled", changed);
-        Assert.Contains("allowedSessions", changed);
+        Assert.Contains("maxTextLength", changed);
         Assert.DoesNotContain(changed, x => x is not null && x.Contains('=', StringComparison.Ordinal));
     }
 
@@ -179,19 +183,41 @@ public sealed class PlatformActionsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SaveDouyin_NormalizesAllowedSessions()
+    public async Task SaveDouyin_LegacyAllowedSessionsPayload_IsIgnoredNotRejected()
     {
+        // 会话白名单已并入「人员与名单」（access.douyin.whitelist）。
+        // 老客户端还会带 allowedSessions 字段 —— 必须**忽略且不报错**，否则旧客户端直接存不上。
         var action = new SaveDouyinAction(_douyinOptions, _douyin, _configs);
 
-        await action.HandleAsync(
-            Payload("""{ "allowedSessions": [" douyin:p* ", "", "douyin:g1", "douyin:p*"] }"""),
-            CancellationToken.None);
+        var json = ToJson(await action.HandleAsync(
+            Payload("""{ "allowedSessions": ["douyin:p*"], "maxTextLength": 9000 }"""),
+            CancellationToken.None));
 
-        Assert.Equal(["douyin:p*", "douyin:g1"], _douyinOptions.Current.AllowedSessions);
+        Assert.False(json.GetProperty("skipped").GetBoolean());
+        Assert.Contains("maxTextLength", json.GetProperty("changed").EnumerateArray().Select(x => x.GetString()));
+        Assert.DoesNotContain(
+            "allowedSessions",
+            json.GetProperty("changed").EnumerateArray().Select(x => x.GetString()));
 
-        // 持久化也要是规范化的（重启后一致）
-        var stored = await _settings.GetAsync(DouyinOptionsService.AllowedSessionsKey, CancellationToken.None);
-        Assert.Equal("douyin:p*,douyin:g1", stored);
+        // 也不再写老键
+        var stored = await _settings.GetAsync(DouyinOptionsService.LegacyAllowedSessionsKey, CancellationToken.None);
+        Assert.True(string.IsNullOrEmpty(stored));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_MigratesLegacyAllowedSessionsIntoWhitelist()
+    {
+        // 老的 douyin.allowedSessions 有值、名单还空 → 启动时搬到 access.douyin.whitelist，并清掉老键
+        await _settings.SetAsync("douyin.allowedSessions", "douyin:p1,douyin:g2", CancellationToken.None);
+
+        await _douyinOptions.InitializeAsync();
+
+        var whitelist = await _settings.GetAsync(
+            ZipperAIQQ.Server.Access.AccessKeys.Whitelist("douyin"), CancellationToken.None);
+        Assert.Equal("douyin:p1,douyin:g2", whitelist);
+
+        var legacy = await _settings.GetAsync(DouyinOptionsService.LegacyAllowedSessionsKey, CancellationToken.None);
+        Assert.True(string.IsNullOrEmpty(legacy));
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Serilog;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 
 namespace ZipperAIQQ.Server.Channels;
@@ -38,6 +39,7 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
     /// 运行参数。**可热替换**（客户端在「第三方平台接入」页改白名单 / 超时后立即生效）。
     /// </summary>
     private volatile DouyinOptions _options;
+    private readonly IChatFilter _filter;
     private readonly ILogger _logger;
 
     /// <summary>
@@ -74,13 +76,23 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
 
     /// <summary>构造通道（不连接，等 <see cref="AttachAsync"/>）。</summary>
     /// <param name="options">sidecar 配置（超时、分段阈值）。</param>
+    /// <param name="filter">
+    /// 会话过滤（与 QQ 同一套，按 <c>ChatRef.Platform</c> 取 <c>access.douyin.whitelist/blacklist</c>）。
+    /// </param>
     /// <param name="logger">日志。</param>
-    public DouyinChannel(DouyinOptions options, ILogger logger)
+    /// <remarks>
+    /// 2026-10-28：**删掉抖音私有的 <c>allowedSessions</c>**，改用与 QQ 完全一致的
+    /// <see cref="IChatFilter"/>（配置入口在「人员与名单」）。同一个概念两处配置必然漂移 ——
+    /// 用户实测就问到了"这个不是能在人员与名单里配吗"。
+    /// </remarks>
+    public DouyinChannel(DouyinOptions options, IChatFilter filter, ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(filter);
         ArgumentNullException.ThrowIfNull(logger);
 
         _options = options;
+        _filter = filter;
         _logger = logger;
     }
 
@@ -119,37 +131,14 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
 
         _options = options;
         _logger.Information(
-            "抖音通道参数已更新：白名单 {Count} 条 / 发送超时 {Send}ms / 文本上限 {Text} 字",
-            options.AllowedSessions.Count, options.SendTimeoutMs, options.MaxTextLength);
+            "抖音通道参数已更新：白名单 {White} 条 / 黑名单 {Black} 条 / 发送超时 {Send}ms / 文本上限 {Text} 字",
+            _filter.WhitelistCount(PlatformName),
+            _filter.BlacklistCount(PlatformName),
+            options.SendTimeoutMs,
+            options.MaxTextLength);
     }
 
-    /// <summary>会话是否在允许列表内（空 = 全部放行；`douyin:p*` 支持 `*` 后缀）。</summary>
-    private bool IsSessionAllowed(string sessionId)
-    {
-        var allowed = _options.AllowedSessions;
-        if (allowed.Count == 0)
-        {
-            return true;
-        }
-
-        foreach (var pattern in allowed)
-        {
-            if (string.IsNullOrWhiteSpace(pattern))
-            {
-                continue;
-            }
-
-            var trimmed = pattern.Trim();
-            if (trimmed.EndsWith('*')
-                ? sessionId.StartsWith(trimmed[..^1], StringComparison.OrdinalIgnoreCase)
-                : string.Equals(trimmed, sessionId, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    // IsSessionAllowed 已删除（2026-10-28）：改用 IChatFilter，与 QQ 同一套白/黑名单
 
     /// <summary>
     /// 空实现：抖音是**反向连接**，连接由 sidecar 发起（<see cref="AttachAsync"/>）。
@@ -444,9 +433,11 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
                 // 会话白名单（决策七 / 设计 §6.1）：空 = 全部放行；非空则只收匹配的会话。
                 // 与 QQ 的接收过滤同口径（`douyin:p*` / `douyin:g*` 支持 `*` 后缀），
                 // 但**在通道层**拦：不进库、不进模型 —— 与"过滤发生在通道层"（FR-17.3）一致。
-                if (!IsSessionAllowed(message.Chat.SessionId))
+                // 会话过滤与 QQ 完全同一套（2026-10-28）：配置入口在「人员与名单」的
+                // access.douyin.whitelist / blacklist；通道层拦截 → 不进库、不进模型（FR-17.3）。
+                if (!_filter.IsAllowed(message.Chat))
                 {
-                    _logger.Debug("抖音会话 {Session} 不在白名单内，已丢弃", message.Chat.SessionId);
+                    _logger.Debug("抖音会话 {Session} 未通过名单过滤，已丢弃", message.Chat.SessionId);
                     break;
                 }
 

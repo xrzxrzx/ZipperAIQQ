@@ -328,6 +328,8 @@ public static class ServiceRegistration
             sp.GetRequiredService<ILogger>()));
         services.AddSingleton(sp => new Channels.DouyinChannel(
             sp.GetRequiredService<DouyinOptionsService>().Current.ToOptions(),
+            // 会话过滤与 QQ 同一套（access.douyin.whitelist / blacklist，入口在「人员与名单」）
+            sp.GetRequiredService<IChatFilter>(),
             sp.GetRequiredService<ILogger>()));
 
         // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围 / 平台专用工具都只认平台名。

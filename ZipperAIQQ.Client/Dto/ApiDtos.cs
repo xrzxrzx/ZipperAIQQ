@@ -913,10 +913,6 @@ public sealed class DouyinPlatformDto
     [JsonPropertyName("tokenConfigured")]
     public bool TokenConfigured { get; set; }
 
-    /// <summary>允许的会话白名单（空 = 全部；支持 <c>douyin:p*</c> / <c>douyin:g*</c>）。</summary>
-    [JsonPropertyName("allowedSessions")]
-    public List<string> AllowedSessions { get; set; } = [];
-
     /// <summary>出站 ack 超时（毫秒）；服务端默认 15000。</summary>
     [JsonPropertyName("sendTimeoutMs")]
     public int SendTimeoutMs { get; set; } = 15_000;

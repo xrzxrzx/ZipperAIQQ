@@ -212,8 +212,9 @@
                                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
                                 </StackPanel>
 
-                                <TextBox Header="允许的会话（逗号分隔，留空 = 全部；支持 douyin:p* / douyin:g*）"
-                                         Text="{x:Bind Vm.DouyinAllowedSessionsInput, Mode=TwoWay}" />
+                                <!-- 会话白名单已并入「人员与名单」（access.douyin.whitelist），这里不再重复配置 -->
+                                <TextBlock Style="{StaticResource CaptionStyle}" TextWrapping="Wrap"
+                                           Text="会话白名单请到「人员与名单」里配（选平台=抖音），与 QQ 是同一套白名单/黑名单。" />
 
                                 <Grid ColumnSpacing="12">
                                     <Grid.ColumnDefinitions>

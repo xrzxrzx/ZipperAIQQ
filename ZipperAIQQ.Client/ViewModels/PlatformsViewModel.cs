@@ -189,8 +189,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
     [ObservableProperty]
     public partial string DouyinTokenStatus { get; set; } = "未配置";
 
-    [ObservableProperty]
-    public partial string DouyinAllowedSessionsInput { get; set; } = string.Empty;
+    // 注：会话白名单已并入「人员与名单」（access.douyin.whitelist），本页不再有对应输入框
 
     // NumberBox 的 Value 是 double，所以这三个也保持 double，发请求时再取整
     [ObservableProperty]
@@ -515,8 +514,6 @@ public sealed partial class PlatformsViewModel : ObservableObject
         DouyinTokenStatus = douyin.TokenConfigured
             ? "已配置（不回显；要换就重填，留空 = 不改）"
             : "未配置（sidecar 与 Server 都必须配上同一个 token）";
-        DouyinAllowedSessionsInput = string.Join(", ", douyin.AllowedSessions);
-
         DouyinSendTimeoutMs = douyin.SendTimeoutMs > 0 ? douyin.SendTimeoutMs : DefaultSendTimeoutMs;
         DouyinMaxTextLength = douyin.MaxTextLength > 0 ? douyin.MaxTextLength : DefaultMaxTextLength;
         DouyinQueryTimeoutMs = douyin.QueryTimeoutMs > 0 ? douyin.QueryTimeoutMs : DefaultQueryTimeoutMs;
@@ -542,7 +539,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
             var payload = new Dictionary<string, object?>
             {
                 ["enabled"] = DouyinEnabled,
-                ["allowedSessions"] = SplitSessions(DouyinAllowedSessionsInput),
+                // 会话白名单不在这里配（2026-10-28 合并到「人员与名单」的 access.douyin.whitelist）
                 ["sendTimeoutMs"] = ToPositiveInt(DouyinSendTimeoutMs, DefaultSendTimeoutMs),
                 ["maxTextLength"] = ToPositiveInt(DouyinMaxTextLength, DefaultMaxTextLength),
                 ["queryTimeoutMs"] = ToPositiveInt(DouyinQueryTimeoutMs, DefaultQueryTimeoutMs),
@@ -695,9 +692,6 @@ public sealed partial class PlatformsViewModel : ObservableObject
     }
 
     /// <summary>逗号分隔（半角 / 全角都认）→ 列表。</summary>
-    private static List<string> SplitSessions(string text) =>
-        text.Split(new[] { ',', '，' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToList();
 
     /// <summary>NumberBox 的 double → 正整数字段（0 / NaN 用默认值兜底，别把 0 发下去）。</summary>
     private static int ToPositiveInt(double value, int fallback)

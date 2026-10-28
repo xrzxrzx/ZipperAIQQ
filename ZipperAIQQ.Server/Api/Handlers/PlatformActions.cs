@@ -110,7 +110,7 @@ public sealed class GetPlatformsAction : IApiAction
                 connected = _douyin.IsConnected,
                 selfId = _douyin.SelfId,
                 tokenConfigured = !string.IsNullOrWhiteSpace(douyin.Token),
-                allowedSessions = douyin.AllowedSessions,
+                // 会话白名单已并入「人员与名单」（access.douyin.whitelist），这里不再回传
                 sendTimeoutMs = douyin.SendTimeoutMs,
                 maxTextLength = douyin.MaxTextLength,
                 queryTimeoutMs = douyin.QueryTimeoutMs,
@@ -212,33 +212,11 @@ public sealed class SaveDouyinAction : IApiAction
             token = tokenElement.GetString()?.Trim() ?? string.Empty;
         }
 
-        IReadOnlyList<string>? allowedSessions = null;
-        if (payload.TryGetProperty("allowedSessions", out var sessionsElement))
-        {
-            if (sessionsElement.ValueKind == JsonValueKind.String)
-            {
-                allowedSessions = (sessionsElement.GetString() ?? string.Empty)
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            }
-            else if (sessionsElement.ValueKind == JsonValueKind.Array)
-            {
-                allowedSessions = sessionsElement
-                    .EnumerateArray()
-                    .Select(e => e.GetString()?.Trim())
-                    .Where(s => !string.IsNullOrWhiteSpace(s))
-                    .Select(s => s!)
-                    .ToList();
-            }
-            else
-            {
-                throw new ApiException(ApiResponse.BadRequest, "allowedSessions 必须是字符串数组。");
-            }
-        }
-
+        // 会话白名单不在这里改（2026-10-28）：统一走 setAccess 的 access.douyin.whitelist，
+        // 配置入口在客户端「人员与名单」。老的 allowedSessions 入参**忽略**（不报错，兼容旧客户端）。
         var changed = await _options.UpdateAsync(
             enabled,
             token,
-            allowedSessions,
             ReadPositiveInt(payload, "sendTimeoutMs"),
             ReadPositiveInt(payload, "maxTextLength"),
             ReadPositiveInt(payload, "queryTimeoutMs"),

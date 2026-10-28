@@ -6,10 +6,14 @@ using ZipperAIQQ.Storage.Settings;
 namespace ZipperAIQQ.Server.Channels;
 
 /// <summary>抖音 sidecar 的**可热更新**配置快照（决策七：客户端要能改）。</summary>
+/// <remarks>
+/// 2026-10-28：**删掉 <c>AllowedSessions</c>** —— 会话白名单统一到「人员与名单」
+/// 的 <c>access.douyin.whitelist</c>（与 QQ 同一套 <c>IChatFilter</c>）。
+/// 同一个概念两处配置必然漂移，这次是用户直接问出来的。
+/// </remarks>
 public sealed record DouyinSnapshot(
     bool Enabled,
     string? Token,
-    IReadOnlyList<string> AllowedSessions,
     int SendTimeoutMs,
     int MaxTextLength,
     int QueryTimeoutMs)
@@ -19,7 +23,6 @@ public sealed record DouyinSnapshot(
     {
         Enabled = Enabled,
         Token = Token,
-        AllowedSessions = AllowedSessions,
         SendTimeoutMs = SendTimeoutMs,
         MaxTextLength = MaxTextLength,
         QueryTimeoutMs = QueryTimeoutMs,
@@ -47,10 +50,18 @@ public sealed class DouyinOptionsService
 {
     public const string EnabledKey = "douyin.enabled";
     public const string TokenCipherKey = "douyin.tokenCipher";
-    public const string AllowedSessionsKey = "douyin.allowedSessions";
+
+    /// <summary>
+    /// 老的会话白名单键（**已废弃**）：只用于一次性迁移到 <c>access.douyin.whitelist</c>。
+    /// </summary>
+    public const string LegacyAllowedSessionsKey = "douyin.allowedSessions";
+
     public const string SendTimeoutKey = "douyin.sendTimeoutMs";
     public const string MaxTextLengthKey = "douyin.maxTextLength";
     public const string QueryTimeoutKey = "douyin.queryTimeoutMs";
+
+    /// <summary>迁移目标平台名（与通道一致）。</summary>
+    private const string PlatformName = DouyinChannel.PlatformName;
 
     private readonly IRuntimeSettingsStore _settings;
     private readonly ServerOptions _bootstrap;
@@ -77,7 +88,7 @@ public sealed class DouyinOptionsService
 
         var d = bootstrap.Douyin;
         _current = new DouyinSnapshot(
-            d.Enabled, d.Token, d.AllowedSessions, d.SendTimeoutMs, d.MaxTextLength, d.QueryTimeoutMs);
+            d.Enabled, d.Token, d.SendTimeoutMs, d.MaxTextLength, d.QueryTimeoutMs);
     }
 
     /// <summary>当前生效的配置。</summary>
@@ -87,11 +98,17 @@ public sealed class DouyinOptionsService
     public event Action? Changed;
 
     /// <summary>从库里读回配置；没有的键沿用启动配置（升级前部署零迁移）。</summary>
+    /// <remarks>
+    /// 2026-10-28：**会话白名单已并入「人员与名单」**（<c>access.douyin.whitelist</c>）。
+    /// 这里做一次**幂等迁移**：老的 <c>douyin.allowedSessions</c> 有值、而名单还是空的时候搬过去，
+    /// 搬完清空老键 —— 用户不需要手工重配。
+    /// </remarks>
     public async Task InitializeAsync(CancellationToken ct = default)
     {
+        await MigrateLegacyAllowedSessionsAsync(ct).ConfigureAwait(false);
+
         var enabledRaw = await _settings.GetAsync(EnabledKey, ct).ConfigureAwait(false);
         var cipher = await _settings.GetAsync(TokenCipherKey, ct).ConfigureAwait(false);
-        var sessionsRaw = await _settings.GetAsync(AllowedSessionsKey, ct).ConfigureAwait(false);
         var sendRaw = await _settings.GetAsync(SendTimeoutKey, ct).ConfigureAwait(false);
         var lengthRaw = await _settings.GetAsync(MaxTextLengthKey, ct).ConfigureAwait(false);
         var queryRaw = await _settings.GetAsync(QueryTimeoutKey, ct).ConfigureAwait(false);
@@ -109,16 +126,42 @@ public sealed class DouyinOptionsService
         _current = new DouyinSnapshot(
             Enabled: enabledRaw is null ? bootstrap.Enabled : IsTrue(enabledRaw),
             Token: token,
-            AllowedSessions: sessionsRaw is null ? bootstrap.AllowedSessions : SplitList(sessionsRaw),
             SendTimeoutMs: ParseInt(sendRaw, bootstrap.SendTimeoutMs),
             MaxTextLength: ParseInt(lengthRaw, bootstrap.MaxTextLength),
             QueryTimeoutMs: ParseInt(queryRaw, bootstrap.QueryTimeoutMs));
 
         _logger.Information(
-            "抖音配置已加载：启用={Enabled} token={TokenState} 白名单 {Count} 条",
+            "抖音配置已加载：启用={Enabled} token={TokenState}",
             _current.Enabled ? "是" : "否",
-            string.IsNullOrWhiteSpace(_current.Token) ? "未配置" : "已配置",
-            _current.AllowedSessions.Count);
+            string.IsNullOrWhiteSpace(_current.Token) ? "未配置" : "已配置");
+    }
+
+    /// <summary>
+    /// 把老的 <c>douyin.allowedSessions</c> 迁到 <c>access.douyin.whitelist</c>（一次性、幂等）。
+    /// </summary>
+    private async Task MigrateLegacyAllowedSessionsAsync(CancellationToken ct)
+    {
+        var legacy = await _settings.GetAsync(LegacyAllowedSessionsKey, ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(legacy))
+        {
+            return;
+        }
+
+        var target = Access.AccessKeys.Whitelist(PlatformName);
+        var existing = await _settings.GetAsync(target, ct).ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(existing))
+        {
+            await _settings.SetAsync(target, legacy, ct).ConfigureAwait(false);
+            _logger.Information("已把抖音会话白名单迁移到人员与名单（access.douyin.whitelist）");
+        }
+        else
+        {
+            _logger.Warning("抖音老白名单与新名单同时存在，保留新名单（老的 douyin.allowedSessions 已忽略）");
+        }
+
+        // 清掉老键：避免下次启动再判断一次，也避免两处配置各说各话
+        await _settings.SetAsync(LegacyAllowedSessionsKey, string.Empty, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -128,7 +171,6 @@ public sealed class DouyinOptionsService
     /// <param name="token">
     /// 新 token；<c>null</c> = 不改，<c>""</c> = 清除，其它 = 加密后覆盖。
     /// </param>
-    /// <param name="allowedSessions"><c>null</c> = 不改。</param>
     /// <param name="sendTimeoutMs"><c>null</c> = 不改。</param>
     /// <param name="maxTextLength"><c>null</c> = 不改。</param>
     /// <param name="queryTimeoutMs"><c>null</c> = 不改。</param>
@@ -137,7 +179,6 @@ public sealed class DouyinOptionsService
     public async Task<IReadOnlyList<string>> UpdateAsync(
         bool? enabled,
         string? token,
-        IReadOnlyList<string>? allowedSessions,
         int? sendTimeoutMs,
         int? maxTextLength,
         int? queryTimeoutMs,
@@ -171,23 +212,6 @@ public sealed class DouyinOptionsService
             }
         }
 
-        var nextSessions = current.AllowedSessions;
-        if (allowedSessions is not null)
-        {
-            var normalized = allowedSessions
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Select(s => s.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            await _settings
-                .SetAsync(AllowedSessionsKey, string.Join(',', normalized), ct)
-                .ConfigureAwait(false);
-
-            nextSessions = normalized;
-            changed.Add("allowedSessions");
-        }
-
         var nextSend = current.SendTimeoutMs;
         if (sendTimeoutMs is { } s && s > 0 && s != current.SendTimeoutMs)
         {
@@ -217,7 +241,7 @@ public sealed class DouyinOptionsService
             return changed;
         }
 
-        _current = new DouyinSnapshot(nextEnabled, nextToken, nextSessions, nextSend, nextLength, nextQuery);
+        _current = new DouyinSnapshot(nextEnabled, nextToken, nextSend, nextLength, nextQuery);
 
         _logger.Information("抖音配置已更新：{Changed}", string.Join(",", changed));
         Changed?.Invoke();
