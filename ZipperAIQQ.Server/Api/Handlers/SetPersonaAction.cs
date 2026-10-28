@@ -40,12 +40,30 @@ public sealed class SetPersonaAction : IApiAction
         var image = PersonaHandlerHelper.ReadString(payload, "image");
         var personality = PersonaHandlerHelper.ReadString(payload, "personality");
 
+        var current = await _personas.GetAsync(platform, chatType, chatId, ct).ConfigureAwait(false);
+
+        var enabledSpecified = payload.TryGetProperty("enabled", out var enabledElement) &&
+                               enabledElement.ValueKind is JsonValueKind.True or JsonValueKind.False;
+
         if (string.IsNullOrWhiteSpace(image) && string.IsNullOrWhiteSpace(personality))
         {
-            throw new ApiException(ApiResponse.BadRequest, "image 与 personality 至少要给一个（都为空会让人设消失）。");
+            // #16：只切开关时正文沿用当前（否则 {"sessionId", "enabled": false} 会被误拒）
+            if (!enabledSpecified)
+            {
+                throw new ApiException(ApiResponse.BadRequest, "image 与 personality 至少要给一个（都为空会让人设消失）。");
+            }
+
+            image = current.Image;
+            personality = current.Personality;
+
+            if (string.IsNullOrWhiteSpace(image) && string.IsNullOrWhiteSpace(personality))
+            {
+                throw new ApiException(
+                    ApiResponse.BadRequest,
+                    "当前会话没有可沿用的人设正文，请提供 image 或 personality。");
+            }
         }
 
-        var current = await _personas.GetAsync(platform, chatType, chatId, ct).ConfigureAwait(false);
         var persona = Persona.FromParts(
             string.IsNullOrWhiteSpace(name) ? current.Name : name.Trim(),
             image,
@@ -53,10 +71,7 @@ public sealed class SetPersonaAction : IApiAction
 
         // #16：enabled 可单独提交（只切开关时不必重传正文）
         var state = await _personas.GetStateAsync(sessionId, ct).ConfigureAwait(false);
-        var enabled = payload.TryGetProperty("enabled", out var enabledElement) &&
-                      enabledElement.ValueKind is JsonValueKind.True or JsonValueKind.False
-            ? enabledElement.GetBoolean()
-            : state.Enabled;
+        var enabled = enabledSpecified ? enabledElement.GetBoolean() : state.Enabled;
 
         // #10：内容与开关都没变 → 不写库、不写审计
         var unchanged = state.Override is not null &&

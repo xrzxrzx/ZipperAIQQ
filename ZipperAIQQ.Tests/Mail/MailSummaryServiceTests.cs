@@ -191,6 +191,8 @@ public sealed class MailSummaryServiceTests
 
         public bool HasClient => _client is not null;
 
+        public string? CurrentModel => _client is null ? null : "fake-model";
+
         public IChatClient Current => _client
             ?? throw new InvalidOperationException("测试里没有配置客户端");
 

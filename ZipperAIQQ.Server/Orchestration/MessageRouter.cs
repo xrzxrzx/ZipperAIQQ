@@ -121,7 +121,7 @@ public sealed class MessageRouter : BackgroundService
         }
     }
 
-/// <summary>同一会话的收集窗口（毫秒）：这段时间内到达的消息合并成一批。</summary>
+    /// <summary>同一会话的收集窗口（毫秒）：这段时间内到达的消息合并成一批。</summary>
     private const int CollectWindowMs = 600;
 
     /// <summary>
@@ -136,7 +136,7 @@ public sealed class MessageRouter : BackgroundService
         ?? _options.SelfIdFor(platform)
         ?? string.Empty;
 
-    /// <summary>这条通知是不是自己触发的（配置里的自 ID 兜底判断）。</summary>
+    /// <summary>同一会话的收集窗口缓冲。</summary>
     private sealed class SessionBuffer
     {
         public readonly List<IncomingMessage> Messages = [];

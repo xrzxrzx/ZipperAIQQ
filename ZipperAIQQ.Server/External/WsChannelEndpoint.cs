@@ -65,8 +65,7 @@ public static class WsChannelEndpoint
             var policy = services.GetRequiredService<HttpAccessPolicy>();
             var token = HttpAccessPolicy.ExtractToken(context.Request);
             var configured = douyin.Token;
-            var tokenMatches = !string.IsNullOrWhiteSpace(configured)
-                && string.Equals(configured, token, StringComparison.Ordinal);
+            var tokenMatches = HttpAccessPolicy.Matches(token, configured);
 
             if (!policy.IsAllowed(token) && !tokenMatches)
             {

@@ -62,7 +62,9 @@ public sealed class SetGlobalPersonaAction : IApiAction
         var effectiveName = name?.Trim();
         if (string.IsNullOrWhiteSpace(effectiveName))
         {
-            effectiveName = "小衣";
+            var global = await _personas.GetAsync(string.Empty, string.Empty, string.Empty, ct)
+                .ConfigureAwait(false);
+            effectiveName = string.IsNullOrWhiteSpace(global.Name) ? "小衣" : global.Name;
         }
 
         var persona = Persona.FromParts(effectiveName, image, personality);

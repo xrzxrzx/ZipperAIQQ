@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using ZipperAIQQ.Agent;
+using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel.Models;
@@ -108,16 +109,23 @@ public sealed class StatusCommand : ICommand, IImageCommand
     private readonly IMetricsStore _metrics;
     private readonly IMessageStore _messages;
     private readonly ServerOptions _options;
+    private readonly IChatClientProvider _clients;
 
-    public StatusCommand(IMetricsStore metrics, IMessageStore messages, ServerOptions options)
+    public StatusCommand(
+        IMetricsStore metrics,
+        IMessageStore messages,
+        ServerOptions options,
+        IChatClientProvider clients)
     {
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(clients);
 
         _metrics = metrics;
         _messages = messages;
         _options = options;
+        _clients = clients;
     }
 
     public string Name => "status";
@@ -187,7 +195,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
 
         var png = StatusImageRenderer.Render(
             "ZipperAIQQ · 状态",
-            $"模型 {_options.LlmModel} · 本会话 {count} 条消息 · {BeijingTime.Now:MM-dd HH:mm}",
+            $"模型 {_clients.CurrentModel ?? _options.LlmModel} · 本会话 {count} 条消息 · {BeijingTime.Now:MM-dd HH:mm}",
             tables);
 
         // **只发图片**：文字和图放一条消息里，QQ 的图文混排会挤在一起、气泡也怪
@@ -204,7 +212,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
         var metrics = await _metrics.GetSummaryAsync(24, ct: ct).ConfigureAwait(false);
 
         var sb = new StringBuilder();
-        sb.AppendLine($"**状态** · 模型 `{_options.LlmModel}` · 本会话 {count} 条消息");
+        sb.AppendLine($"**状态** · 模型 `{_clients.CurrentModel ?? _options.LlmModel}` · 本会话 {count} 条消息");
         sb.AppendLine();
 
         if (metrics.Count == 0)
@@ -379,15 +387,16 @@ public sealed class SearchCommand : ICommand
 /// <summary>立即压缩一次摘要。</summary>
 public sealed class CompactCommand : ICommand
 {
-    /// <summary>与 ChatAgentOptions 默认值一致；命令只触发一次压缩，不改热窗。</summary>
-    private const int HotWindow = 20;
-
     private readonly SummaryService _summaries;
+    private readonly ServerOptions _options;
 
-    public CompactCommand(SummaryService summaries)
+    public CompactCommand(SummaryService summaries, ServerOptions options)
     {
         ArgumentNullException.ThrowIfNull(summaries);
+        ArgumentNullException.ThrowIfNull(options);
+
         _summaries = summaries;
+        _options = options;
     }
 
     public string Name => "compact";
@@ -397,7 +406,7 @@ public sealed class CompactCommand : ICommand
     public async Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default)
     {
         var compressed = await _summaries
-            .TryCompressAsync(context.Chat.SessionId, HotWindow, ct)
+            .TryCompressAsync(context.Chat.SessionId, _options.HotWindowMessages, ct)
             .ConfigureAwait(false);
 
         return compressed

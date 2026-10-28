@@ -32,22 +32,26 @@ public sealed class GetAccessAction : IApiAction
     private readonly IRoleResolver _roles;
     private readonly IChatFilter _filter;
     private readonly IContactDirectoryRegistry _directories;
+    private readonly Serilog.ILogger _logger;
 
     public GetAccessAction(
         IRuntimeSettingsStore settings,
         IRoleResolver roles,
         IChatFilter filter,
-        IContactDirectoryRegistry directories)
+        IContactDirectoryRegistry directories,
+        Serilog.ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(roles);
         ArgumentNullException.ThrowIfNull(filter);
         ArgumentNullException.ThrowIfNull(directories);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _settings = settings;
         _roles = roles;
         _filter = filter;
         _directories = directories;
+        _logger = logger;
     }
 
     public string Name => "getAccess";
@@ -78,8 +82,9 @@ public sealed class GetAccessAction : IApiAction
             {
                 friends = await directory.GetFriendsAsync(ct).ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.Warning(ex, "读取 {Platform} 好友列表失败，候选人置空", platform);
                 friends = [];
             }
 
@@ -87,8 +92,9 @@ public sealed class GetAccessAction : IApiAction
             {
                 groups = await directory.GetGroupsAsync(ct).ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.Warning(ex, "读取 {Platform} 群列表失败，候选人置空", platform);
                 groups = [];
             }
         }
@@ -201,9 +207,17 @@ public sealed class SetAccessAction : IApiAction
             ? ReadStringArray(blacklistElement, "blacklist")
             : null;
 
-        var legacyMode = payload.TryGetProperty("filterMode", out var modeElement)
-            ? ParseMode(modeElement.GetString())
-            : null;
+        string? legacyMode = null;
+        if (payload.TryGetProperty("filterMode", out var modeElement))
+        {
+            if (modeElement.ValueKind != JsonValueKind.String)
+            {
+                throw new ApiException(ApiResponse.BadRequest, "filterMode 必须是字符串。");
+            }
+
+            legacyMode = ParseMode(modeElement.GetString());
+        }
+
         var legacyEntries = payload.TryGetProperty("filterEntries", out var entriesElement)
             ? ReadStringArray(entriesElement, "filterEntries")
             : null;

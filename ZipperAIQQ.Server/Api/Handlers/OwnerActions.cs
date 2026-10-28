@@ -15,16 +15,20 @@ public sealed class GetOwnerAction : IApiAction
 {
     private readonly IRuntimeSettingsStore _settings;
     private readonly IContactDirectoryRegistry _directories;
+    private readonly Serilog.ILogger _logger;
 
     public GetOwnerAction(
         IRuntimeSettingsStore settings,
-        IContactDirectoryRegistry directories)
+        IContactDirectoryRegistry directories,
+        Serilog.ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(directories);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _settings = settings;
         _directories = directories;
+        _logger = logger;
     }
 
     public string Name => "getOwner";
@@ -46,8 +50,9 @@ public sealed class GetOwnerAction : IApiAction
             {
                 friends = await directory.GetFriendsAsync(ct).ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.Warning(ex, "读取 {Platform} 好友列表失败，主人候选置空", platform);
                 friends = [];
             }
         }
@@ -100,17 +105,13 @@ public sealed class SetOwnerAction : IApiAction
 
     public async Task<object?> HandleAsync(JsonElement payload, CancellationToken ct)
     {
-        if (payload.ValueKind != JsonValueKind.Object ||
-            !payload.TryGetProperty("userId", out var idElement) ||
-            idElement.GetString() is not { Length: > 0 } userId)
+        var userId = PayloadReader.GetString(payload, "userId")?.Trim();
+        if (string.IsNullOrEmpty(userId))
         {
             throw new ApiException(ApiResponse.BadRequest, "payload 需要 userId（要设为主人的好友账号）。");
         }
 
-        userId = userId.Trim();
-        var nickname = payload.TryGetProperty("nickname", out var nameElement)
-            ? nameElement.GetString()
-            : null;
+        var nickname = PayloadReader.GetString(payload, "nickname");
 
         var platform = AccessKeys.Normalize(PayloadReader.GetString(payload, "platform"));
 

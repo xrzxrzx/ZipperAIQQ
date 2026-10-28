@@ -256,11 +256,11 @@ public sealed class AccessActionsTests : IAsyncLifetime
 
     // ─────────────────────────── 帮手 ───────────────────────────
 
-    private GetAccessAction NewGetAccess() => new(_settings, _roles, _filter, _directories);
+    private GetAccessAction NewGetAccess() => new(_settings, _roles, _filter, _directories, Logger);
 
     private SetAccessAction NewSetAccess() => new(_settings, _roles, _filter, _configs);
 
-    private GetOwnerAction NewGetOwner() => new(_settings, _directories);
+    private GetOwnerAction NewGetOwner() => new(_settings, _directories, Logger);
 
     private SetOwnerAction NewSetOwner() => new(_settings, _roles, new FakeOwnerScope(), _configs);
 

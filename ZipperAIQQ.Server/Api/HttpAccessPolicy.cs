@@ -71,6 +71,20 @@ public sealed class HttpAccessPolicy
         return string.IsNullOrWhiteSpace(query) ? null : query.Trim();
     }
 
+    /// <summary>定长比较两个 token（长度不同直接 false；避免按字节提前返回的时序侧信道）。</summary>
+    public static bool Matches(string? provided, string? expected)
+    {
+        if (string.IsNullOrEmpty(provided) || string.IsNullOrEmpty(expected))
+        {
+            return false;
+        }
+
+        var a = Encoding.UTF8.GetBytes(provided);
+        var b = Encoding.UTF8.GetBytes(expected);
+
+        return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
+    }
+
     /// <summary>请求是否放行。</summary>
     public bool IsAllowed(string? providedToken)
     {

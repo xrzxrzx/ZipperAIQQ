@@ -118,8 +118,6 @@ public static class ServerConfigLoader
             {
                 Enabled = s.Bool("douyin", "enabled", o.Douyin.Enabled),
                 Token = s.Str("douyin", "token", o.Douyin.Token),
-                AllowedSessions = (s.Str("douyin", "allowedSessions", string.Join(',', o.Douyin.AllowedSessions)) ?? string.Empty)
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
                 SendTimeoutMs = s.Int("douyin", "sendTimeoutMs", o.Douyin.SendTimeoutMs),
                 MaxTextLength = s.Int("douyin", "maxTextLength", o.Douyin.MaxTextLength),
                 QueryTimeoutMs = s.Int("douyin", "queryTimeoutMs", o.Douyin.QueryTimeoutMs),

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Serilog;
 using ZipperAIQQ.Server.Dto;
 
@@ -38,7 +39,19 @@ public sealed class ActionDispatcher
 
         try
         {
-            var data = await action.HandleAsync(request.Payload, ct).ConfigureAwait(false);
+            // 客户端可以省略 payload（契约样例里就是 null）。Undefined / null 统一补成空对象，
+            // 否则动作里的 TryGetProperty 会抛 InvalidOperationException（最后变成 500）。
+            var payload = request.Payload;
+            if (payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            {
+                payload = JsonSerializer.SerializeToElement(new { });
+            }
+            else if (payload.ValueKind != JsonValueKind.Object)
+            {
+                return ApiResponse.Fail(ApiResponse.BadRequest, "payload 必须是 JSON 对象。");
+            }
+
+            var data = await action.HandleAsync(payload, ct).ConfigureAwait(false);
             return ApiResponse.Success(data);
         }
         catch (ApiException ex)

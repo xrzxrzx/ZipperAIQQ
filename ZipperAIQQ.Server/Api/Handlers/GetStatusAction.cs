@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Schedules;
@@ -13,22 +14,26 @@ public sealed class GetStatusAction : IApiAction
     private readonly IMessageStore _messages;
     private readonly IScheduleStore _schedules;
     private readonly ServerOptions _options;
+    private readonly IChatClientProvider _clients;
 
     public GetStatusAction(
         IClientTransport transport,
         IMessageStore messages,
         IScheduleStore schedules,
-        ServerOptions options)
+        ServerOptions options,
+        IChatClientProvider clients)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(schedules);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(clients);
 
         _transport = transport;
         _messages = messages;
         _schedules = schedules;
         _options = options;
+        _clients = clients;
     }
 
     public string Name => "getStatus";
@@ -44,7 +49,7 @@ public sealed class GetStatusAction : IApiAction
             // 之前用它导致「刚重启的服务显示已运行 25 小时」（实测踩到）。
             uptimeSeconds = (long)(DateTimeOffset.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalSeconds,
             channelConnected = _transport.IsConnected,
-            model = _options.LlmModel,
+            model = _clients.CurrentModel ?? _options.LlmModel,
             sessions = sessions.Count,
             pendingTasks = pending,
             httpAddress = _options.HttpAddress,

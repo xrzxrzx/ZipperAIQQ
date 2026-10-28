@@ -65,9 +65,14 @@ public sealed class SetBehaviorAction : IApiAction
 
         var changed = new List<string>();
 
+        // 先只校验、不落库：通知项后面还有一个校验，提前写 replyMode 会留下"半套状态"
+        string? pendingReplyMode = null;
         if (payload.TryGetProperty("replyMode", out var modeElement))
         {
-            var mode = modeElement.GetString()?.Trim().ToLowerInvariant();
+            var mode = modeElement.ValueKind == JsonValueKind.String
+                ? modeElement.GetString()?.Trim().ToLowerInvariant()
+                : null;
+
             if (mode is null || !GetBehaviorAction.ReplyModes.Contains(mode))
             {
                 throw new ApiException(
@@ -75,8 +80,7 @@ public sealed class SetBehaviorAction : IApiAction
                     $"不支持的回复模式：{mode}。可选：{string.Join(" / ", GetBehaviorAction.ReplyModes)}");
             }
 
-            await _settings.SetAsync("replymode.default", mode, ct).ConfigureAwait(false);
-            changed.Add($"replyMode={mode}");
+            pendingReplyMode = mode;
         }
 
         // 先把要写的全部校验完（类型 / 平台 / 值），再统一落库：避免"半套状态"
@@ -147,6 +151,12 @@ public sealed class SetBehaviorAction : IApiAction
         }
 
         // 全部校验完再写，避免半套状态
+        if (pendingReplyMode is not null)
+        {
+            await _settings.SetAsync("replymode.default", pendingReplyMode, ct).ConfigureAwait(false);
+            changed.Add($"replyMode={pendingReplyMode}");
+        }
+
         foreach (var (itemPlatform, type, enabled) in pending)
         {
             var value = enabled ? "1" : "0";
