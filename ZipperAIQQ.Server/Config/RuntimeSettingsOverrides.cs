@@ -1,8 +1,9 @@
-using Microsoft.Data.Sqlite;
 using Serilog;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.External;
 using ZipperAIQQ.Server.Identity;
+using ZipperAIQQ.Storage.Database;
+using ZipperAIQQ.Storage.Settings;
 
 namespace ZipperAIQQ.Server.Config;
 
@@ -29,23 +30,19 @@ public static class RuntimeSettingsOverrides
 
         try
         {
-            await using var conn = new SqliteConnection(connectionString);
-            await conn.OpenAsync().ConfigureAwait(false);
+            await using var db = new SqliteDatabase(connectionString, logger);
+            var settings = new SqliteRuntimeSettingsStore(db);
 
             async Task<double?> ReadAsync(string key)
             {
-                await using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT Value FROM RuntimeSettings WHERE Key = @key;";
-                cmd.Parameters.AddWithValue("@key", key);
-
-                var value = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
-                if (value is null or DBNull)
+                var raw = await settings.GetAsync(key).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(raw))
                 {
                     return null;
                 }
 
                 return double.TryParse(
-                    Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture),
+                    raw,
                     System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture,
                     out var parsed)
@@ -59,16 +56,7 @@ public static class RuntimeSettingsOverrides
             var fileMax = await ReadAsync(NumericSettingsSchema.FileMaxBytesKey).ConfigureAwait(false);
             var hotWindow = await ReadAsync(NumericSettingsSchema.HotWindowKey).ConfigureAwait(false);
 
-            string? persistedSelfId = null;
-            await using (var cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = "SELECT Value FROM RuntimeSettings WHERE Key = @key;";
-                cmd.Parameters.AddWithValue("@key", SelfIdRecorder.StorageKey);
-                var value = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
-                persistedSelfId = value is null or DBNull
-                    ? null
-                    : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
-            }
+            var persistedSelfId = await settings.GetAsync(SelfIdRecorder.StorageKey).ConfigureAwait(false);
 
             var merged = options with
             {
@@ -78,7 +66,7 @@ public static class RuntimeSettingsOverrides
                 FileMaxBytes = (int)(fileMax ?? options.FileMaxBytes),
                 HotWindowMessages = (int)(hotWindow ?? options.HotWindowMessages),
                 SelfId = string.IsNullOrWhiteSpace(options.SelfId) ? persistedSelfId : options.SelfId,
-                ExternalReverseServers = await ReadReverseServersAsync(conn, options, logger).ConfigureAwait(false),
+                ExternalReverseServers = await ReadReverseServersAsync(settings, options, logger).ConfigureAwait(false),
             };
 
             if (interval is not null || hotWindow is not null || fileMax is not null)
@@ -100,22 +88,20 @@ public static class RuntimeSettingsOverrides
 
     /// <summary>读取反向 WS 监听块（客户端保存的 JSON）；失败沿用启动配置。</summary>
     private static async Task<IReadOnlyList<ExternalReverseServer>> ReadReverseServersAsync(
-        SqliteConnection conn, ServerOptions options, ILogger logger)
+        IRuntimeSettingsStore settings, ServerOptions options, ILogger logger)
     {
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT Value FROM RuntimeSettings WHERE Key = @key;";
-        cmd.Parameters.AddWithValue("@key", ExternalOptionsService.ReverseServersKey);
+        var json = await settings
+            .GetAsync(ExternalOptionsService.ReverseServersKey)
+            .ConfigureAwait(false);
 
-        var value = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
-        if (value is null or DBNull)
+        if (string.IsNullOrWhiteSpace(json))
         {
             return options.ExternalReverseServers;
         }
 
         try
         {
-            var json = Convert.ToString(value);
-            return System.Text.Json.JsonSerializer.Deserialize<List<ExternalReverseServer>>(json ?? string.Empty)
+            return System.Text.Json.JsonSerializer.Deserialize<List<ExternalReverseServer>>(json)
                    ?? options.ExternalReverseServers;
         }
         catch (Exception ex)
