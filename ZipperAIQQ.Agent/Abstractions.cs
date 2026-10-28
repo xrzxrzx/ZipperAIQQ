@@ -102,6 +102,15 @@ public sealed record ChatAgentDependencies
     /// <summary>权限门禁（接缝 C，FR-6）。</summary>
     public required Security.IPermissionGate PermissionGate { get; init; }
 
+    /// <summary>
+    /// 按平台查主人（id + 昵称）；由 Server 用 <c>AccessSettings</c> 实现。
+    /// </summary>
+    /// <remarks>
+    /// 可选：不传时退回"读旧键 <c>owner.userId</c>"的老逻辑
+    /// （测试与旧调用点不必改；但那样只有 QQ 认得出主人）。
+    /// </remarks>
+    public IOwnerLookup? OwnerLookup { get; init; }
+
     /// <summary>工具 / 命令 / 平台 API 的开关与最低角色（#28/#29）。</summary>
     public required Security.IExecutionPolicy Policy { get; init; }
 

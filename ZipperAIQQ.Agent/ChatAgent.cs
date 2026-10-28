@@ -54,6 +54,9 @@ public sealed class ChatAgent : IChatAgent
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
+
+    /// <summary>按平台查主人（Server 用 AccessSettings 实现）；不传时退回旧键逻辑。</summary>
+    private readonly IOwnerLookup? _ownerLookup;
     private readonly WorkspacePathResolver _workspace;
 
     /// <summary>按平台取联系人目录（S3-E）：抖音专用工具靠它判断"这个平台接没接"。</summary>
@@ -104,6 +107,7 @@ public sealed class ChatAgent : IChatAgent
         _configs = configs;
         _settings = settings;
         _roles = deps.Roles;
+        _ownerLookup = deps.OwnerLookup;
         _workspace = deps.Workspace;
         _platformContacts = deps.PlatformContacts;
         _fileMaxBytes = deps.FileMaxBytes;
@@ -322,7 +326,7 @@ public sealed class ChatAgent : IChatAgent
         // 关系段：光有"主人是 10001"这个号码，模型认不出这个人是谁
         // （实测它只会照着念号码，不会联想到"这是拉链"）—— 所以把**昵称 + 当前身份**都给出来
         reinject.AppendLine();
-        reinject.Append(await BuildRelationshipNoteAsync(request.Sender.UserId, ct).ConfigureAwait(false));
+        reinject.Append(await BuildRelationshipNoteAsync(request.Sender.UserId, request.Chat.Platform, ct).ConfigureAwait(false));
 
         // 自我身份（问题记录 02 #3/#4）：模型不知道自己的账号，
         // 就会把「A 戳了 B」当成「有人在戳我」。
@@ -669,28 +673,65 @@ public sealed class ChatAgent : IChatAgent
     /// 「拉链」对应起来，于是对话里完全不认人（实测）。
     /// 所以这里同时给**昵称**和**当前身份判断**。
     /// </remarks>
-    private async Task<string> BuildRelationshipNoteAsync(string senderId, CancellationToken ct)
+    private async Task<string> BuildRelationshipNoteAsync(
+        string senderId,
+        string platform,
+        CancellationToken ct)
     {
         string? ownerId = null;
         string? ownerName = null;
 
-        try
+        // 优先走注入的 IOwnerLookup（Server 用 AccessSettings 实现：每平台一套 owner + 旧键回退）。
+        // 老逻辑直接读死键 owner.userId —— 那只代表 QQ，抖音会话里主人永远认不出来（2026-10-28 实测）。
+        if (_ownerLookup is not null)
         {
-            ownerId = await _settings.GetAsync("owner.userId", ct).ConfigureAwait(false);
-            ownerName = await _settings.GetAsync("owner.name", ct).ConfigureAwait(false);
+            try
+            {
+                (ownerId, ownerName) = await _ownerLookup.GetAsync(platform, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                // 查不到就当没设主人，不影响这一轮对话
+            }
         }
-        catch
+        else
         {
-            // 读不到就当没设主人
+            try
+            {
+                ownerId = await _settings.GetAsync("owner.userId", ct).ConfigureAwait(false);
+                ownerName = await _settings.GetAsync("owner.name", ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                // 读不到就当没设主人
+            }
         }
 
         var hasOwner = !string.IsNullOrWhiteSpace(ownerId);
-        var isOwner = hasOwner && string.Equals(senderId, ownerId, StringComparison.Ordinal);
+
+        // 「是不是主人」以**角色解析**为准（每平台一套）；id 相等只是兜底，
+        // 万一角色还没加载出来也能认出本人。
+        var isOwner = hasOwner &&
+            (string.Equals(senderId, ownerId, StringComparison.Ordinal) ||
+             _roles.Resolve(senderId, platform) == Role.Owner);
+
         var ownerLabel = string.IsNullOrWhiteSpace(ownerName) ? "（未命名）" : ownerName;
 
         var sb = new StringBuilder();
         sb.AppendLine("【你和当前说话的人的关系】");
         sb.Append(PromptRules.Relationship(hasOwner, isOwner, ownerLabel, ownerId));
+
+        // 明确"当前这个人的身份"：只写"主人是 X"不够 —— 换个会话模型就分不清眼前这位是谁，
+        // 于是把主人当陌生人（2026-10-28 用户实测：其他会话里"不认识我"）。
+        var role = _roles.Resolve(senderId, platform);
+        var roleLabel = role switch
+        {
+            Role.Owner => "主人（你自己人，要认得、要有称呼）",
+            Role.Admin => "管理员（可以指挥你的常客，但不是主人）",
+            _ => "普通成员 / 陌生人（按人设正常应对，别当成熟人）",
+        };
+
+        sb.AppendLine().Append($"【当前说话的人】{senderId} —— 在这套配置里是：{roleLabel}");
 
         return sb.ToString().TrimEnd();
     }

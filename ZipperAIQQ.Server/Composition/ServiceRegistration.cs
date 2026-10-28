@@ -357,6 +357,9 @@ public static class ServiceRegistration
         // 会话显示名（#2）：好友昵称 / 群名，带 5 分钟缓存
         services.AddSingleton<ISessionNameResolver, SessionNameResolver>();
 
+        // 主人查询（Agent 用）：复用 AccessSettings 的每平台口径 + 旧键回退
+        services.AddSingleton<ZipperAIQQ.Agent.IOwnerLookup, AccessOwnerLookup>();
+
         // 语音转写：契约在 Channel，实现是 NapCat 的 fetch_ptt_text（Q5：不接本地模型）
         services.AddSingleton<ISpeechTranscriber>(sp => sp.GetRequiredService<NapCatChannel>().SpeechTranscriber);
 
@@ -442,6 +445,7 @@ public static class ServiceRegistration
                 ImageFetcher = sp.GetService<IImageFetcher>(),
                 ImageConverter = sp.GetService<IImageConverter>(),
                 Roles = sp.GetRequiredService<IRoleResolver>(),
+                OwnerLookup = sp.GetRequiredService<ZipperAIQQ.Agent.IOwnerLookup>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),
                 FileMaxBytes = options.FileMaxBytes,
                 Schedules = sp.GetRequiredService<IScheduleStore>(),
