@@ -123,6 +123,44 @@ public sealed class ChatFilterTests
     }
 
     [Fact]
+    public void Whitelist_prefix_wildcard_allows_matching_sessions_only()
+    {
+        // 2026-10-28：抖音的 allowedSessions 并进本类后，历史配置里的 douyin:p* 必须继续生效；
+        // 否则"白名单非空 + 条目永远不命中" = 抖音一条消息都收不到，还没有任何报错。
+        var filter = new ChatFilter(new ChatFilterOptions());
+        filter.Update("douyin", new ChatFilterOptions { Whitelist = ["douyin:p*"] });
+
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "douyin", Type = ChatType.Private, Id = "123" }));
+        Assert.False(filter.IsAllowed(new ChatRef { Platform = "douyin", Type = ChatType.Group, Id = "456" }));
+    }
+
+    [Fact]
+    public void Blacklist_prefix_wildcard_denies_matching_sessions()
+    {
+        var filter = new ChatFilter(new ChatFilterOptions());
+        filter.Update("qq", new ChatFilterOptions { Blacklist = ["qq:g8*"] });
+        filter.Update("douyin", new ChatFilterOptions { Blacklist = ["douyin:g9*"] });
+
+        Assert.False(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "839201154" }));
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "123456" }));
+        Assert.False(filter.IsAllowed(new ChatRef { Platform = "douyin", Type = ChatType.Group, Id = "999" }));
+    }
+
+    [Fact]
+    public void AlwaysAllow_prefix_wildcard_bypasses_blacklist()
+    {
+        var filter = new ChatFilter(new ChatFilterOptions
+        {
+            Blacklist = ["qq:g*"],
+            AlwaysAllow = ["qq:g1*"],
+        });
+
+        // 主人所在的群（qq:g1xxx）即使被黑名单通配覆盖，也放行
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "1234" }));
+        Assert.False(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "2345" }));
+    }
+
+    [Fact]
     public void Overlap_is_rejected_on_update_too()
     {
         var filter = new ChatFilter(new ChatFilterOptions());

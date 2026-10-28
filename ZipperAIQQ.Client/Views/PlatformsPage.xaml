@@ -200,7 +200,7 @@
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel Spacing="10">
                                 <TextBlock Text="抖音配置" Style="{StaticResource SectionHeaderStyle}" />
-                                <ToggleSwitch Header="启用抖音通道（关掉时 /ws/channel 不监听）"
+                                <ToggleSwitch Header="启用抖音通道（关掉后 /ws/channel 返回 404）"
                                               IsOn="{x:Bind Vm.DouyinEnabled, Mode=TwoWay}" />
 
                                 <StackPanel Spacing="4">

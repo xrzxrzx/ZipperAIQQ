@@ -155,18 +155,59 @@ public sealed class ChatFilter : IChatFilter
         var id = chat.SessionId;
         var bucket = For(chat.Platform);
 
-        if (bucket.AlwaysAllow.Contains(id))
+        if (Matches(bucket.AlwaysAllow, id))
         {
             return true;
         }
 
-        if (bucket.Blacklist.Contains(id))
+        if (Matches(bucket.Blacklist, id))
         {
             return false;
         }
 
         // 白名单非空 = 只收名单内；白名单为空 = 不限定（黑名单仍生效）
-        return bucket.Whitelist.Count == 0 || bucket.Whitelist.Contains(id);
+        return bucket.Whitelist.Count == 0 || Matches(bucket.Whitelist, id);
+    }
+
+    /// <summary>
+    /// 名单条目是否命中会话：**整串相等**，或以 <c>*</c> 结尾时按前缀匹配。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 通配是 2026-10-28 补的：抖音原先有一套自己的 <c>allowedSessions</c>（支持 <c>douyin:p*</c>），
+    /// 合并进本类后若只做整串比较，那批 <c>...p*</c> 的条目会**永远不命中** ——
+    /// 而白名单非空是 deny-by-default，结果就是"抖音一条消息都收不到"，且没有任何报错。
+    /// </para>
+    /// <para>
+    /// 只支持**后缀** <c>*</c>（前缀匹配），不做正则：名单是给人填的，
+    /// 通配太自由反而容易写出"以为收窄了其实放开了"的规则。
+    /// </para>
+    /// </remarks>
+    private static bool Matches(IReadOnlyCollection<string> entries, string sessionId)
+    {
+        foreach (var entry in entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                continue;
+            }
+
+            var pattern = entry.Trim();
+            if (pattern.EndsWith('*'))
+            {
+                var prefix = pattern[..^1];
+                if (sessionId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            else if (string.Equals(pattern, sessionId, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public void Update(string platform, ChatFilterOptions options)
