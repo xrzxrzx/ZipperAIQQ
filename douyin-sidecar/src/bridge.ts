@@ -23,7 +23,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -56,7 +56,7 @@ const DEFAULT_DEAD_AFTER_MS = 90_000;
 
 /** 重连退避：1s 起步，翻倍封顶 60s（设计 §2.2「断了自动重连」）。 */
 const RECONNECT_INITIAL_MS = 1_000;
-const RECONNECT_MAX_MS = 60_000;
+const RECONNECT_MAX_MS = 15_000;
 
 /** WebSocket.OPEN 的字面值：不依赖 DOM 的 lib，避免额外 tsconfig lib 配置。 */
 const SOCKET_OPEN = 1;
@@ -745,6 +745,8 @@ export class DouyinImAdapter {
 
   private client: DouyinClient | null = null;
   private selfId = "";
+  /** 是否处于"已退出登录"状态：为 true 时不再上报 online（否则一重连就翻回已登录）。 */
+  private loggedOut = false;
   private readonly seenMessageIds = new Set<string>();
   /** threadId → conversationShortId：出站时 douyin-im 需要它，入站事件里顺手记下。 */
   private readonly conversationCache = new Map<string, string>();
@@ -768,6 +770,11 @@ export class DouyinImAdapter {
    * 那一次的 login.state 发不出去 —— 服务端就会一直显示 unknown（2026-10-28 实测）。
    */
   emitLoginState(): void {
+    if (this.loggedOut) {
+      this.emit({ type: "login.state", time: Date.now(), data: { state: "loggedOut" } });
+      return;
+    }
+
     if (this.selfId) {
       this.emit({ type: "login.state", time: Date.now(), data: { state: "online", selfId: this.selfId } });
     } else {
@@ -782,7 +789,20 @@ export class DouyinImAdapter {
    * 二维码会通过 `system.login.qrcode` 事件回来，再由 handleLoginEvent 推给服务端。
    */
   async startLogin(): Promise<void> {
-    const client = this.client;
+    this.loggedOut = false;
+    let client: DouyinClient | null = this.client;
+    if (!client) {
+      try {
+        client = await this.ensureClient();
+      } catch (err) {
+        this.emit({
+          type: "login.state",
+          time: Date.now(),
+          data: { state: "error", message: `重建 douyin-im 客户端失败：${describeError(err)}` },
+        });
+        return;
+      }
+    }
     if (!client) {
       this.emit({
         type: "login.state",
@@ -823,29 +843,65 @@ export class DouyinImAdapter {
    */
   async logout(): Promise<void> {
     const client = this.client;
-    const stopper = client ? firstFunction(client, ["logout"]) : null;
+    this.log.info("收到 login.logout：退出抖音登录（sidecar 继续运行）");
 
-    if (!stopper) {
-      this.emit({
-        type: "login.state",
-        time: Date.now(),
-        data: { state: "error", message: "douyin-im 客户端没有 logout()" },
-      });
-      return;
+    // ① 先调 douyin-im 的 logout（有就调；没有也不算失败）
+    const stopper = client ? firstFunction(client, ["logout", "stop", "close"]) : null;
+    if (stopper) {
+      try {
+        await Promise.resolve((stopper as AnyFn).call(client));
+      } catch (err) {
+        this.log.warn(`douyin-im logout() 失败（继续清本地登录态）：${describeError(err)}`);
+      }
     }
 
+    // ② **必须清掉持久化登录态**，否则下次 login() 会直接复用旧会话、
+    //    瞬间又变回「已登录」—— 用户看到的"退出后又显示已登录"就是这个（2026-10-28 实测）。
+    //    douyin-im 把会话写在 dataDir/accounts/<uid>/ 下。
     try {
-      this.log.info("收到 login.logout：退出抖音登录（sidecar 继续运行）");
-      await Promise.resolve((stopper as AnyFn).call(client));
-      this.selfId = "";
-      this.emit({ type: "login.state", time: Date.now(), data: { state: "loggedOut" } });
+      const accountsDir = path.join(this.dataDir, "accounts");
+      if (existsSync(accountsDir)) {
+        rmSync(accountsDir, { recursive: true, force: true });
+        this.log.info(`已清除抖音登录态目录：${accountsDir}`);
+      }
     } catch (err) {
-      this.emit({
-        type: "login.state",
-        time: Date.now(),
-        data: { state: "error", message: describeError(err) },
-      });
+      this.log.warn(`清除登录态目录失败：${describeError(err)}（下次登录可能仍会复用旧会话）`);
     }
+
+    // ③ **把 client 丢掉**：douyin-im 的 Client 对象在内存里还握着账号，
+    //    只用 rmSync 删磁盘的话，下次 login() 会把它重新写回去 ——
+    //    表现就是"退出登录后点登录，直接又变 online、根本不出二维码"（2026-10-28 实测）。
+    //    置空后由 ensureClient() 在下次登录时重新创建，内存/磁盘都干净。
+    try {
+      const stopper2 = client ? firstFunction(client, ["stop", "close"]) : null;
+      if (stopper2) {
+        await Promise.resolve((stopper2 as AnyFn).call(client)).catch(() => undefined);
+      }
+    } catch {
+      // 停不掉也无所谓，反正对象要丢
+    }
+
+    this.client = null;
+
+    this.loggedOut = true;
+    this.selfId = "";
+    this.emit({ type: "login.state", time: Date.now(), data: { state: "loggedOut" } });
+  }
+
+  /**
+   * 确保 client 存在（首次启动 / 退出登录后重建）。
+   */
+  private async ensureClient(): Promise<DouyinClient> {
+    if (this.client) {
+      return this.client;
+    }
+
+    const module = await importDouyinIm();
+    const client = createClientFromModule(module, this.dataDir, this.log);
+    this.bindEvents(client);
+    this.client = client;
+    this.log.debug("douyin-im 客户端已重新创建（登录态已清空）");
+    return client;
   }
 
   /** `hello` 帧（设计 §3.3）：登录完成后调用，`selfId` 可能为空。 */

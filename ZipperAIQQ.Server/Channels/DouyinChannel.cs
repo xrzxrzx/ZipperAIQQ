@@ -173,7 +173,7 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
         _loginQrAt = null;
         _loginState = DouyinLoginState.LoggedOut;
         _loginMessage = null;
-        UpdateSelfId(null);
+        ClearSelfId();
 
         _logger.Information("已请求 sidecar 退出抖音登录");
     }
@@ -490,7 +490,7 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
                 {
                     _loginQrBase64 = null;
                     _loginQrAt = null;
-                    UpdateSelfId(null);
+                    ClearSelfId();
                     _logger.Information("抖音已退出登录（sidecar 仍在运行）");
                 }
                 else if (state.State == DouyinLoginState.Error)
@@ -620,6 +620,24 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
         _selfId = selfId;
         _logger.Information("抖音自身账号已确认：{SelfId}", selfId);
         SelfIdChanged?.Invoke(selfId);
+    }
+
+    /// <summary>
+    /// 清掉 selfId（退出登录时用）。
+    /// </summary>
+    /// <remarks>
+    /// 不能复用 <see cref="UpdateSelfId"/>：它对 <c>null</c> 是"忽略"（防止被空帧冲掉），
+    /// 结果退出登录后 selfId 一直留着，界面看起来像"还登录着"（2026-10-28 实测）。
+    /// </remarks>
+    private void ClearSelfId()
+    {
+        if (string.IsNullOrEmpty(_selfId))
+        {
+            return;
+        }
+
+        _selfId = null;
+        _logger.Information("抖音 selfId 已清空（退出登录）");
     }
 
     // ─────────────────────────── 发送 / 查询 ───────────────────────────

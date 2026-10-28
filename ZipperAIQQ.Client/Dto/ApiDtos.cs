@@ -951,9 +951,16 @@ public sealed class DouyinLoginDto
     [JsonPropertyName("qrcodeBase64")]
     public string? QrcodeBase64 { get; set; }
 
-    /// <summary>二维码生成时间（Unix 毫秒，UTC）；没有二维码时为 0。</summary>
+    /// <summary>
+    /// 二维码生成时间（Unix 毫秒，UTC）；**没有二维码时服务端给 null**。
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ 必须是 <c>long?</c>：写成不可空的 <c>long</c> 时，服务端返回 <c>"qrcodeAt":null</c>
+    /// 会让 JsonSerializer 抛异常，界面报「服务端返回的不是契约 JSON」——
+    /// 与 saveDouyin 的 <c>saved</c> 是同一类事故（2026-10-28 已踩两次）。
+    /// </remarks>
     [JsonPropertyName("qrcodeAt")]
-    public long QrcodeAt { get; set; }
+    public long? QrcodeAt { get; set; }
 
     /// <summary>出错时的原因（<c>state = error</c> 才有）；其它状态通常 null。</summary>
     [JsonPropertyName("message")]
