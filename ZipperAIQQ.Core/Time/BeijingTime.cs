@@ -26,10 +26,6 @@ public static class BeijingTime
     public static DateTimeOffset ToBeijing(DateTimeOffset value) =>
         TimeZoneInfo.ConvertTime(value, Zone);
 
-    /// <summary>把 UTC Unix 毫秒转换为北京时间。</summary>
-    public static DateTimeOffset FromUnixMs(long utcMs) =>
-        ToBeijing(DateTimeOffset.FromUnixTimeMilliseconds(utcMs));
-
     /// <summary>格式化为完整时间（含星期），用于注入模型上下文。</summary>
     /// <example>2026-10-21 09:30:15 周三</example>
     public static string Format(DateTimeOffset value) =>

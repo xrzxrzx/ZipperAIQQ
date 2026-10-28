@@ -78,9 +78,6 @@ public sealed class ChatAgent : IChatAgent
     /// </remarks>
     private string? _anchorPersona;
 
-    /// <summary>上次锁定锚点用的人设内容（用于检测"人设被改过"）。</summary>
-    private string? _anchorPersonaSource;
-
     public ChatAgent(string sessionId, ChatAgentDependencies deps,
         Storage.Config.IConfigStore configs,
         Storage.Settings.IRuntimeSettingsStore settings)
@@ -270,23 +267,13 @@ public sealed class ChatAgent : IChatAgent
         // 会影响「我是谁」的回答（实测它自己编了个名字）。
         var personaText = BuildPersonaText(persona);
 
-        // 锚点：首次锁定后**永不改动**，保证「最初设定」一直在最前方
-        // 锚点 = **首次的人设**，之后固定在最前方，防止长对话把人设冲淡。
-
-        // 但人设**被改过**时必须跟着更新 —— 否则锚点还是旧的，
-
-        // 重注入里是新的人设，两条 system 互相打架，模型通常听第一条（实测：改了人设像没生效）。
-
-        if (_anchorPersona is null || !string.Equals(_anchorPersonaSource, personaText, StringComparison.Ordinal))
-
+        // 锚点：首次锁定后**永不改动**，保证「最初设定」一直在最前方。
+        // 但人设**被改过**时必须跟着更新 —— 否则锚点还是旧的，重注入里是新的人设，
+        // 两条 system 互相打架，模型通常听第一条（实测：改了人设像没生效）。
+        if (!string.Equals(_anchorPersona, personaText, StringComparison.Ordinal))
         {
-
             _anchorPersona = personaText;
-
-            _anchorPersonaSource = personaText;
-
             _logger.Information("人设已刷新（会话 {SessionId}）：{Name}", SessionId, persona.Name);
-
         }
 
         // 重注入内容 = 人设 + 摘要。
@@ -644,28 +631,6 @@ public sealed class ChatAgent : IChatAgent
     }
 
     /// <summary>
-    /// 工具使用指引。
-    /// </summary>
-    /// <remarks>
-    /// 实测问题：被问「我们之前聊过什么」时，模型宁可编也不调 <c>search_history</c> ——
-    /// 工具在那儿但没被用起来，所以要把「什么时候必须用」写清楚。
-    /// </remarks>
-    /// <summary>
-    /// 基础运行说明（发消息 / 表情 / 记忆）。
-    /// </summary>
-    /// <remarks>
-    /// 这些内容**原本写在 <c>config/persona.md</c> 里**，导致"人设文件"里一半是操作说明、
-    /// 另一半才是角色设定 —— 用户填了角色也感觉不到效果（模型看到的主要是工具说明书）。
-    /// 现在操作说明固定在代码里，persona.md 只负责角色本身。
-    /// </remarks>
-    /// <summary>
-    /// 人设正文 + 名字前缀。
-    /// </summary>
-    /// <remarks>
-    /// 只给【形象】/【性格】时，模型不知道自己叫什么 —— 实测它自己编了一个。
-    /// 名字是角色的最低限度信息，必须显式告诉它。
-    /// </remarks>
-    /// <summary>
     /// 「你和当前说话的人是什么关系」—— 主人是谁、现在这个人是不是主人。
     /// </summary>
     /// <remarks>
@@ -765,51 +730,6 @@ public sealed class ChatAgent : IChatAgent
 
         return sb.ToString();
     }
-
-    private const string RuntimeGuideNote = """
-        【怎么把话说出去】
-        - **必须调用 `send_message` 工具**，直接输出文本对方看不到
-        - 可以一次发多条，像真人把一句话分几条发；回复简短自然，别写小作文
-        - 不能也无需指定发给谁，会话是固定的
-
-        【怎么发表情】
-        1. 需要时先调 `list_faces`（不传关键词看常用，传关键词按名称/标签搜）
-        2. 把 `[表情:名字]` 写进消息里，例如：`哈哈哈[表情:笑哭]`
-        3. **单独一条只写 `[表情:名字]`** 会作为大表情发送（QQ 会自动播放特效）
-
-        【关于记忆】
-        - 上下文里可能出现「【之前对话的摘要】」「【可能相关的早期对话】」
-        - 它们是参考材料，不必逐条回应，但代表「你们之前确实聊过」
-        - 不要假装不记得，也不要生硬复述 —— 像真人那样自然接上
-        """;
-
-    /// <summary>
-    /// 工具使用指引（**强制语气**）。
-    /// </summary>
-    /// <remarks>
-    /// 实测问题：被问「好友列表有多少人」时，模型明明手上有 query_napcat_api，
-    /// 却回「说不出来，不瞎编」—— 宁可不答也不用工具。
-    /// 根因是提示词只写了「该用的时候用」，模型把「我不确定」当成了不用的理由。
-    /// 所以这里明确：**不确定正是必须去查的信号**。
-    /// </remarks>
-    private const string ToolUsageNote = """
-        【工具使用 · 强制】
-        你手上的工具：`search_history` / `get_recent_history`（本会话历史）、
-        `query_napcat_api`（好友/群/群成员/群头衔/陌生人资料）、`file_*`（读写文件）、`schedule_*`（定时任务）。
-
-        规则：
-        1. 被问到**你不确定的事实**（有多少人、某人是谁 / 什么头衔、之前聊过的原话、群里几个人）
-           → **必须先调工具查，再回答**
-        2. **不许**在没查的情况下回「我不知道 / 说不出来」—— 那等于没试就放弃
-        3. 查了确实没有，才说「查不到」，并说清查过什么
-        4. 工具报错就如实说报错，不要假装成功
-
-        【可以主动做的事】
-        - `poke_someone`（戳一戳）和 `set_my_signature`（改个性签名）是**你自己可以决定**的行为：
-          心情好、想引起注意、想表达态度时可以主动做，不必等对方要求
-        - 但要克制：同一轮里不要反复戳同一个人；签名不要频繁改
-        - 做完自然带过即可，不要解释成"我调用了工具"
-        """;
 
     /// <summary>
     /// 按角色生成「能力限制」说明，塞进重注入 system。

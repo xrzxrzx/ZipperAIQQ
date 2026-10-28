@@ -37,9 +37,6 @@ public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory
     private DateTimeOffset _cooldownUntil = DateTimeOffset.MinValue;
     private int _consecutive;
 
-    /// <summary>因触发冷却而实际等待过的次数（可观测用）。</summary>
-    public int CooldownCount { get; private set; }
-
 
     public ThrottledMessageChannel(
         IMessageChannel inner,
@@ -98,7 +95,6 @@ public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory
             if (now < _cooldownUntil)
             {
                 var wait = _cooldownUntil - now;
-                CooldownCount++;
                 await Task.Delay(wait, ct).ConfigureAwait(false);
                 _consecutive = 0;
                 now = DateTimeOffset.UtcNow;

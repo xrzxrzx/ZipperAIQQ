@@ -46,7 +46,6 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
 
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonObject>> _pending = new();
     private long _selfId;
-    private long _blockedCount;
 
     public NapCatChannel(
         IClientTransport transport,
@@ -334,9 +333,6 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
     /// <summary>首次发现 / 变更自身账号。</summary>
     public event Action<string>? SelfIdChanged;
 
-    /// <summary>因不在名单内而被丢弃的事件数（FR-17.4，**只计数不记内容**）。</summary>
-    public long BlockedCount => Interlocked.Read(ref _blockedCount);
-
     /// <summary>建立连接并开始接收。</summary>
     public async Task StartAsync(CancellationToken ct = default)
     {
@@ -485,7 +481,6 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
         // 接收过滤（FR-17.3）：不在名单内 → 不落库、不进模型
         if (!_filter.IsAllowed(evt.Chat))
         {
-            Interlocked.Increment(ref _blockedCount);
             return;
         }
 

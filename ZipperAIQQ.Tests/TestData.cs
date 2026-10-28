@@ -12,13 +12,6 @@ internal static class TestData
         Id = id,
     };
 
-    public static ChatRef GroupChat(string id = "20001") => new()
-    {
-        Platform = "qq",
-        Type = ChatType.Group,
-        Id = id,
-    };
-
     public static SenderInfo Sender(string id = "10001", string nickname = "测试用户") => new()
     {
         UserId = id,

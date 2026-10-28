@@ -30,9 +30,6 @@ public sealed class HttpAccessPolicy
         }
     }
 
-    /// <summary>是否强制要求 token（非 loopback 时 true）。</summary>
-    public bool RequiresToken => _requireToken;
-
     /// <summary>请求是否放行。</summary>
     public bool IsAllowed(string? providedToken)
     {

@@ -22,9 +22,6 @@ public sealed class ActionDispatcher
         _logger = logger;
     }
 
-    /// <summary>已注册的 action 名（供状态查询 / 排查）。</summary>
-    public IReadOnlyList<string> Names => _actions.Keys.OrderBy(n => n, StringComparer.Ordinal).ToArray();
-
     public async Task<ApiResponse> DispatchAsync(ApiRequest request, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);

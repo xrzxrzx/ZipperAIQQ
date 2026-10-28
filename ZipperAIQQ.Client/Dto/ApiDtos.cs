@@ -223,16 +223,6 @@ public sealed class SettingDto
     public bool Stored { get; set; }
 }
 
-/// <summary>保存运行参数的结果（<c>setSettings</c>）。</summary>
-public sealed class SetSettingsResultDto
-{
-    [JsonPropertyName("updated")]
-    public int Updated { get; set; }
-
-    [JsonPropertyName("keys")]
-    public List<string> Keys { get; set; } = [];
-}
-
 /// <summary>统计数据（<c>getStats</c>）：24 小时窗口 + 全量。</summary>
 public sealed class StatsDto
 {

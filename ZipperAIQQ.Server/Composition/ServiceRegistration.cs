@@ -478,10 +478,6 @@ public static class ServiceRegistration
 
     private static ChatAgentOptions BuildAgentOptions(ServerOptions options) => new()
     {
-        // 人设由 IPersonaStore 提供；这里只是「连人设文件都读不到」时的兜底，
-        // 保证永远有一条 system，不会出现没有角色的空壳对话。
-        FallbackSystemPrompt = "你是一个聊天助手，用简短自然的中文回复。",
-
         // 这三个以前**没接**（用了 ChatAgentOptions 的默认 0 / 20）：
         // 也就是说「发送限速=300ms」只打印在启动日志里，实际根本没生效。
         MinSendIntervalMs = options.SendIntervalMs,
