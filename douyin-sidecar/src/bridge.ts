@@ -659,6 +659,17 @@ export function buildOutboundPlan(
 }
 
 /** 好友列表 → `query.contacts` 结果项（字段名容错：uid / userId / id 都认）。 */
+/** 取第一个非空字符串（null/undefined/空串都跳过）。避免 ?? 链被空串"命中"。 */
+function firstNonEmpty(...values: (string | undefined)[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
 export function mapContacts(raw: unknown): ContactItem[] {
   const list = Array.isArray(raw) ? raw : asArray(asRecord(raw)?.contacts ?? asRecord(raw)?.friends ?? asRecord(raw)?.list);
   const contacts: ContactItem[] = [];
@@ -670,9 +681,16 @@ export function mapContacts(raw: unknown): ContactItem[] {
       continue;
     }
 
-    const remark = str(record?.remark) ?? str(record?.alias);
+    const remark = firstNonEmpty(str(record?.remark), str(record?.alias));
+    // 昵称按优先级回退；空串不算"有值"（2026-10-28：候选有 2 个但 display 全空就是这个）
     const nickname =
-      str(record?.nickname) ?? str(record?.name) ?? str(record?.displayName) ?? remark ?? userId;
+      firstNonEmpty(
+        remark,
+        str(record?.nickname),
+        str(record?.name),
+        str(record?.displayName),
+        str(record?.uniqueId),
+      ) ?? userId;
     contacts.push(remark ? { userId, nickname, remark } : { userId, nickname });
   }
 
@@ -691,7 +709,7 @@ export function mapGroups(raw: unknown): GroupItem[] {
       continue;
     }
 
-    const name = str(record?.name) ?? str(record?.groupName) ?? groupId;
+    const name = firstNonEmpty(str(record?.name), str(record?.groupName), str(record?.nickname)) ?? groupId;
     const memberCount = num(record?.memberCount) ?? num(record?.member_count);
     groups.push(memberCount === undefined ? { groupId, name } : { groupId, name, memberCount });
   }
@@ -980,8 +998,23 @@ export class DouyinImAdapter {
       mention.name ? { uid: mention.uid, name: mention.name } : { uid: mention.uid },
     );
 
-    // 纯文本 + 无引用：走设计 §1.3 里的 sendText 正路
     const plain = plan.imageUrls.length === 0 && plan.replyTo === null;
+
+    // ① douyin-im 1.1.0 的正路：account.pickFriend/pickGroup(threadId) → contact.sendMsg(text)
+    //    （2026-10-28 实测：client.sendMessage() 不存在，之前所有发送都失败）
+    if (plain) {
+      const contact = this.pickContact(plan);
+      const sendMsg = contact ? firstFunction(contact, ["sendMsg", "sendText", "send", "reply"]) : null;
+      if (contact && sendMsg) {
+        for (const chunk of plan.chunks) {
+          await Promise.resolve((sendMsg as AnyFn).call(contact, chunk));
+        }
+
+        return;
+      }
+    }
+
+    // ② 兼容路径：老实现里的 client.sendText（图片 / 引用 / 找不到联系人）
     const sendText = firstFunction(client, ["sendText"]);
     if (plain && sendText) {
       for (const chunk of plan.chunks) {
@@ -1024,26 +1057,85 @@ export class DouyinImAdapter {
     );
   }
 
-  /** `query.contacts` → `account.getFriendList()`（设计 §3.5）。 */
-  async getContacts(): Promise<ContactItem[]> {
-    const client = this.requireClient();
-    const getter = firstFunction(client, ["getFriendList", "getContacts", "getFriends"]);
-    if (!getter) {
-      throw new Error("douyin-im 客户端没有 getFriendList()（未验收 API，见设计 §10 #1）");
+  /**
+   * 取"当前账号"对象：douyin-im 1.1.0 里好友/群/发送都在 **account** 上，
+   * 不在 client 上（2026-10-28 实测：client.getFriendList 不存在 → 人员名单永远空）。
+   */
+  private requireAccount(): Record<string, any> {
+    const client = this.requireClient() as unknown as Record<string, any>;
+    const picker = firstFunction(client, ["pickAccount"]);
+    if (picker) {
+      // 不传参：只有一个账号时可省略 ID（多账号会抛错，交给上层显示原因）
+      const account = (picker as AnyFn).call(client);
+      if (account) {
+        return account as Record<string, any>;
+      }
     }
 
-    return mapContacts(await Promise.resolve(getter.call(client)));
+    // 退一步：有些实现直接把 account 挂在 client 上
+    if (client.account) {
+      return client.account as Record<string, any>;
+    }
+
+    throw new Error("douyin-im 客户端没有 pickAccount()，取不到当前账号（未验收 API，见设计 §10 #1）");
+  }
+
+  /**
+   * 按出站计划挑联系人实例（douyin-im 1.1.0：发送对象是 contact，不是 client）。
+   *
+   * 私聊 → `pickFriend(uid)`，群 → `pickGroup(gid)`；都没有就返回 null，
+   * 由调用方退回兼容路径或抛可读错误 —— **不猜**（猜错会把消息发到奇怪的地方）。
+   */
+  private pickContact(plan: OutboundPlan): Record<string, any> | null {
+    let account: Record<string, any>;
+    try {
+      account = this.requireAccount();
+    } catch {
+      return null;
+    }
+
+    const try_ = (name: string): Record<string, any> | null => {
+      const fn = firstFunction(account, [name]);
+      if (!fn) {
+        return null;
+      }
+
+      try {
+        const picked = (fn as AnyFn).call(account, plan.threadId);
+        return picked ? (picked as Record<string, any>) : null;
+      } catch (err) {
+        this.log.debug(`${name}(${plan.threadId}) 失败：${describeError(err)}`);
+        return null;
+      }
+    };
+
+    return plan.chatType === "group"
+      ? try_("pickGroup") ?? try_("pickStranger")
+      : try_("pickFriend") ?? try_("pickStranger");
+  }
+
+  /** `query.contacts` → `account.getFriendList()`（设计 §3.5）。 */
+  async getContacts(): Promise<ContactItem[]> {
+    const account = this.requireAccount();
+    const getter = firstFunction(account, ["getFriendList", "getContacts", "getFriends"])
+      ?? firstFunction(this.requireClient() as unknown as Record<string, any>, ["getFriendList", "getContacts", "getFriends"]);
+    if (!getter) {
+      throw new Error("douyin-im 账号没有 getFriendList()（未验收 API，见设计 §10 #1）");
+    }
+
+    return mapContacts(await Promise.resolve((getter as AnyFn).call(account)));
   }
 
   /** `query.groups` → `account.getGroupList()`（设计 §3.5）。 */
   async getGroups(): Promise<GroupItem[]> {
-    const client = this.requireClient();
-    const getter = firstFunction(client, ["getGroupList", "getGroups", "getConversationList"]);
+    const account = this.requireAccount();
+    const getter = firstFunction(account, ["getGroupList", "getGroups", "getConversationList"])
+      ?? firstFunction(this.requireClient() as unknown as Record<string, any>, ["getGroupList", "getGroups", "getConversationList"]);
     if (!getter) {
-      throw new Error("douyin-im 客户端没有 getGroupList()（未验收 API，见设计 §10 #1）");
+      throw new Error("douyin-im 账号没有 getGroupList()（未验收 API，见设计 §10 #1）");
     }
 
-    return mapGroups(await Promise.resolve(getter.call(client)));
+    return mapGroups(await Promise.resolve((getter as AnyFn).call(account)));
   }
 
   private requireClient(): DouyinClient {
