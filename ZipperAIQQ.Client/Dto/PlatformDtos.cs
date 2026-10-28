@@ -136,7 +136,7 @@ public sealed class DouyinPlatformDto
 
     /// <summary>sidecar 连入的端点（<c>/ws/channel</c>）。</summary>
     [JsonPropertyName("endpoint")]
-    public string Endpoint { get; set; } = "/ws/channel";
+    public string Endpoint { get; set; } = Services.ClientDefaults.DouyinEndpoint;
 
     /// <summary>
     /// 登录态：<c>online</c> / <c>waitingQr</c> / <c>loggedOut</c> / <c>error</c> / <c>unknown</c>。

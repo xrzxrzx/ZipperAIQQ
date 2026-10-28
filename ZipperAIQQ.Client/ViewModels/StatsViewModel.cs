@@ -153,8 +153,9 @@ public sealed partial class StatsViewModel : ObservableObject
                 Apply(stats);
             }
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"客户端异常：{ex}");
             // 心跳失败不提示（连接断了由状态条体现）
         }
     }

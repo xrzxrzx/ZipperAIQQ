@@ -138,8 +138,9 @@ public sealed partial class ShellViewModel : ObservableObject
                 await Status.RefreshQuietAsync().ConfigureAwait(true);
             }
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"客户端异常：{ex}");
             // 心跳失败不打断用户
         }
         finally

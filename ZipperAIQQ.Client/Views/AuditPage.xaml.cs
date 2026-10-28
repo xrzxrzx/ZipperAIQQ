@@ -50,8 +50,9 @@ public sealed partial class AuditPage : Page
             {
                 AuditList.ScrollIntoView(latest);
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine($"客户端异常：{ex}");
                 // 页面已卸载 / 容器未生成：滚动失败不影响数据
             }
         });

@@ -26,10 +26,10 @@ public sealed partial class ExternalServerItem : ObservableObject
     public partial bool Enabled { get; set; } = true;
 
     [ObservableProperty]
-    public partial string Host { get; set; } = "0.0.0.0";
+    public partial string Host { get; set; } = ClientDefaults.ReverseHost;
 
     [ObservableProperty]
-    public partial double Port { get; set; } = 5181;
+    public partial double Port { get; set; } = ClientDefaults.ReversePort;
 
     [ObservableProperty]
     public partial string Url { get; set; } = string.Empty;
@@ -141,8 +141,8 @@ public sealed partial class ExternalViewModel : ObservableObject
         {
             Kind = "reverse",
             Name = "反向监听",
-            Host = "0.0.0.0",
-            Port = 5181,
+            Host = ClientDefaults.ReverseHost,
+            Port = ClientDefaults.ReversePort,
         };
 
         AllServers.Add(server);

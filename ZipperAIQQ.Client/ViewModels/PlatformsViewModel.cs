@@ -236,7 +236,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
     public partial string DouyinStateText { get; set; } = "还没加载";
 
     [ObservableProperty]
-    public partial string DouyinEndpointText { get; set; } = "/ws/channel";
+    public partial string DouyinEndpointText { get; set; } = ClientDefaults.DouyinEndpoint;
 
     /// <summary>抖音自己的账号 ID（顶部 chip 用；没连上时为空）。</summary>
     [ObservableProperty]
@@ -553,7 +553,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
             DouyinLoginAvailable = false;
             DouyinLoginStatus = "服务端不支持运行时登录管理（旧版本）";
             DouyinStateText = "服务端未返回抖音配置（旧版本？抖音页需要新服务端）";
-            DouyinEndpointText = "/ws/channel";
+            DouyinEndpointText = ClientDefaults.DouyinEndpoint;
             return;
         }
 
@@ -572,7 +572,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
             ? (string.IsNullOrWhiteSpace(douyin.SelfId) ? "sidecar 已连入" : $"sidecar 已连入 · selfId {douyin.SelfId}")
             : (douyin.Enabled ? "未连入（sidecar 还没连上来 / 登录态可能过期）" : "未启用（启用后 /ws/channel 才会监听）");
         DouyinEndpointText = string.IsNullOrWhiteSpace(douyin.Endpoint)
-            ? "/ws/channel"
+            ? ClientDefaults.DouyinEndpoint
             : douyin.Endpoint;
 
         // 登录态：**旧服务端的 douyin 块里没有 loginState（空串）** → 登录/退出按钮禁用

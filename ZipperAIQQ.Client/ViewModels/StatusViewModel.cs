@@ -27,7 +27,7 @@ public sealed partial class StatusViewModel : ObservableObject
     }
 
     [ObservableProperty]
-    public partial string ServerUrl { get; set; } = "http://127.0.0.1:5180";
+    public partial string ServerUrl { get; set; } = ClientDefaults.ServerUrl;
 
     [ObservableProperty]
     public partial string Token { get; set; } = string.Empty;
@@ -61,8 +61,9 @@ public sealed partial class StatusViewModel : ObservableObject
             {
                 await _sessions.LoadSessionsCommand.ExecuteAsync(null).ConfigureAwait(true);
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine($"客户端异常：{ex}");
                 // 会话列表拉不到不影响连接
             }
 
@@ -115,8 +116,9 @@ public sealed partial class StatusViewModel : ObservableObject
         {
             await LoadStatusCoreAsync().ConfigureAwait(true);
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"客户端异常：{ex}");
             // 心跳失败由状态条体现
         }
     }

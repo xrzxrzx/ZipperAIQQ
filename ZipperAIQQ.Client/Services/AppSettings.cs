@@ -17,7 +17,7 @@ public sealed class AppSettings
 
     private static readonly string FilePath = Path.Combine(Directory, "client.json");
 
-    public string ServerUrl { get; set; } = "http://127.0.0.1:5180";
+    public string ServerUrl { get; set; } = ClientDefaults.ServerUrl;
 
     public string Token { get; set; } = string.Empty;
 
@@ -42,8 +42,9 @@ public sealed class AppSettings
             var json = File.ReadAllText(FilePath);
             return JsonSerializer.Deserialize<AppSettings>(json, ClientJson.Options) ?? new AppSettings();
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"客户端异常：{ex}");
             // 配置坏了就用默认值，不能因此起不来
             return new AppSettings();
         }
@@ -56,8 +57,9 @@ public sealed class AppSettings
             System.IO.Directory.CreateDirectory(Directory);
             File.WriteAllText(FilePath, JsonSerializer.Serialize(this, ClientJson.Options));
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"客户端异常：{ex}");
             // 保存失败不影响本次使用
         }
     }
