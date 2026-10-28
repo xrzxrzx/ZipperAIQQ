@@ -48,27 +48,13 @@ public sealed class NoticePlatformGroup
 internal static class NoticePlatformLabeling
 {
     /// <summary>缺省平台：契约里 <c>platform</c> 省略时服务端按 <c>qq</c> 处理。</summary>
-    internal const string DefaultPlatform = "qq";
-
-    /// <summary>已知平台的展示顺序（未知平台排在后面，按码排）。</summary>
-    private static readonly string[] KnownPlatformOrder = ["qq", "douyin"];
-
-    private static readonly Dictionary<string, string> PlatformLabels = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["qq"] = "QQ",
-        ["douyin"] = "抖音",
-    };
+    internal const string DefaultPlatform = PlatformCatalog.DefaultPlatform;
 
     /// <summary>规范化平台码：空 → <see cref="DefaultPlatform"/>，统一小写（与服务端平台规范化同口径）。</summary>
-    internal static string Normalize(string? code) =>
-        string.IsNullOrWhiteSpace(code) ? DefaultPlatform : code.Trim().ToLowerInvariant();
+    internal static string Normalize(string? code) => PlatformCatalog.Normalize(code);
 
     /// <summary>平台码 → 界面文案；未知平台原样显示，将来加平台不用改客户端。</summary>
-    internal static string LabelOf(string? code)
-    {
-        var normalized = Normalize(code);
-        return PlatformLabels.TryGetValue(normalized, out var label) ? label : normalized;
-    }
+    internal static string LabelOf(string? code) => PlatformCatalog.LabelOf(code);
 
     /// <summary>组标题：平台名 + 通知（中文后直接接，拉丁字母后留一个空格）。</summary>
     internal static string TitleOf(string? code)
@@ -78,14 +64,7 @@ internal static class NoticePlatformLabeling
     }
 
     /// <summary>组的排序：QQ → 抖音 → 未知平台。</summary>
-    internal static int OrderOf(string? code)
-    {
-        var normalized = Normalize(code);
-        var index = Array.FindIndex(
-            KnownPlatformOrder,
-            known => string.Equals(known, normalized, StringComparison.OrdinalIgnoreCase));
-        return index < 0 ? KnownPlatformOrder.Length : index;
-    }
+    internal static int OrderOf(string? code) => PlatformCatalog.OrderOf(code);
 }
 
 /// <summary>

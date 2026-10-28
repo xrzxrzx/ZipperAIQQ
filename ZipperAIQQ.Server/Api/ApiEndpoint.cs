@@ -24,7 +24,7 @@ public static class ApiEndpoint
             var policy = context.RequestServices.GetRequiredService<HttpAccessPolicy>();
             var dispatcher = context.RequestServices.GetRequiredService<ActionDispatcher>();
 
-            if (!policy.IsAllowed(ExtractToken(context.Request)))
+            if (!policy.IsAllowed(HttpAccessPolicy.ExtractBearerToken(context.Request)))
             {
                 await WriteAsync(context, StatusCodes.Status401Unauthorized,
                     ApiResponse.Fail(ApiResponse.Unauthorized, "未授权：缺少或错误的 token。")).ConfigureAwait(false);
@@ -74,14 +74,5 @@ public static class ApiEndpoint
         await context.Response
             .WriteAsJsonAsync(response, ApiJson.Options, context.RequestAborted)
             .ConfigureAwait(false);
-    }
-
-    private static string? ExtractToken(HttpRequest request)
-    {
-        var header = request.Headers.Authorization.ToString();
-        const string prefix = "Bearer ";
-        return header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? header[prefix.Length..].Trim()
-            : null;
     }
 }

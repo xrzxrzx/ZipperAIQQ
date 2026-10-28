@@ -342,7 +342,7 @@ public class MailDigestService
             }
 
             builder.Append('[').Append(BeijingTime.FormatShort(mail.SentAt)).Append("] ")
-                .AppendLine(DescribeSender(mail));
+                .AppendLine(MailText.DescribeSender(mail.FromName, mail.FromAddress));
             builder.Append("   主题：").AppendLine(mail.Subject);
             builder.Append("   摘要：").AppendLine(SummaryText(mail.Summary));
         }
@@ -370,9 +370,4 @@ public class MailDigestService
 
         return string.IsNullOrWhiteSpace(row.Text) ? "（摘要为空）" : row.Text;
     }
-
-    private static string DescribeSender(StoredMail mail) =>
-        string.IsNullOrWhiteSpace(mail.FromName)
-            ? mail.FromAddress
-            : $"{mail.FromName} <{mail.FromAddress}>";
 }

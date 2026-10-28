@@ -28,7 +28,7 @@ public static class EventEndpoint
             var policy = context.RequestServices.GetRequiredService<HttpAccessPolicy>();
             var logger = context.RequestServices.GetRequiredService<ILogger>();
 
-            if (!policy.IsAllowed(ExtractToken(context.Request)))
+            if (!policy.IsAllowed(HttpAccessPolicy.ExtractBearerToken(context.Request)))
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
@@ -120,14 +120,5 @@ public static class EventEndpoint
     {
         var bytes = Encoding.UTF8.GetBytes(text);
         await socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, ct).ConfigureAwait(false);
-    }
-
-    private static string? ExtractToken(HttpRequest request)
-    {
-        var header = request.Headers.Authorization.ToString();
-        const string prefix = "Bearer ";
-        return header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? header[prefix.Length..].Trim()
-            : null;
     }
 }
