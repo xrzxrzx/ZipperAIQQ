@@ -937,8 +937,18 @@ public sealed class DouyinPlatformDto
 /// <summary>保存抖音配置的结果（<c>saveDouyin</c>）。</summary>
 public sealed class SaveDouyinResultDto
 {
+    /// <summary>真正改了几个字段（**数字**，不是 bool）。</summary>
+    /// <remarks>
+    /// ⚠️ 这里曾经写成 <c>bool</c>，而服务端返回的是计数（<c>"saved":2</c>）→
+    /// JsonSerializer 直接抛异常，界面报「服务端返回的不是契约 JSON」，抖音配置怎么都存不上
+    /// （用户实测 2026-10-28）。以后改这个契约**两边一起改**。
+    /// </remarks>
     [JsonPropertyName("saved")]
-    public bool Saved { get; set; }
+    public int Saved { get; set; }
+
+    /// <summary>没有任何字段变化（此时 <see cref="Saved"/> = 0）。</summary>
+    [JsonPropertyName("skipped")]
+    public bool Skipped { get; set; }
 
     /// <summary>真正变了的字段名；没变化 → 空表。</summary>
     [JsonPropertyName("changed")]

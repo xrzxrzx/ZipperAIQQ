@@ -185,7 +185,7 @@ public sealed class DouyinOptionsService
                 .ConfigureAwait(false);
 
             nextSessions = normalized;
-            changed.Add($"allowedSessions={normalized.Count}");
+            changed.Add("allowedSessions");
         }
 
         var nextSend = current.SendTimeoutMs;

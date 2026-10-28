@@ -121,6 +121,32 @@ public sealed class PlatformActionsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SaveDouyin_ResponseShape_MatchesClientDto()
+    {
+        // 契约回归（2026-10-28 事故）：客户端 DTO 曾把 saved 声明成 bool，
+        // 而服务端返回计数 → 反序列化抛异常，界面报「服务端返回的不是契约 JSON」，配置存不上。
+        // 这里把"响应里每个字段的类型"钉死，改契约时必须同时改这里。
+        var action = new SaveDouyinAction(_douyinOptions, _douyin, _configs);
+
+        var json = ToJson(await action.HandleAsync(
+            Payload("""{ "enabled": false, "allowedSessions": ["douyin:p1"] }"""),
+            CancellationToken.None));
+
+        Assert.Equal(JsonValueKind.Number, json.GetProperty("saved").ValueKind);
+        Assert.True(
+            json.GetProperty("skipped").ValueKind is JsonValueKind.True or JsonValueKind.False,
+            "skipped 必须是布尔");
+        Assert.Equal(JsonValueKind.Array, json.GetProperty("changed").ValueKind);
+        Assert.True(json.GetProperty("connected").ValueKind is JsonValueKind.True or JsonValueKind.False);
+
+        // changed 里只放**字段名**，别把值拼进去（界面上会显示成「allowedSessions=1」这种怪东西）
+        var changed = json.GetProperty("changed").EnumerateArray().Select(x => x.GetString()).ToList();
+        Assert.Contains("enabled", changed);
+        Assert.Contains("allowedSessions", changed);
+        Assert.DoesNotContain(changed, x => x is not null && x.Contains('=', StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task SaveDouyin_StoresCipherNotPlaintext()
     {
         var action = new SaveDouyinAction(_douyinOptions, _douyin, _configs);
