@@ -52,6 +52,9 @@ public sealed class MailAccountSession : IAsyncDisposable
     private DateTimeOffset? _lastSyncAt;
     private bool _stopped;
 
+    /// <summary>当前账号是否挂着一条错误状态（成功一轮后要清掉，见 <see cref="ClearErrorAsync"/>）。</summary>
+    private bool _hasError;
+
     /// <summary>构造一个账号会话（不启动，等 <see cref="RunAsync"/>）。</summary>
     /// <param name="account">账号配置。</param>
     /// <param name="credential">**明文**凭据；只用于连接，绝不写日志、绝不落库。</param>
@@ -86,6 +89,9 @@ public sealed class MailAccountSession : IAsyncDisposable
         _logger = logger;
         _lastUid = account.LastUid;
         _lastSyncAt = account.LastSyncAt;
+
+        // 上次运行留下的错误状态：这一轮成功后要清掉（而不是让它一直挂在卡片上）
+        _hasError = !string.IsNullOrWhiteSpace(account.LastError);
     }
 
     /// <summary>账号 ID（日志与事件形状用）。</summary>
@@ -178,9 +184,14 @@ public sealed class MailAccountSession : IAsyncDisposable
 
             var session = await EnsureConnectedAsync(ct).ConfigureAwait(false);
 
-            return _lastUid <= 0
+            var processed = _lastUid <= 0
                 ? await RunInitialSyncAsync(session, ct).ConfigureAwait(false)
                 : await RunIncrementalSyncAsync(session, ct).ConfigureAwait(false);
+
+            // 这一轮没抛异常 = 连接与同步都好了：把之前那条错误清掉（否则卡片永远红着旧账）
+            await ClearErrorAsync().ConfigureAwait(false);
+
+            return processed;
         }
         finally
         {
@@ -229,7 +240,19 @@ public sealed class MailAccountSession : IAsyncDisposable
                 break;
             }
 
-            processed += await ProcessBatchAsync(batch, isInitialSync: false, ct).ConfigureAwait(false);
+            // 防御：服务器可能无视范围重投**旧 UID**（实测 163 就会：同一页每分钟原样返回，
+            // 水位卡住不动、每轮重拉一次，还顺带把连接拖到被掐）。只处理真正在水位之后的邮件。
+            var fresh = batch.Where(m => m.Uid > watermarkBefore).ToList();
+            if (fresh.Count == 0)
+            {
+                _logger.Debug(
+                    "邮件账号 {AccountId} 取回的一页全是旧 UID（水位 {LastUid}），跳过本轮",
+                    _account.Id,
+                    _lastUid);
+                break;
+            }
+
+            processed += await ProcessBatchAsync(fresh, isInitialSync: false, ct).ConfigureAwait(false);
 
             // 熔断：这一页没让水位前进就停手。否则会话实现有 bug（返回旧 UID）时会原地打转。
             if (_lastUid <= watermarkBefore)
@@ -241,7 +264,7 @@ public sealed class MailAccountSession : IAsyncDisposable
                 break;
             }
 
-            if (batch.Count < FetchPageSize)
+            if (fresh.Count < FetchPageSize)
             {
                 break;
             }
@@ -390,6 +413,8 @@ public sealed class MailAccountSession : IAsyncDisposable
     /// <summary>写一条可读错误到账号状态（**绝不含凭据**）。</summary>
     private async Task RecordErrorAsync(string error, CancellationToken ct)
     {
+        _hasError = true;
+
         try
         {
             await _repository
@@ -399,6 +424,37 @@ public sealed class MailAccountSession : IAsyncDisposable
         catch (Exception ex)
         {
             _logger.Warning(ex, "邮件账号 {AccountId} 写入错误状态失败", _account.Id);
+        }
+    }
+
+    /// <summary>
+    /// 同步恢复正常后**清掉历史错误**（2026-10-28 修）。
+    /// </summary>
+    /// <remarks>
+    /// 之前只写不清：163 半夜被掐一次连接，客户端卡片就一直红着那条旧错误，
+    /// 明明后来已经收信成功了 —— 界面在骗人，比不显示更糟。
+    /// 只在"确实有过错误"时才写库，避免每分钟打一次无意义的 UPDATE。
+    /// </remarks>
+    private async Task ClearErrorAsync()
+    {
+        if (!_hasError)
+        {
+            return;
+        }
+
+        _hasError = false;
+
+        try
+        {
+            await _repository
+                .UpdateSyncStateAsync(_account.Id, _lastUid, _lastSyncAt, lastError: null, CancellationToken.None)
+                .ConfigureAwait(false);
+
+            _logger.Information("邮件账号 {AccountId} 同步已恢复，清除错误状态", _account.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "邮件账号 {AccountId} 清除错误状态失败", _account.Id);
         }
     }
 

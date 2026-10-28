@@ -119,6 +119,48 @@ public sealed class MailAccountSessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SyncOnceAsync_ServerReplaysStaleUids_DoesNotSpinOrAdvance()
+    {
+        // 实测 163 会无视 UID 范围、把旧的一页原样重投：水位卡死 → 每分钟重拉一次，
+        // 还顺带把连接拖到被掐（2026-10-28 线上现象）。这里锁住"看到旧 UID 就本分收手"。
+        var account = Account("acc-stale", lastUid: 5);
+        await _repo.UpsertAccountAsync(account);
+
+        _scripts["acc-stale"] = new SessionScript
+        {
+            MaxUid = 5,
+            Replay = true,                       // 无视水位，永远返回同一封（uid=5 = 水位本身）
+            Always = [Message(5, "<already@example.com>")],
+        };
+
+        var (session, events) = NewSession(account);
+        await using var sessionScope = session;
+
+        var processed = await session.SyncOnceAsync(CancellationToken.None);
+
+        Assert.Equal(0, processed);
+        Assert.Empty(Drain(events));
+        Assert.Equal(5, (await _repo.LoadAccountsAsync()).Single().LastUid); // 水位不动（也没有更旧的被拉进来）
+    }
+
+    [Fact]
+    public async Task SyncOnceAsync_Success_ClearsPreviousErrorState()
+    {
+        // 上一轮失败写了 LastError，这一轮好了就必须清掉 —— 否则卡片永远红着旧账
+        var account = Account("acc-err", lastUid: 3) with { LastError = "IOException: 远程主机强迫关闭了一个现有的连接。" };
+        await _repo.UpsertAccountAsync(account);
+
+        _scripts["acc-err"] = new SessionScript { MaxUid = 3, Always = [] };
+
+        var (session, _) = NewSession(account);
+        await using var sessionScope = session;
+
+        await session.SyncOnceAsync(CancellationToken.None);
+
+        Assert.Null((await _repo.LoadAccountsAsync()).Single().LastError);
+    }
+
+    [Fact]
     public async Task SyncOnceAsync_DuplicateDelivery_SkipsEventButAdvancesWatermark()
     {
         // Arrange：库里已有 uid=2 那封（模拟"落库成功但水位没来得及写"的崩溃窗口），

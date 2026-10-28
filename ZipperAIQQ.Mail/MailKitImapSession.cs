@@ -233,7 +233,10 @@ public sealed class MailKitImapSession : IImapSession
             var range = new UniqueIdRange(new UniqueId((uint)afterUid + 1), UniqueId.MaxValue);
             var found = await folder.SearchAsync(SearchQuery.Uids(range), ct).ConfigureAwait(false);
 
-            return found.Count <= limit ? found : found.Take(limit).ToArray();
+            // ⚠️ 不信服务器的范围过滤：实测 163 会返回**旧 UID**（甚至把整页原样重投）。
+            // 自己再筛一遍并取**最新**的 limit 条 —— 拿最旧的等于永远追不上新的。
+            var fresh = found.Where(uid => uid.Id > (uint)afterUid).ToArray();
+            return fresh.Length <= limit ? fresh : fresh[(fresh.Length - limit)..];
         }
 
         // 首次同步：从**最新**往回取一页。取最旧的一页等于从十年前的邮件开始扫。
