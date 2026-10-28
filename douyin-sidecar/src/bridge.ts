@@ -1520,7 +1520,13 @@ export class ChannelLink {
       });
 
       socket.addEventListener("error", (event) => {
-        this.options.log.warn(`WebSocket 出错：${describeSocketError(event)}`);
+        const message = describeSocketError(event);
+        this.options.log.warn(`WebSocket 出错：${message}`);
+
+        // ⚠️ 必须在这里也 finish：Node 的 ws 有时只发 error、不发 close，
+        // 不 finish 的话这次 `await` 永远不返回 → 重连循环直接停死
+        // （2026-10-28 实测：服务端重启后 sidecar 只试了一次，之后 12 分钟没再重连）。
+        finish(new Error(message));
       });
 
       socket.addEventListener("close", (event) => {
