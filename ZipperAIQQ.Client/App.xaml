@@ -127,6 +127,23 @@
                 <Setter Property="CornerRadius" Value="4" />
             </Style>
 
+            <!--
+                对话框：跟主窗体同一套日系配色（卡片紫底 + 樱粉描边 + 文字色）。
+                定义在**顶层**而不是 ThemeDictionaries 里 —— 代码里 Application.Current.Resources[key]
+                取不到 ThemeDictionaries 里的资源（实测），放这里才能被 C# 直接套上。
+                BasedOn 必须带上：默认样式里有 Template，不继承就没模板、弹出来是空白。
+            -->
+            <Style x:Key="JpDialogStyle" TargetType="ContentDialog"
+                   BasedOn="{StaticResource DefaultContentDialogStyle}">
+                <Setter Property="Background" Value="{ThemeResource JpCardBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource JpCardStrokeBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="Foreground" Value="{ThemeResource JpTextBrush}" />
+                <Setter Property="PrimaryButtonStyle" Value="{StaticResource JpAccentButtonStyle}" />
+                <Setter Property="CloseButtonStyle" Value="{StaticResource JpButtonStyle}" />
+            </Style>
+
             <Style x:Key="ToolbarIconButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="BorderThickness" Value="0" />

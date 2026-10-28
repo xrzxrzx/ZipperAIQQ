@@ -126,6 +126,7 @@ public static class ServerConfigLoader
                 SummaryEnabled = s.Bool("mail", "summaryEnabled", o.Mail.SummaryEnabled),
                 MaxConcurrentSummaries = s.Int("mail", "maxConcurrentSummaries", o.Mail.MaxConcurrentSummaries),
                 SummaryRetryCount = s.Int("mail", "summaryRetryCount", o.Mail.SummaryRetryCount),
+                PersonaDigest = s.Bool("mail", "personaDigest", o.Mail.PersonaDigest),
                 DigestMode = s.EnumValue("mail", "digestMode", o.Mail.DigestMode),
                 DigestIntervalMinutes = s.Int("mail", "digestIntervalMinutes", o.Mail.DigestIntervalMinutes),
                 DailyAtHour = s.Int("mail", "dailyAtHour", o.Mail.DailyAtHour),

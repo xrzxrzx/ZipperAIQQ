@@ -83,6 +83,8 @@ public sealed class GetPlatformsAction : IApiAction
             {
                 // 运行时真值（S3-F 补）：客户端改完开关马上就能看到效果
                 enabled = _mailSwitch.Enabled,
+                // 「汇总再经人格润色」的可选项（2026-10-28 用户要求）
+                personaDigest = _mailSwitch.PersonaDigest,
                 accounts = accounts
                     .Select(a => new
                     {
@@ -302,30 +304,54 @@ public sealed class SaveMailAction : IApiAction
 
     public async Task<object?> HandleAsync(JsonElement payload, CancellationToken ct)
     {
-        if (payload.ValueKind != JsonValueKind.Object ||
-            !payload.TryGetProperty("enabled", out var enabledElement))
+        if (payload.ValueKind != JsonValueKind.Object)
         {
-            throw new ApiException(ApiResponse.BadRequest, "payload 需要 enabled（true / false）。");
+            throw new ApiException(ApiResponse.BadRequest, "payload 必须是对象。");
         }
 
-        var enabled = enabledElement.ValueKind switch
+        // 两个开关都可选：只传要改的那个（客户端拨哪个就传哪个）
+        var enabled = ReadOptionalBool(payload, "enabled");
+        var personaDigest = ReadOptionalBool(payload, "personaDigest");
+
+        if (enabled is null && personaDigest is null)
+        {
+            throw new ApiException(ApiResponse.BadRequest,
+                "payload 需要 enabled 或 personaDigest（布尔值）。");
+        }
+
+        var changed = await _switch.SetAsync(enabled, personaDigest, ct).ConfigureAwait(false);
+
+        if (changed.Count > 0)
+        {
+            await _configs
+                .AppendAuditAsync("saveMail", Actor, string.Join(",", changed), ct)
+                .ConfigureAwait(false);
+        }
+
+        // 值没变时 saved=0 + skipped=true（不算错，与 setAccess / saveDouyin 同口径）
+        return new
+        {
+            enabled = _switch.Enabled,
+            personaDigest = _switch.PersonaDigest,
+            saved = changed.Count,
+            skipped = changed.Count == 0,
+            changed,
+        };
+    }
+
+    /// <summary>可选布尔字段：缺失 / null → <c>null</c>（= 不改）；给了非布尔 → 400。</summary>
+    private static bool? ReadOptionalBool(JsonElement payload, string name)
+    {
+        if (!payload.TryGetProperty(name, out var element) || element.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return element.ValueKind switch
         {
             JsonValueKind.True => true,
             JsonValueKind.False => false,
-            _ => throw new ApiException(ApiResponse.BadRequest, "enabled 必须是布尔值。"),
+            _ => throw new ApiException(ApiResponse.BadRequest, $"{name} 必须是布尔值。"),
         };
-
-        var changed = await _switch.SetEnabledAsync(enabled, ct).ConfigureAwait(false);
-        if (!changed)
-        {
-            // 值没变不算错（与 setAccess / saveDouyin 同口径）
-            return new { enabled = _switch.Enabled, saved = 0, skipped = true };
-        }
-
-        await _configs
-            .AppendAuditAsync("saveMail", Actor, enabled ? "enabled=1" : "enabled=0", ct)
-            .ConfigureAwait(false);
-
-        return new { enabled = _switch.Enabled, saved = 1, skipped = false };
     }
 }

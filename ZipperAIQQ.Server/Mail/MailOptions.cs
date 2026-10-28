@@ -46,6 +46,16 @@ public sealed record MailOptions
     /// <summary>并发摘要上限（避免打爆 DeepSeek 配额）。</summary>
     public int MaxConcurrentSummaries { get; init; } = 2;
 
+    /// <summary>
+    /// 汇总是否**再经一遍人格 agent**（默认开）。
+    /// </summary>
+    /// <remarks>
+    /// 开：汇总先交主人私聊的 agent，用当前人设的语气转告（多一次模型调用）；
+    /// 关：直接发汇总文本（省一次调用，但语气是"系统报表"）。
+    /// 客户端可热改（<c>MailOptionsService.PersonaDigest</c>），这里是启动兜底。
+    /// </remarks>
+    public bool PersonaDigest { get; init; } = true;
+
     /// <summary>摘要失败重试次数（指数退避）。</summary>
     public int SummaryRetryCount { get; init; } = 3;
 

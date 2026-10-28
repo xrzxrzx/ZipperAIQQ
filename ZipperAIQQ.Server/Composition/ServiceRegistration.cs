@@ -230,6 +230,8 @@ public static class ServiceRegistration
             sp.GetRequiredService<IMessageChannel>(),
             sp.GetRequiredService<IMailRepository>(),
             options.Mail,
+            // 「汇总再经人格润色」是运行时可选项：关掉就直发
+            sp.GetRequiredService<MailOptionsService>(),
             // 汇总先交给人格 agent 去说（用户要求），失败才回落直发
             sp.GetRequiredService<IChatAgentPool>(),
             sp.GetRequiredService<ILogger>()));

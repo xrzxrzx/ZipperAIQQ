@@ -7,8 +7,8 @@
     mc:Ignorable="mc">
 
     <Page.Resources>
-        <!-- 平台总览的一个点（QQ / 抖音…）：绿点 / 灰点用 x:Load 二选一，VM 不碰 Brush -->
-        <DataTemplate x:Key="PlatformChip" x:DataType="vm:PlatformChipItem">
+        <!-- 顶部接入状态的一块（邮件 / 抖音）：绿点/灰点用 x:Load 二选一，VM 不碰 Brush -->
+        <DataTemplate x:Key="OverviewChip" x:DataType="vm:OverviewChipItem">
             <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                 <Grid Width="10" Height="10" VerticalAlignment="Center">
                     <Ellipse x:Name="ChipConnectedDot" Fill="#FF6BD08A" x:Load="{x:Bind Connected}" />
@@ -17,6 +17,10 @@
                 <TextBlock Text="{x:Bind Label}" FontWeight="SemiBold" VerticalAlignment="Center" />
                 <TextBlock Text="{x:Bind StatusText}" Style="{StaticResource CaptionStyle}"
                            VerticalAlignment="Center" />
+                <!-- 出问题时补一段红字（账号 lastError 之类），没问题就整块不生成 -->
+                <TextBlock x:Name="ChipError" Text="{x:Bind ErrorText}" Foreground="OrangeRed" FontSize="12"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="320"
+                           x:Load="{x:Bind HasError}" />
             </StackPanel>
         </DataTemplate>
 
@@ -32,8 +36,11 @@
                         <StackPanel Grid.Column="0" Spacing="2">
                             <TextBlock Text="{x:Bind Address}" FontWeight="SemiBold"
                                        TextTrimming="CharacterEllipsis" />
-                            <TextBlock Text="{x:Bind SubtitleText}" Style="{StaticResource CaptionStyle}"
-                                       TextTrimming="CharacterEllipsis" />
+                            <!-- 没填显示名就整行不生成（以前会显示「未命名账号」，看着像漏写） -->
+                            <TextBlock x:Name="MailSubtitle" Text="{x:Bind SubtitleText, Mode=OneWay}"
+                                       Style="{StaticResource CaptionStyle}"
+                                       TextTrimming="CharacterEllipsis"
+                                       x:Load="{x:Bind HasDisplayName, Mode=OneWay}" />
                         </StackPanel>
                         <ToggleSwitch Grid.Column="1" VerticalAlignment="Top"
                                       IsOn="{x:Bind Enabled, Mode=OneWay}"
@@ -80,14 +87,14 @@
                         VerticalAlignment="Bottom" Command="{x:Bind Vm.LoadCommand}" />
             </Grid>
 
-            <!-- 平台总览（getPlatforms.platforms） -->
+            <!-- 接入状态（只看邮件 / 抖音；QQ 归状态页，不在这排） -->
             <Border Style="{StaticResource CardStyle}" Padding="14">
                 <StackPanel Spacing="6">
                     <StackPanel Orientation="Horizontal" Spacing="10">
-                        <TextBlock Text="平台" Style="{StaticResource SectionHeaderStyle}" Margin="0"
+                        <TextBlock Text="通道" Style="{StaticResource SectionHeaderStyle}" Margin="0"
                                    VerticalAlignment="Center" />
-                        <ItemsControl ItemsSource="{x:Bind Vm.PlatformChips}"
-                                      ItemTemplate="{StaticResource PlatformChip}">
+                        <ItemsControl ItemsSource="{x:Bind Vm.OverviewChips}"
+                                      ItemTemplate="{StaticResource OverviewChip}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Orientation="Horizontal" Spacing="16" />
@@ -105,19 +112,32 @@
                 <PivotItem Header="邮件">
                     <StackPanel Spacing="12" Margin="0,8,0,0">
 
-                        <!-- 通道开关（S3-F 补）：运行时热切，改完不必重启服务 -->
+                        <!-- 通道开关（S3-F 补）：两个都是运行时热切，改完不必重启服务 -->
                         <Border Style="{StaticResource CardStyle}">
-                            <StackPanel Spacing="8">
-                                <ToggleSwitch Header="启用邮件接入"
-                                              IsOn="{x:Bind Vm.MailEnabled, Mode=OneWay}"
-                                              IsEnabled="{x:Bind Vm.MailSwitchAvailable, Mode=OneWay}"
-                                              Toggled="MailChannel_Toggled" />
-                                <TextBlock Text="{x:Bind Vm.MailChannelText, Mode=OneWay}"
-                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-                                <TextBlock Text="{x:Bind Vm.MailSwitchStatus, Mode=OneWay}"
-                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
-                                <TextBlock Text="关闭后不再连 IMAP 收信；已收的邮件与账号仍保留。"
-                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="8">
+                                    <ToggleSwitch Header="启用邮件接入"
+                                                  IsOn="{x:Bind Vm.MailEnabled, Mode=OneWay}"
+                                                  IsEnabled="{x:Bind Vm.MailSwitchAvailable, Mode=OneWay}"
+                                                  Toggled="MailChannel_Toggled" />
+                                    <TextBlock Text="{x:Bind Vm.MailChannelText, Mode=OneWay}"
+                                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                                    <TextBlock Text="{x:Bind Vm.MailSwitchStatus, Mode=OneWay}"
+                                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                                    <TextBlock Text="关闭后不再连 IMAP 收信；已收的邮件与账号仍保留。"
+                                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                                </StackPanel>
+
+                                <StackPanel Spacing="8">
+                                    <ToggleSwitch Header="汇总再经人格润色"
+                                                  IsOn="{x:Bind Vm.MailPersonaDigest, Mode=OneWay}"
+                                                  IsEnabled="{x:Bind Vm.MailSwitchAvailable, Mode=OneWay}"
+                                                  Toggled="MailPersonaDigest_Toggled" />
+                                    <TextBlock Text="{x:Bind Vm.MailPersonaDigestStatus, Mode=OneWay}"
+                                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                                    <TextBlock Text="开启：先交你的人设 agent 用她的语气转告；关闭：直接发汇总文本（省一次模型调用）。"
+                                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 

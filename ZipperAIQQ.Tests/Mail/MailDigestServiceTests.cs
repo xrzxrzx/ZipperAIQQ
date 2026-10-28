@@ -34,6 +34,9 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
     /// <summary>人格 agent 的替身：默认"没发出去"，好让各条用例走直发回落分支。</summary>
     private FakeAgentPool _agents = new(sentMessages: 0);
 
+    /// <summary>邮件运行时开关（接入 + 人格润色）；默认沿用 MailOptions 的启动值。</summary>
+    private MailOptionsService _mailSwitch = null!;
+
     public MailDigestServiceTests()
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"zipper-mail-digest-{Guid.NewGuid():N}.db");
@@ -48,6 +51,10 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
     {
         var initializer = new DatabaseInitializer($"Data Source={_dbPath}", Logger);
         await initializer.InitializeAsync();
+
+        // 运行时开关：默认沿用 Options()（接入开 + 人格润色开）
+        _mailSwitch = new MailOptionsService(new FakeSettings(), Options(), Logger);
+        await _mailSwitch.InitializeAsync();
     }
 
     public async Task DisposeAsync()
@@ -240,6 +247,28 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
         Assert.Single(channel.Sent);      // 直发兜住了
     }
 
+    [Fact]
+    public async Task FlushAsync_PersonaDigestDisabled_SendsDirectlyWithoutCallingAgent()
+    {
+        // 「汇总再经人格润色」关掉 → 不叫 agent、直发（省一次模型调用）
+        await SeedMailAsync("季度发票", "发票待报销");
+        var settings = new FakeSettings().Set(MailDigestService.OwnerKey, "10001");
+        var channel = new FakeChannel();
+
+        await _mailSwitch.SetAsync(enabled: null, personaDigest: false);
+        Assert.False(_mailSwitch.PersonaDigest);
+
+        _agents = new FakeAgentPool(sentMessages: 1); // 就算它能发，也不该被叫
+        var service = Service(channel, settings);
+
+        var result = await service.FlushAsync(10);
+
+        Assert.True(result.Sent);
+        Assert.Equal(0, _agents.RunCount);   // 没走人格润色
+        Assert.Single(channel.Sent);         // 直接发了
+        Assert.Contains("季度发票", channel.Sent[0].PlainText);
+    }
+
     // ─────────────────────────── 测试数据与小工具 ───────────────────────────
 
     private static MailOptions Options(int forwardRetryCount = 2) => new()
@@ -250,7 +279,8 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
     };
 
     private MailDigestService Service(IMessageChannel channel, IRuntimeSettingsStore settings, MailOptions? options = null) =>
-        new FastRetryDigestService(settings, channel, _repository, options ?? Options(), _agents, _logger);
+        new FastRetryDigestService(
+            settings, channel, _repository, options ?? Options(), _mailSwitch, _agents, _logger);
 
     /// <summary>塞一封"摘要成功、还没转发"的邮件，返回主键。</summary>
     private async Task<long> SeedMailAsync(
@@ -293,9 +323,10 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
             IMessageChannel channel,
             IMailRepository repository,
             MailOptions options,
+            MailOptionsService mailSwitch,
             ZipperAIQQ.Agent.IChatAgentPool agents,
             ILogger logger)
-            : base(settings, channel, repository, options, agents, logger)
+            : base(settings, channel, repository, options, mailSwitch, agents, logger)
         {
         }
 

@@ -219,6 +219,41 @@ public sealed class PlatformActionsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SaveMail_PersonaDigestToggle_PersistsAndExposesInGetPlatforms()
+    {
+        // 「汇总再经人格润色」是可选开关（2026-10-28 用户要求）
+        Assert.True(_mailSwitch.PersonaDigest); // 默认开
+
+        var action = new SaveMailAction(_mailSwitch, _configs);
+        var json = ToJson(await action.HandleAsync(Payload("""{ "personaDigest": false }"""), CancellationToken.None));
+
+        Assert.False(json.GetProperty("personaDigest").GetBoolean());
+        Assert.False(json.GetProperty("enabled").GetBoolean()); // 没传就不动
+        Assert.Equal(1, json.GetProperty("saved").GetInt32());
+
+        var stored = await _settings.GetAsync(MailOptionsService.PersonaDigestKey, CancellationToken.None);
+        Assert.Equal("0", stored);
+
+        var get = new GetPlatformsAction(
+            _channel, _douyin, _douyinOptions, new SqliteMailRepository(_db), new MailOptions(), _mailSwitch);
+        var platforms = ToJson(await get.HandleAsync(EmptyPayload(), CancellationToken.None));
+        Assert.False(platforms.GetProperty("mail").GetProperty("personaDigest").GetBoolean());
+    }
+
+    [Fact]
+    public async Task SaveMail_BothTogglesInOneCall_ChangesBoth()
+    {
+        var action = new SaveMailAction(_mailSwitch, _configs);
+
+        var json = ToJson(await action.HandleAsync(
+            Payload("""{ "enabled": true, "personaDigest": false }"""), CancellationToken.None));
+
+        Assert.True(json.GetProperty("enabled").GetBoolean());
+        Assert.False(json.GetProperty("personaDigest").GetBoolean());
+        Assert.Equal(2, json.GetProperty("saved").GetInt32());
+    }
+
+    [Fact]
     public async Task SaveMail_UnchangedValue_ReturnsSkipped()
     {
         var action = new SaveMailAction(_mailSwitch, _configs);

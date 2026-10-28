@@ -128,6 +128,25 @@ public sealed partial class PlatformsPage : Page
         _ = Vm.SetMailChannelEnabledAsync(toggle.IsOn);
     }
 
+    /// <summary>
+    /// 「汇总再经人格润色」开关（<c>saveMail { personaDigest }</c>）。
+    /// 与「启用邮件接入」同一套：OneWay + 事件，绑定回填 / 失败还原都不会误触发。
+    /// </summary>
+    private void MailPersonaDigest_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleSwitch toggle || !Vm.MailSwitchAvailable)
+        {
+            return;
+        }
+
+        if (toggle.IsOn == Vm.MailPersonaDigest)
+        {
+            return;
+        }
+
+        _ = Vm.SetMailPersonaDigestAsync(toggle.IsOn);
+    }
+
     /// <summary>新建 / 编辑对话框：校验在按钮回调里，保存也在这里（失败就把对话框留着，输入不丢）。</summary>
     private async Task ShowMailDialogAsync(MailAccountItem? existing)
     {
@@ -137,6 +156,14 @@ public sealed partial class PlatformsPage : Page
             Text = existing?.Address ?? string.Empty,
             PlaceholderText = "someone@qq.com",
             MinWidth = 360,
+        };
+
+        // 显示名（可选）：以前漏了这个字段，用户看到卡片副标题是「未命名账号」以为是 bug
+        var displayName = new TextBox
+        {
+            Header = "显示名（可选）",
+            Text = existing?.DisplayName ?? string.Empty,
+            PlaceholderText = "给人看的名字，比如「工作邮箱」；留空 = 不显示这一行",
         };
 
         var imapHost = new TextBox
@@ -199,6 +226,7 @@ public sealed partial class PlatformsPage : Page
             RequestedTheme = ElementTheme.Dark,
         };
         panel.Children.Add(address);
+        panel.Children.Add(displayName);
         panel.Children.Add(hostRow);
         panel.Children.Add(useSsl);
         panel.Children.Add(username);
@@ -266,7 +294,7 @@ public sealed partial class PlatformsPage : Page
                     var (ok, message) = await Vm.SaveMailAccountAsync(
                         existing?.Id,
                         addressText,
-                        existing?.DisplayName ?? string.Empty,
+                        displayName.Text.Trim(),   // 空串照发：允许把显示名清空
                         hostText,
                         (int)imapPort.Value,
                         useSsl.IsOn,
@@ -309,21 +337,19 @@ public sealed partial class PlatformsPage : Page
         error.Visibility = Visibility.Visible;
     }
 
-    /// <summary>对话框跟页面同一套日系主题与按钮样式（外部接口页也是这么做的）。</summary>
+    /// <summary>
+    /// 对话框套上 App 里的 <c>JpDialogStyle</c>（卡片紫底 + 樱粉描边 + 粉按钮），
+    /// 这样开关、输入框、按钮跟主窗体是同一套日系主题，而不是系统默认的深灰。
+    /// </summary>
     private static void StyleDialog(ContentDialog dialog)
     {
+        // 先定主题再套样式：ThemeResource 才会按 Dark 那套颜色解析
+        // （内容根上还有一个 Dark，那条是修输入框白底的，别删）
         dialog.RequestedTheme = ElementTheme.Dark;
 
-        if (Application.Current.Resources.TryGetValue("JpAccentButtonStyle", out var accent) &&
-            accent is Style accentStyle)
+        if (Application.Current.Resources.TryGetValue("JpDialogStyle", out var style) && style is Style dialogStyle)
         {
-            dialog.PrimaryButtonStyle = accentStyle;
-        }
-
-        if (Application.Current.Resources.TryGetValue("JpButtonStyle", out var normal) &&
-            normal is Style normalStyle)
-        {
-            dialog.CloseButtonStyle = normalStyle;
+            dialog.Style = dialogStyle;
         }
     }
 }

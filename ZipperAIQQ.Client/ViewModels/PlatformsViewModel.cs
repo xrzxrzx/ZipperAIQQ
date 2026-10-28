@@ -7,42 +7,35 @@ using ZipperAIQQ.Client.Services;
 namespace ZipperAIQQ.Client.ViewModels;
 
 /// <summary>
-/// 顶部平台总览里的一个点（QQ / 抖音…），数据来自 <c>getPlatforms.platforms</c>。
+/// 顶部「接入状态」里的一个点（**只有邮件 / 抖音**，QQ 不在这排里——
+/// QQ 的连通状态归状态页，这页只管第三方平台）。
 /// </summary>
-public sealed class PlatformChipItem
+/// <remarks>
+/// 文案与红字都在构造时算好：模板只负责显示，不在 XAML 里做判断。
+/// </remarks>
+public sealed class OverviewChipItem
 {
-    public PlatformChipItem(PlatformInfoDto dto)
+    public OverviewChipItem(string label, bool ok, string statusText, string errorText)
     {
-        ArgumentNullException.ThrowIfNull(dto);
-
-        Id = dto.Id;
-        Label = string.IsNullOrWhiteSpace(dto.Label) ? dto.Id : dto.Label;
-        Connected = dto.Connected;
-        Enabled = dto.Enabled;
-        SelfId = dto.SelfId ?? string.Empty;
-        Features = dto.Features;
+        Label = label;
+        Connected = ok;
+        StatusText = statusText;
+        ErrorText = errorText;
     }
-
-    public string Id { get; }
 
     public string Label { get; }
 
+    /// <summary>绿点：邮件看"是否启用"，抖音看"是否已连入"。</summary>
     public bool Connected { get; }
 
-    /// <summary>x:Load 的第二根笔：没连上 / 没启用时显示灰点。</summary>
+    /// <summary>x:Load 的第二根笔：不健康时显示灰点。</summary>
     public bool Offline => !Connected;
 
-    public bool Enabled { get; }
+    public string StatusText { get; }
 
-    public string SelfId { get; }
+    public string ErrorText { get; }
 
-    public IReadOnlyList<string> Features { get; }
-
-    public string StatusText => Connected
-        ? (string.IsNullOrWhiteSpace(SelfId) ? "已连接" : $"已连接 · {SelfId}")
-        : (Enabled ? "未连接" : "未启用");
-
-    public string FeatureText => Features.Count == 0 ? string.Empty : string.Join("、", Features);
+    public bool HasError => !string.IsNullOrWhiteSpace(ErrorText);
 }
 
 /// <summary>
@@ -94,7 +87,10 @@ public sealed partial class MailAccountItem : ObservableObject
     [ObservableProperty]
     public partial bool Enabled { get; set; }
 
-    public string SubtitleText => string.IsNullOrWhiteSpace(DisplayName) ? "未命名账号" : DisplayName;
+    /// <summary>卡片副标题：**没有显示名就不显示**（不再用「未命名账号」占位）。</summary>
+    public bool HasDisplayName => !string.IsNullOrWhiteSpace(DisplayName);
+
+    public string SubtitleText => DisplayName;
 
     public string ImapText => $"{ImapHost}:{ImapPort} · {(UseSsl ? "SSL" : "明文")} · 用户 {Username}";
 
@@ -129,14 +125,18 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
     private readonly ServerApiClient _api;
 
+    /// <summary>上一次拿到的 mail / douyin 块：开关与 chips 都要用它算文案（null = 旧服务端没给）。</summary>
+    private MailPlatformDto? _mailBlock;
+    private DouyinPlatformDto? _douyinBlock;
+
     public PlatformsViewModel(ServerApiClient api)
     {
         ArgumentNullException.ThrowIfNull(api);
         _api = api;
     }
 
-    /// <summary>平台总览（QQ / 抖音…）。</summary>
-    public ObservableCollection<PlatformChipItem> PlatformChips { get; } = [];
+    /// <summary>顶部接入状态（邮件 / 抖音两块，不用 getPlatforms.platforms）。</summary>
+    public ObservableCollection<OverviewChipItem> OverviewChips { get; } = [];
 
     /// <summary>邮件账号卡（每张卡一个账号）。</summary>
     public ObservableCollection<MailAccountItem> MailAccounts { get; } = [];
@@ -169,6 +169,14 @@ public sealed partial class PlatformsViewModel : ObservableObject
     /// <summary>开关自己的状态位（成功「已启用 / 已停用」、失败原因）。</summary>
     [ObservableProperty]
     public partial string MailSwitchStatus { get; set; } = string.Empty;
+
+    /// <summary>汇总是否再交人设 agent 润色（<c>getPlatforms.mail.personaDigest</c>）。</summary>
+    [ObservableProperty]
+    public partial bool MailPersonaDigest { get; set; }
+
+    /// <summary>人设润色开关的状态位。</summary>
+    [ObservableProperty]
+    public partial string MailPersonaDigestStatus { get; set; } = string.Empty;
 
     // ── 抖音配置卡 ────────────────────────────────────────────────
     [ObservableProperty]
@@ -210,6 +218,10 @@ public sealed partial class PlatformsViewModel : ObservableObject
     [ObservableProperty]
     public partial string DouyinEndpointText { get; set; } = "/ws/channel";
 
+    /// <summary>抖音自己的账号 ID（顶部 chip 用；没连上时为空）。</summary>
+    [ObservableProperty]
+    public partial string DouyinSelfId { get; set; } = string.Empty;
+
     /// <summary>刷新页面（两个 Tab 一起刷）。</summary>
     [RelayCommand]
     private async Task LoadAsync()
@@ -237,6 +249,9 @@ public sealed partial class PlatformsViewModel : ObservableObject
                 ? "还没有收信账号 —— 点右上角「新建账号」开始。"
                 : string.Empty;
             MailStatus = "已加载";
+
+            // 账号数 / lastError 会影响顶部「邮件」那块，顺手对齐
+            RebuildOverviewChips();
         }
         catch (Exception ex)
         {
@@ -245,7 +260,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
         }
     }
 
-    /// <summary>拉平台总览 + 抖音块；**失败保留旧值**，只更新状态文案。</summary>
+    /// <summary>拉平台块（mail / douyin）；**失败保留旧值**，只更新状态文案。</summary>
     private async Task LoadPlatformsAsync()
     {
         PlatformsDto? data;
@@ -255,10 +270,10 @@ public sealed partial class PlatformsViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            OverviewStatus = $"平台总览加载失败：{ex.Message}（邮件账号不受影响；抖音配置需要新服务端）";
+            OverviewStatus = $"接入状态加载失败：{ex.Message}（邮件账号不受影响；抖音配置需要新服务端）";
 
             // 别让抖音页停在"还没加载"这种含糊状态上 —— 说清是"没拿到"而不是"没连上"
-            if (PlatformChips.Count == 0)
+            if (OverviewChips.Count == 0)
             {
                 DouyinStateText = "抖音状态未知（getPlatforms 失败，见上方提示）";
                 MailChannelText = "邮件通道：状态未知（getPlatforms 失败，不影响账号增删改）";
@@ -269,27 +284,25 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
         if (data is null)
         {
-            OverviewStatus = "平台总览：服务端没有返回数据。";
+            OverviewStatus = "接入状态：服务端没有返回数据。";
             return;
         }
 
-        PlatformChips.Clear();
-        foreach (var info in data.Platforms)
-        {
-            PlatformChips.Add(new PlatformChipItem(info));
-        }
-
-        OverviewStatus = PlatformChips.Count == 0
-            ? "服务端没返回平台清单（旧版本？）—— 不影响下面两个 Tab 的配置"
+        // 顶部两块只认 mail / douyin；getPlatforms.platforms（含 QQ）留给别的页用，这里不摆
+        OverviewStatus = data.Mail is null && data.Douyin is null
+            ? "服务端没返回邮件 / 抖音配置（旧版本？）—— 下面两个 Tab 仍可各自操作"
             : string.Empty;
 
         ApplyMailBlock(data.Mail);
         ApplyDouyinBlock(data.Douyin);
+        RebuildOverviewChips();
     }
 
-    /// <summary>邮件块：通道开关的真值 + 账号兜底（账号仍以 listMailAccounts 为准）。</summary>
+    /// <summary>邮件块：通道开关 + 人设润色的真值 + 账号兜底（账号仍以 listMailAccounts 为准）。</summary>
     private void ApplyMailBlock(MailPlatformDto? mail)
     {
+        _mailBlock = mail;
+
         if (mail is null)
         {
             // 旧服务端：连 mail 块都没有 → 不知道真值，也不许假装知道
@@ -300,6 +313,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
         MailSwitchAvailable = true;
         MailEnabled = mail.Enabled;
+        MailPersonaDigest = mail.PersonaDigest;
         ShowMailChannelState(mail.Enabled);
 
         // 正常情况下 listMailAccounts 已经填过；只有它失败（列表还空着）时才用这份兜底
@@ -312,6 +326,65 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
             MailEmptyHint = string.Empty;
         }
+    }
+
+    /// <summary>
+    /// 顶部两块（邮件 / 抖音）的文案与状态点。**不使用 <c>getPlatforms.platforms</c>** ——
+    /// 那里面是 QQ 之类的通道，本页只关心邮件与抖音。
+    /// </summary>
+    private void RebuildOverviewChips()
+    {
+        if (_mailBlock is null && _douyinBlock is null)
+        {
+            return;   // 一次都没拿到平台块：保持空，别编状态
+        }
+
+        OverviewChips.Clear();
+        OverviewChips.Add(BuildMailChip());
+        OverviewChips.Add(BuildDouyinChip());
+    }
+
+    private OverviewChipItem BuildMailChip()
+    {
+        if (_mailBlock is null)
+        {
+            return new OverviewChipItem("邮件", false, "状态未知（旧服务端）", string.Empty);
+        }
+
+        var count = MailAccounts.Count > 0 ? MailAccounts.Count : _mailBlock.Accounts.Count;
+        var status = MailEnabled ? $"已启用（{count} 个账号）" : "已停用";
+
+        // 任一账号有 lastError → 红灯提示（只取第一条，别把顶栏堆成日志）
+        var firstError = MailAccounts.FirstOrDefault(a => a.HasError)?.LastError
+            ?? _mailBlock.Accounts.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a.LastError))?.LastError
+            ?? string.Empty;
+
+        return new OverviewChipItem(
+            "邮件",
+            MailEnabled,
+            status,
+            string.IsNullOrWhiteSpace(firstError) ? string.Empty : $"同步失败：{firstError}");
+    }
+
+    private OverviewChipItem BuildDouyinChip()
+    {
+        if (_douyinBlock is null)
+        {
+            return new OverviewChipItem("抖音", false, "状态未知（旧服务端）", string.Empty);
+        }
+
+        if (!DouyinEnabled)
+        {
+            return new OverviewChipItem("抖音", false, "未启用", string.Empty);
+        }
+
+        return DouyinConnected
+            ? new OverviewChipItem(
+                "抖音",
+                true,
+                string.IsNullOrWhiteSpace(DouyinSelfId) ? "已连入" : $"已连入（selfId={DouyinSelfId}）",
+                string.Empty)
+            : new OverviewChipItem("抖音", false, "未连入（等待 sidecar）", string.Empty);
     }
 
     /// <summary>把「已启用 / 已停用」翻译成给人看的一句话（关闭的后果也写在这儿）。</summary>
@@ -340,9 +413,11 @@ public sealed partial class PlatformsViewModel : ObservableObject
             var result = await _api.CallAsync<SaveMailResultDto>("saveMail", new { enabled })
                 .ConfigureAwait(true);
 
-            // 以服务端回的真值为准（skipped = 本来就是这值，不算错）
+            // 以服务端回的真值为准（skipped = 本来就是这值，不算错）。
+            // 同一次响应也会带 personaDigest —— 一起对齐，别让它与真实配置脱节。
             var actual = result?.Enabled ?? enabled;
             MailEnabled = actual;
+            MailPersonaDigest = result?.PersonaDigest ?? MailPersonaDigest;
             ShowMailChannelState(actual);
             MailSwitchStatus = result?.Skipped == true
                 ? $"没有变化（当前：{(actual ? "已启用" : "已停用")}）"
@@ -367,19 +442,68 @@ public sealed partial class PlatformsViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 「汇总再经人格润色」开关（<c>saveMail { personaDigest }</c>）。
+    /// 与启用开关同一套处理：失败拨回 + 可见错误；旧服务端（404）直接说明"不支持"。
+    /// </summary>
+    public async Task SetMailPersonaDigestAsync(bool enabled)
+    {
+        if (enabled == MailPersonaDigest)
+        {
+            return;   // 没变就别打扰服务端
+        }
+
+        var previous = MailPersonaDigest;
+        MailPersonaDigest = enabled;
+        MailPersonaDigestStatus = "保存中…";
+
+        try
+        {
+            var result = await _api.CallAsync<SaveMailResultDto>("saveMail", new { personaDigest = enabled })
+                .ConfigureAwait(true);
+
+            MailPersonaDigest = result?.PersonaDigest ?? enabled;
+            MailEnabled = result?.Enabled ?? MailEnabled;
+            ShowMailChannelState(MailEnabled);
+            MailPersonaDigestStatus = result?.Skipped == true
+                ? $"没有变化（当前：{(MailPersonaDigest ? "已开启" : "已关闭")}）"
+                : (MailPersonaDigest
+                    ? "已开启：汇总先交人设 agent 润色后再发"
+                    : "已关闭：直接发汇总文本");
+
+            await LoadPlatformsAsync().ConfigureAwait(true);
+        }
+        catch (ApiCallException ex) when (ex.Code == 404 && ex.Message.Contains("未知 action", StringComparison.Ordinal))
+        {
+            MailPersonaDigest = previous;
+            MailSwitchAvailable = false;
+            MailChannelText = "邮件通道：服务端不支持运行时开关（旧版本）—— 只能改 server.yaml 后重启";
+            MailPersonaDigestStatus = $"未保存：服务端没有 saveMail（{ex.Message}）";
+        }
+        catch (Exception ex)
+        {
+            MailPersonaDigest = previous;
+            MailPersonaDigestStatus = $"保存失败（已还原开关）：{ex.Message}";
+        }
+    }
+
     /// <summary>抖音块：配置 + 连通状态。</summary>
     private void ApplyDouyinBlock(DouyinPlatformDto? douyin)
     {
+        _douyinBlock = douyin;
+
         if (douyin is null)
         {
             DouyinConnected = false;
             DouyinOffline = true;
+            DouyinSelfId = string.Empty;
             DouyinStateText = "服务端未返回抖音配置（旧版本？抖音页需要新服务端）";
             DouyinEndpointText = "/ws/channel";
             return;
         }
 
         DouyinEnabled = douyin.Enabled;
+        DouyinSelfId = douyin.SelfId ?? string.Empty;
         DouyinTokenStatus = douyin.TokenConfigured
             ? "已配置（不回显；要换就重填，留空 = 不改）"
             : "未配置（sidecar 与 Server 都必须配上同一个 token）";

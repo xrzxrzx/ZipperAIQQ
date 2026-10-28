@@ -844,6 +844,10 @@ public sealed class MailPlatformDto
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; }
 
+    /// <summary>汇总是否再交人设 agent 润色（true = 用人设语气转告，false = 直接发汇总文本）。</summary>
+    [JsonPropertyName("personaDigest")]
+    public bool PersonaDigest { get; set; }
+
     [JsonPropertyName("accounts")]
     public List<MailAccountDto> Accounts { get; set; } = [];
 }
@@ -945,15 +949,19 @@ public sealed class SaveDouyinResultDto
     public bool Connected { get; set; }
 }
 
-/// <summary>保存邮件总开关的结果（<c>saveMail</c>，S3-F 补：运行时热切，不必重启）。</summary>
+/// <summary>保存邮件配置的结果（<c>saveMail</c>：启用开关 + 人设润色开关，都是运行时热切）。</summary>
 /// <remarks>
 /// 值没变时服务端回 <c>saved = 0 / skipped = true</c>，**不算错**；
-/// <see cref="Enabled"/> 是落库后的真值 —— 界面以它为准，别拿自己拨的值当结果。
+/// <see cref="Enabled"/> / <see cref="PersonaDigest"/> 是落库后的真值 —— 界面以它们为准，别拿自己拨的值当结果。
 /// </remarks>
 public sealed class SaveMailResultDto
 {
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; }
+
+    /// <summary>人设润色的真值（与启用开关同一次响应回显）。</summary>
+    [JsonPropertyName("personaDigest")]
+    public bool PersonaDigest { get; set; }
 
     /// <summary>实际改动的键数：0 = 本来就是这值（配合 <see cref="Skipped"/>）。</summary>
     [JsonPropertyName("saved")]

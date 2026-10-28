@@ -56,6 +56,7 @@ public class MailDigestService
     private readonly IMessageChannel _channel;
     private readonly IMailRepository _repository;
     private readonly MailOptions _options;
+    private readonly MailOptionsService _mailSwitch;
     private readonly Agent.IChatAgentPool _agents;
     private readonly ILogger _logger;
 
@@ -73,6 +74,7 @@ public class MailDigestService
         IMessageChannel channel,
         IMailRepository repository,
         MailOptions options,
+        MailOptionsService mailSwitch,
         Agent.IChatAgentPool agents,
         ILogger logger)
     {
@@ -80,12 +82,15 @@ public class MailDigestService
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(mailSwitch);
+        ArgumentNullException.ThrowIfNull(agents);
         ArgumentNullException.ThrowIfNull(logger);
 
         _settings = settings;
         _channel = channel;
         _repository = repository;
         _options = options;
+        _mailSwitch = mailSwitch;
         _agents = agents;
         _logger = logger;
     }
@@ -161,12 +166,23 @@ public class MailDigestService
         // ── 先交给**人格 agent** 去说（用户要求：AI 总结后由人格模拟的 agent 发给主人）──
         // 为什么不让服务直接发：邮件汇总是"通知"，但主人要面对的是**这个人**。
         // 直接发一段格式化文本，语气和人设是断的；交给 agent，它会用当前人设、当前语境去说。
-        var handedToAgent = await TryHandToAgentAsync(pending, text, target, ct).ConfigureAwait(false);
+        //
+        // 2026-10-28：改成**可选项**（客户端「汇总再经人格润色」）。关掉就直发，
+        // 省一次模型调用 —— 有些用户只想要一份干净的清单，不想她"演绎"一遍。
+        var handedToAgent = false;
+        if (_mailSwitch.PersonaDigest)
+        {
+            handedToAgent = await TryHandToAgentAsync(pending, text, target, ct).ConfigureAwait(false);
+        }
+
         if (!handedToAgent)
         {
-            // 人格 agent 没发出去（模型判断不必发 / 调用失败 / 没人设可用）→ 回落直发。
+            // 人格润色关掉 / agent 没发出去（模型判断不必发 / 调用失败）→ 直发。
             // 宁可语气平淡一次，也不能让主人收不到（验收标准 10：不静默丢）。
-            _logger.Warning("邮件汇总没能由人格 agent 发出，回落为直接发送（{Count} 封）", pending.Count);
+            if (_mailSwitch.PersonaDigest)
+            {
+                _logger.Warning("邮件汇总没能由人格 agent 发出，回落为直接发送（{Count} 封）", pending.Count);
+            }
 
             var direct = await SendDirectAsync(text, target, pending.Count, ct).ConfigureAwait(false);
             if (direct is not null)
