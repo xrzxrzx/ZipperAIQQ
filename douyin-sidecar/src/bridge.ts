@@ -1022,9 +1022,13 @@ export class DouyinImAdapter {
 
         case "system.online": {
           const nickname = str(data.account?.nickname) ?? "未知";
-          this.log.info(
-            `抖音已上线：${nickname}（selfId=${str(data.account?.uid) ?? this.selfId ?? "未知"}）`,
-          );
+          const uid = str(data.account?.uid) ?? str(data.account?.selfId);
+          if (uid) {
+            // ⚠️ 必须记下来：hello 帧的 selfId 取自这里；不赋值的话服务端永远看到 selfId=未知，
+            // 客户端也就显示不出"已连入（selfId=…）"（2026-10-28 实测）。
+            this.selfId = uid;
+          }
+          this.log.info(`抖音已上线：${nickname}（selfId=${uid ?? this.selfId ?? "未知"}）`);
           return;
         }
 
@@ -1495,6 +1499,12 @@ function handleServerFrame(
   const { link, log } = context;
 
   switch (frame.type) {
+    case "heartbeat":
+      // Server 主动心跳（2026-10-28）：只用于"链路还活着"，不需要回任何东西。
+      // 不要落成 warn —— 25 秒一次会把日志刷满。
+      log.debug("收到服务端心跳");
+      return;
+
     case "ping":
       // Server → sidecar ping / sidecar → Server pong（设计 §3.2）
       try {

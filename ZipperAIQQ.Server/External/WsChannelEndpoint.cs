@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -87,7 +88,19 @@ public static class WsChannelEndpoint
                 await channel.AttachAsync(connection, context.RequestAborted).ConfigureAwait(false);
 
                 // 端点只负责"保持这次连接活着"：真正的收帧在通道内部。
-                await Task.Delay(Timeout.Infinite, context.RequestAborted).ConfigureAwait(false);
+                //
+                // ⚠️ 必须**主动发心跳**（2026-10-28 实测）：sidecar 侧有 deadAfterMs（默认 90 秒）判定，
+                // 它只认"收到的帧"；服务端一言不发时，连接每 90 秒被 sidecar 判死并重连一次 ——
+                // 表现就是客户端一直显示「未连入」，日志里反复「连接已死，主动断开重连」。
+                var heartbeatTask = SendHeartbeatsAsync(connection, logger, context.RequestAborted);
+                try
+                {
+                    await heartbeatTask.ConfigureAwait(false);
+                }
+                finally
+                {
+                    await Task.Delay(Timeout.Infinite, context.RequestAborted).ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
             {
@@ -104,6 +117,43 @@ public static class WsChannelEndpoint
                 logger.Information("sidecar 已断开 /ws/channel");
             }
         });
+    }
+
+    /// <summary>心跳间隔：sidecar 的 deadAfterMs 默认 90 秒，取 25 秒留足余量。</summary>
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(25);
+
+    /// <summary>
+    /// 定时给 sidecar 发 <c>heartbeat</c> 帧（sidecar 收到就算"链路活着"）。
+    /// </summary>
+    /// <remarks>
+    /// 帧形状与协议其它帧一致：<c>{ type, time, data }</c>；sidecar 对未知类型只是记 debug，
+    /// 但**收到帧本身就刷新它的存活判定**。取消（连接结束）时安静退出。
+    /// </remarks>
+    private static async Task SendHeartbeatsAsync(
+        IDouyinConnection connection,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(HeartbeatInterval, ct).ConfigureAwait(false);
+
+                var frame = new { type = "heartbeat", time = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), data = new { } };
+                await connection.SendAsync(JsonSerializer.Serialize(frame), ct).ConfigureAwait(false);
+                logger.Debug("已向 sidecar 发送心跳");
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 连接结束：正常
+        }
+        catch (Exception ex)
+        {
+            // 心跳失败不能把端点带崩：连接本身会由通道层的断开检测处理
+            logger.Warning(ex, "向 sidecar 发送心跳失败");
+        }
     }
 
     /// <summary>从 <c>Authorization: Bearer</c> 或 <c>?token=</c> 取 token（sidecar 两种都常用）。</summary>
