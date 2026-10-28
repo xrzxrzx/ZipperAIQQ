@@ -42,19 +42,18 @@
                     <SolidColorBrush x:Key="JpSelectionBrush" Color="#2EFF7FB0" />
 
                     <!--
-                      ⚠️ 强调按钮的实际填充色来自 AccentButton* 这组资源，**不是** Style 里的 Background。
-                      AccentButtonStyle 的模板在 Normal/PointerOver/Pressed 各状态都直接取
-                      {ThemeResource AccentButtonBackground*} —— 只改 Style.Background 根本不起作用，
-                      弹窗按钮会一直显示系统的强调色（用户机器上是青蓝），和主窗体的粉调对不上。
+                      开关（ToggleSwitch）开启态配色。
+                      ⚠️ 这里能生效的原因：模板里是 {ThemeResource ToggleSwitchFillOn}，
+                      ThemeResource 会先查 App 资源再落到框架默认值 —— 所以覆盖**这一层**才是确定有效的。
+                      （对比：AccentButtonBackground 在 generic.xaml 里是 StaticResource 别名，
+                        解析时就绑死了，覆盖它没用 —— 这也是上次失败的原因。）
                     -->
-                    <SolidColorBrush x:Key="AccentButtonBackground" Color="#FFFF7FB0" />
-                    <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#FFE86AA0" />
-                    <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#FFD15A8C" />
-                    <SolidColorBrush x:Key="AccentButtonBackgroundDisabled" Color="#66FF7FB0" />
-                    <SolidColorBrush x:Key="AccentButtonForeground" Color="#FFFFFFFF" />
-                    <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="#FFFFFFFF" />
-                    <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="#FFF6E7EE" />
-                    <SolidColorBrush x:Key="AccentButtonForegroundDisabled" Color="#99FFFFFF" />
+                    <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="#FFF31260" />
+                    <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="#FFF75F94" />
+                    <SolidColorBrush x:Key="ToggleSwitchFillOnPressed" Color="#FFD31256" />
+                    <SolidColorBrush x:Key="ToggleSwitchStrokeOn" Color="#FFF31260" />
+                    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPointerOver" Color="#FFF75F94" />
+                    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPressed" Color="#FFD31256" />
                 </ResourceDictionary>
 
                 <ResourceDictionary x:Key="Dark">
@@ -69,8 +68,8 @@
                     <SolidColorBrush x:Key="JpCardHoverBrush" Color="#DD452B3E" />
                     <SolidColorBrush x:Key="JpCardStrokeBrush" Color="#40FF9EC4" />
 
-                    <!-- 对话框底：**不透明**（原来的 #CC3A2434 会透出主窗体，用户反馈"眼花"） -->
-                    <SolidColorBrush x:Key="JpDialogSurfaceBrush" Color="#FF3A2434" />
+                    <!-- 对话框底：**不透明**，近黑（对标 NapCat 面板底色 #18181B） -->
+                    <SolidColorBrush x:Key="JpDialogSurfaceBrush" Color="#FF18181B" />
 
                     <!-- 强调：亮樱粉（暗底上更醒目） -->
                     <SolidColorBrush x:Key="JpAccentBrush" Color="#FF8FBE" />
@@ -84,18 +83,41 @@
                     <SolidColorBrush x:Key="JpChromeBrush" Color="#33FFFFFF" />
                     <SolidColorBrush x:Key="JpSelectionBrush" Color="#2EFF8FBE" />
 
-                    <!-- 强调按钮的三个状态（深色主题）：见 Light 分支的说明，Style.Background 不生效 -->
-                    <SolidColorBrush x:Key="AccentButtonBackground" Color="#FFFF8FBE" />
-                    <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#FFFFA5CB" />
-                    <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#FFE878A8" />
-                    <SolidColorBrush x:Key="AccentButtonBackgroundDisabled" Color="#66FF8FBE" />
-                    <SolidColorBrush x:Key="AccentButtonForeground" Color="#FF2A1B22" />
-                    <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="#FF2A1B22" />
-                    <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="#FF2A1B22" />
-                    <SolidColorBrush x:Key="AccentButtonForegroundDisabled" Color="#992A1B22" />
+                    <!-- 开关开启态：粉（与按钮同一套 #F31260，见 Light 分支的说明） -->
+                    <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="#FFF31260" />
+                    <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="#FFF75F94" />
+                    <SolidColorBrush x:Key="ToggleSwitchFillOnPressed" Color="#FFD31256" />
+                    <SolidColorBrush x:Key="ToggleSwitchStrokeOn" Color="#FFF31260" />
+                    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPointerOver" Color="#FFF75F94" />
+                    <SolidColorBrush x:Key="ToggleSwitchStrokeOnPressed" Color="#FFD31256" />
                 </ResourceDictionary>
 
             </ResourceDictionary.ThemeDictionaries>
+
+            <!-- ═══════════════════════════════════════════════
+                 强调色族（对标 NapCat WebUI 的粉 #F31260）
+                 放在**顶层**：ToggleSwitch / CheckBox / 选中态等取 {ThemeResource SystemAccentColor*}
+                 的地方会先查 App 资源，于是整体偏向同一个粉。
+                 （上次改 ThemeDictionaries 里的 AccentButton* 无效，因为那是 StaticResource 别名，
+                   在 generic.xaml 解析时就绑死到系统强调色了；这条路不再走。）
+                 ═══════════════════════════════════════════════ -->
+            <Color x:Key="SystemAccentColor">#FFF31260</Color>
+            <Color x:Key="SystemAccentColorLight1">#FFF75F94</Color>
+            <Color x:Key="SystemAccentColorLight2">#FFF98FB2</Color>
+            <Color x:Key="SystemAccentColorLight3">#FFFBBFD0</Color>
+            <Color x:Key="SystemAccentColorDark1">#FFD31256</Color>
+            <Color x:Key="SystemAccentColorDark2">#FFB30F4A</Color>
+            <Color x:Key="SystemAccentColorDark3">#FF930C3D</Color>
+
+            <!--
+                按钮悬浮 / 按下态：模板里用 {StaticResource} 直接取 Brush，
+                不走"字符串→Brush"的隐式转换（那种在 ObjectAnimation 的 Value 里不稳）。
+                主按钮（粉）与次按钮（近黑）各一对。
+            -->
+            <SolidColorBrush x:Key="JpAccentButtonHoverBrush" Color="#FFF75F94" />
+            <SolidColorBrush x:Key="JpAccentButtonPressedBrush" Color="#FFD31256" />
+            <SolidColorBrush x:Key="JpButtonHoverBrush" Color="#FF2A2A30" />
+            <SolidColorBrush x:Key="JpButtonPressedBrush" Color="#FF15151A" />
 
             <!-- 卡片：大圆角 + 粉描边（日系的关键是圆角与留白） -->
             <Style x:Key="CardStyle" TargetType="Border">
@@ -133,21 +155,148 @@
                 <Setter Property="Foreground" Value="{ThemeResource JpTextBrush}" />
             </Style>
 
-            <!-- 主按钮：亮粉填充（真实填充色见 ThemeDictionaries 里的 AccentButtonBackground*） -->
-            <Style x:Key="JpAccentButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+            <!--
+                主按钮：粉填充（NapCat #F31260）+ **自带模板**。
+                为什么必须自己写模板：AccentButtonStyle 的模板在 Normal/PointerOver/Pressed 里
+                直接取 {ThemeResource AccentButtonBackground*}，而那是个 StaticResource 别名 →
+                只在 Style 里改 Background、或覆盖 AccentButton* 资源，按钮都仍是系统强调色（青蓝）。
+                所以这里不再 BasedOn，颜色全部写在模板里。
+            -->
+            <Style x:Key="JpAccentButtonStyle" TargetType="Button">
+                <Setter Property="Foreground" Value="White" />
+                <Setter Property="Background" Value="#FFF31260" />
+                <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="CornerRadius" Value="10" />
                 <Setter Property="Padding" Value="16,7" />
-                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="FontSize" Value="14" />
                 <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="MinHeight" Value="32" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Grid x:Name="Root"
+                                  Background="{TemplateBinding Background}"
+                                  CornerRadius="{TemplateBinding CornerRadius}">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="Root"
+                                                                               Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0"
+                                                                            Value="{StaticResource JpAccentButtonHoverBrush}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="Root"
+                                                                               Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0"
+                                                                            Value="{StaticResource JpAccentButtonPressedBrush}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <Storyboard>
+                                                <!-- Opacity 是 double，必须用 Double 关键帧；
+                                                     用 ObjectAnimation 塞字符串 "0.5" 会在运行时类型不匹配 -->
+                                                <DoubleAnimationUsingKeyFrames Storyboard.TargetName="Root"
+                                                                               Storyboard.TargetProperty="Opacity">
+                                                    <DiscreteDoubleKeyFrame KeyTime="0" Value="0.5" />
+                                                </DoubleAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <ContentPresenter x:Name="ContentPresenter"
+                                                  Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  Padding="{TemplateBinding Padding}"
+                                                  Foreground="{TemplateBinding Foreground}"
+                                                  FontWeight="{TemplateBinding FontWeight}"
+                                                  FontSize="{TemplateBinding FontSize}"
+                                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                  AutomationProperties.AccessibilityView="Raw" />
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
             </Style>
 
-            <!-- 次按钮：柔粉底 -->
+            <!--
+                次按钮：近黑底 + 粉字（NapCat 次按钮，让位给主按钮不抢眼）。
+                ⚠️ 必须**也写显式模板**：不写模板时会落到系统 Button 默认模板，
+                圆角取 ControlCornerRadius（4），于是关闭/取消按钮是 4、保存按钮是 10 ——
+                用户反馈的"两个按钮圆角不一样"就是这个。模板结构与主按钮逐行一致，只有颜色不同。
+            -->
             <Style x:Key="JpButtonStyle" TargetType="Button">
+                <Setter Property="Foreground" Value="#FFF31260" />
+                <Setter Property="Background" Value="#FF1F1F23" />
+                <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="CornerRadius" Value="10" />
                 <Setter Property="Padding" Value="16,7" />
-                <Setter Property="Background" Value="{ThemeResource JpAccentSoftBrush}" />
-                <Setter Property="Foreground" Value="{ThemeResource JpTextBrush}" />
-                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="MinHeight" Value="32" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Grid x:Name="Root"
+                                  Background="{TemplateBinding Background}"
+                                  CornerRadius="{TemplateBinding CornerRadius}">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="Root"
+                                                                               Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0"
+                                                                            Value="{StaticResource JpButtonHoverBrush}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="Root"
+                                                                               Storyboard.TargetProperty="Background">
+                                                    <DiscreteObjectKeyFrame KeyTime="0"
+                                                                            Value="{StaticResource JpButtonPressedBrush}" />
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <Storyboard>
+                                                <!-- Opacity 是 double，必须用 Double 关键帧（与主按钮一致） -->
+                                                <DoubleAnimationUsingKeyFrames Storyboard.TargetName="Root"
+                                                                               Storyboard.TargetProperty="Opacity">
+                                                    <DiscreteDoubleKeyFrame KeyTime="0" Value="0.5" />
+                                                </DoubleAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <ContentPresenter x:Name="ContentPresenter"
+                                                  Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  Padding="{TemplateBinding Padding}"
+                                                  Foreground="{TemplateBinding Foreground}"
+                                                  FontWeight="{TemplateBinding FontWeight}"
+                                                  FontSize="{TemplateBinding FontSize}"
+                                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                  AutomationProperties.AccessibilityView="Raw" />
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
             </Style>
 
             <!-- 进度条：粉色（默认是系统蓝，和主题不搭） -->
