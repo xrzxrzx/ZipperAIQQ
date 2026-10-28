@@ -60,7 +60,7 @@ public sealed partial class PlatformsPage : Page
                 DefaultButton = ContentDialogButton.Close,
             };
 
-            StyleDialog(confirm);
+            DialogTheme.Apply(confirm);
 
             if (await confirm.ShowAsync() != ContentDialogResult.Primary)
             {
@@ -216,15 +216,8 @@ public sealed partial class PlatformsPage : Page
         hostRow.Children.Add(imapPort);
         Grid.SetColumn(imapPort, 1);
 
-        // ⚠️ RequestedTheme 必须设在**内容根**上：ContentDialog 的内容会被放进 popup 宿主，
-        // 只设在 dialog 上时，部分状态（焦点 / 悬停）仍会去取应用默认主题 —— 表现出来就是
-        // 「输入框在深色对话框里变成白底」（用户反馈的主题不一致）。
-        var panel = new StackPanel
-        {
-            Spacing = 10,
-            MinWidth = 380,
-            RequestedTheme = ElementTheme.Dark,
-        };
+        // 内容根的主题由 DialogTheme.Panel() 带上（只设在 dialog 上时输入框会白底）
+        var panel = DialogTheme.Panel();
         panel.Children.Add(address);
         panel.Children.Add(displayName);
         panel.Children.Add(hostRow);
@@ -258,7 +251,7 @@ public sealed partial class PlatformsPage : Page
             DefaultButton = ContentDialogButton.Primary,
         };
 
-        StyleDialog(dialog);
+        DialogTheme.Apply(dialog);
 
         dialog.PrimaryButtonClick += async (_, args) =>
         {
@@ -335,21 +328,5 @@ public sealed partial class PlatformsPage : Page
     {
         error.Text = message;
         error.Visibility = Visibility.Visible;
-    }
-
-    /// <summary>
-    /// 对话框套上 App 里的 <c>JpDialogStyle</c>（卡片紫底 + 樱粉描边 + 粉按钮），
-    /// 这样开关、输入框、按钮跟主窗体是同一套日系主题，而不是系统默认的深灰。
-    /// </summary>
-    private static void StyleDialog(ContentDialog dialog)
-    {
-        // 先定主题再套样式：ThemeResource 才会按 Dark 那套颜色解析
-        // （内容根上还有一个 Dark，那条是修输入框白底的，别删）
-        dialog.RequestedTheme = ElementTheme.Dark;
-
-        if (Application.Current.Resources.TryGetValue("JpDialogStyle", out var style) && style is Style dialogStyle)
-        {
-            dialog.Style = dialogStyle;
-        }
     }
 }

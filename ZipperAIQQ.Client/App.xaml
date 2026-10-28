@@ -26,6 +26,10 @@
                     <SolidColorBrush x:Key="JpCardHoverBrush" Color="#FFFFFFFF" />
                     <SolidColorBrush x:Key="JpCardStrokeBrush" Color="#33FF7FB0" />
 
+                    <!-- 对话框底：**不透明**（卡片可以半透明透出背景，对话框不行——
+                         半透明会让主窗体内容从弹窗底下透出来，看着眼花） -->
+                    <SolidColorBrush x:Key="JpDialogSurfaceBrush" Color="#FFFDF7FA" />
+
                     <!-- 强调：樱粉 -->
                     <SolidColorBrush x:Key="JpAccentBrush" Color="#FF7FB0" />
                     <SolidColorBrush x:Key="JpAccentSoftBrush" Color="#33FF7FB0" />
@@ -49,6 +53,9 @@
                     <SolidColorBrush x:Key="JpCardBrush" Color="#CC3A2434" />
                     <SolidColorBrush x:Key="JpCardHoverBrush" Color="#DD452B3E" />
                     <SolidColorBrush x:Key="JpCardStrokeBrush" Color="#40FF9EC4" />
+
+                    <!-- 对话框底：**不透明**（原来的 #CC3A2434 会透出主窗体，用户反馈"眼花"） -->
+                    <SolidColorBrush x:Key="JpDialogSurfaceBrush" Color="#FF3A2434" />
 
                     <!-- 强调：亮樱粉（暗底上更醒目） -->
                     <SolidColorBrush x:Key="JpAccentBrush" Color="#FF8FBE" />
@@ -128,19 +135,22 @@
             </Style>
 
             <!--
-                对话框：跟主窗体同一套日系配色（卡片紫底 + 樱粉描边 + 文字色）。
+                对话框：跟主窗体同一套日系配色（紫底 + 樱粉描边 + 文字色）。
                 定义在**顶层**而不是 ThemeDictionaries 里 —— 代码里 Application.Current.Resources[key]
                 取不到 ThemeDictionaries 里的资源（实测），放这里才能被 C# 直接套上。
                 BasedOn 必须带上：默认样式里有 Template，不继承就没模板、弹出来是空白。
+                背景用 **JpDialogSurfaceBrush（不透明）**，不是 JpCardBrush（卡片半透明是设计，弹窗不行）。
+                三个按钮样式都在这儿定死：主=粉填充 / 次=柔粉 / 关闭=柔粉，CornerRadius 统一 10。
             -->
             <Style x:Key="JpDialogStyle" TargetType="ContentDialog"
                    BasedOn="{StaticResource DefaultContentDialogStyle}">
-                <Setter Property="Background" Value="{ThemeResource JpCardBrush}" />
+                <Setter Property="Background" Value="{ThemeResource JpDialogSurfaceBrush}" />
                 <Setter Property="BorderBrush" Value="{ThemeResource JpCardStrokeBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
                 <Setter Property="CornerRadius" Value="12" />
                 <Setter Property="Foreground" Value="{ThemeResource JpTextBrush}" />
                 <Setter Property="PrimaryButtonStyle" Value="{StaticResource JpAccentButtonStyle}" />
+                <Setter Property="SecondaryButtonStyle" Value="{StaticResource JpButtonStyle}" />
                 <Setter Property="CloseButtonStyle" Value="{StaticResource JpButtonStyle}" />
             </Style>
 

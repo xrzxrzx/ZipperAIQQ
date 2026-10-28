@@ -37,6 +37,8 @@ public sealed partial class AccessPage : Page
             DefaultButton = ContentDialogButton.Close,
         };
 
+        DialogTheme.Apply(dialog);
+
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
             await Vm.SaveListsAsync(confirmDemote: true);

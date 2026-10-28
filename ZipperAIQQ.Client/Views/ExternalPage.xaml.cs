@@ -67,7 +67,7 @@ public sealed partial class ExternalPage : Page
             Visibility = Visibility.Collapsed,
         };
 
-        var panel = new StackPanel { Spacing = 10, MinWidth = 380 };
+        var panel = DialogTheme.Panel();
         panel.Children.Add(enabled);
         panel.Children.Add(name);
 
@@ -98,20 +98,10 @@ public sealed partial class ExternalPage : Page
             PrimaryButtonText = "保存",
             CloseButtonText = "关闭",
             DefaultButton = ContentDialogButton.Primary,
-            RequestedTheme = ElementTheme.Dark,
         };
 
-        if (Application.Current.Resources.TryGetValue("JpAccentButtonStyle", out var accent) &&
-            accent is Style accentStyle)
-        {
-            dialog.PrimaryButtonStyle = accentStyle;
-        }
-
-        if (Application.Current.Resources.TryGetValue("JpButtonStyle", out var normal) &&
-            normal is Style normalStyle)
-        {
-            dialog.CloseButtonStyle = normalStyle;
-        }
+        // 主题统一走 DialogTheme：用户反馈这页的弹窗"又变回默认样式了"（以前这里只有按钮样式，没有对话框样式）
+        DialogTheme.Apply(dialog);
 
         dialog.PrimaryButtonClick += (_, args) =>
         {

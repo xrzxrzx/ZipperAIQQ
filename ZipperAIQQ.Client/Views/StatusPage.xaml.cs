@@ -35,6 +35,8 @@ public sealed partial class StatusPage : Page
             DefaultButton = ContentDialogButton.Close,
         };
 
+        DialogTheme.Apply(dialog);
+
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
             await Vm.RestartServerCommand.ExecuteAsync(null);
