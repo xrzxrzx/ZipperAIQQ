@@ -241,6 +241,30 @@ public sealed partial class ExternalViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 校验一个外部 WS 块（对话框保存前调用）；返回错误文案，<c>null</c> = 通过。
+    /// </summary>
+    public static string? ValidateServer(bool isReverse, string host, double port, string url)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return "Host 不能为空。";
+        }
+
+        if (isReverse && (double.IsNaN(port) || port is < 1 or > 65535))
+        {
+            return "Port 必须在 1~65535。";
+        }
+
+        if (!isReverse &&
+            (!Uri.TryCreate(url, UriKind.Absolute, out var parsed) || parsed.Scheme is not ("ws" or "wss")))
+        {
+            return "WS 地址必须是 ws:// 或 wss://。";
+        }
+
+        return null;
+    }
+
     /// <summary>token 三态：留空 = 不传（保持原值）；勾选清除 = 传空串；输入 = 更新。</summary>
     private static void ApplyToken(Dictionary<string, object?> target, ExternalServerItem server)
     {

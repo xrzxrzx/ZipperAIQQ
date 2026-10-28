@@ -261,24 +261,14 @@ public sealed partial class PlatformsPage : Page
             try
             {
                 var addressText = address.Text.Trim();
-                if (addressText.Length == 0 || !addressText.Contains('@') || addressText.Any(char.IsWhiteSpace))
-                {
-                    ShowDialogError(error, "邮箱地址不合法：要像 someone@qq.com，且不能有空格。");
-                    args.Cancel = true;
-                    return;
-                }
-
                 var hostText = imapHost.Text.Trim();
-                if (hostText.Length == 0 || hostText.Any(char.IsWhiteSpace))
-                {
-                    ShowDialogError(error, "IMAP 主机不能为空，也不能有空格（如 imap.qq.com）。");
-                    args.Cancel = true;
-                    return;
-                }
 
-                if (double.IsNaN(imapPort.Value) || imapPort.Value is < 1 or > 65535)
+                var validationError = PlatformsViewModel.ValidateMailAccount(
+                    addressText, hostText, imapPort.Value);
+
+                if (validationError is not null)
                 {
-                    ShowDialogError(error, "端口必须在 1~65535（IMAP 通常是 993）。");
+                    ShowDialogError(error, validationError);
                     args.Cancel = true;
                     return;
                 }

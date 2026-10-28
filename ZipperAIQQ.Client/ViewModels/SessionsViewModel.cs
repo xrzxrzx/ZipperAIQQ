@@ -172,6 +172,14 @@ public sealed partial class SessionsViewModel : ObservableObject
         }
     }
 
+    /// <summary>日期选择器 → 导出起点（按本地时间当天 00:00）。</summary>
+    public static DateTimeOffset ExportStart(DateTimeOffset date) =>
+        new DateTimeOffset(date.Date, TimeSpan.Zero).ToLocalTime();
+
+    /// <summary>日期选择器 → 导出终点（按本地时间当天 23:59:59.999）。</summary>
+    public static DateTimeOffset ExportEnd(DateTimeOffset date) =>
+        new DateTimeOffset(date.Date.AddDays(1).AddMilliseconds(-1), TimeSpan.Zero).ToLocalTime();
+
     /// <summary>
     /// 按可选时间区间导出（#37）。区间为空则导出当前已加载的列表。
     /// </summary>

@@ -897,6 +897,27 @@ public sealed partial class PlatformsViewModel : ObservableObject
         }
     }
 
+    /// <summary>校验收信账号输入；返回错误文案，<c>null</c> = 通过。</summary>
+    public static string? ValidateMailAccount(string address, string imapHost, double imapPort)
+    {
+        if (address.Length == 0 || !address.Contains('@') || address.Any(char.IsWhiteSpace))
+        {
+            return "邮箱地址不合法：要像 someone@qq.com，且不能有空格。";
+        }
+
+        if (imapHost.Length == 0 || imapHost.Any(char.IsWhiteSpace))
+        {
+            return "IMAP 主机不能为空，也不能有空格（如 imap.qq.com）。";
+        }
+
+        if (double.IsNaN(imapPort) || imapPort is < 1 or > 65535)
+        {
+            return "端口必须在 1~65535（IMAP 通常是 993）。";
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// 新建 / 编辑一个邮件账号。**<paramref name="secret"/> 为空 = 保留旧授权码**（合并语义）。
     /// </summary>
