@@ -90,15 +90,6 @@ public sealed class ConfiguredRoleResolver : IRoleResolver
         }
     }
 
-    /// <summary>当前某平台的主人（没设为 <c>null</c>）。</summary>
-    public string? GetOwner(string platform)
-    {
-        lock (_gate)
-        {
-            return _scopes.TryGetValue(platform.Trim(), out var scope) ? scope.Owner : null;
-        }
-    }
-
     /// <summary>运行时替换某平台的管理员名单（客户端改配置后立即生效）。</summary>
     public void SetAdmins(string platform, IEnumerable<string> admins)
     {

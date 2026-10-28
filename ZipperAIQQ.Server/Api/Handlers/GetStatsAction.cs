@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ZipperAIQQ.Server.Metrics;
 using ZipperAIQQ.Storage.Metrics;
 
 namespace ZipperAIQQ.Server.Api.Handlers;
@@ -66,71 +67,55 @@ public sealed class GetStatsAction : IApiAction
 
     private static object Build(IReadOnlyList<MetricSummary> rows)
     {
-        var llm = Find(rows, "llm.call");
-        var retry = Find(rows, "llm.retry");
-        var retrieval = Find(rows, "retrieval");
-        var hit = Find(rows, "retrieval.hit");
-        var jev = Find(rows, "jev.judge");
-        var degrade = Find(rows, "jev.degrade");
-        var summary = Find(rows, "summary");
-        var sendMessage = Find(rows, "tool.send_message");
-        var embedding = Find(rows, "embedding.backfill");
-
-        var retrievalCount = retrieval?.Count ?? 0;
-        var hitMessages = hit?.TotalInputTokens ?? 0;
-
-        // 命中率：有命中的检索次数 / 检索总次数（不是"命中条数 / 次数"，口径更准）
-        var hitRate = retrievalCount > 0
-            ? Math.Round((double)(hit?.Count ?? 0) / retrievalCount, 4)
+        var facts = MetricFacts.From(rows);
+        var cacheHitRate = facts.InputTokens > 0
+            ? Math.Round((double)facts.CachedInputTokens / facts.InputTokens, 4)
             : 0;
 
-        var jevCount = jev?.Count ?? 0;
-        var jevReplies = jev?.TotalInputTokens ?? 0;
-
-        var inputTokens = llm?.TotalInputTokens ?? 0;
-        var cachedTokens = llm?.TotalCachedInputTokens ?? 0;
-        var cacheHitRate = inputTokens > 0
-            ? Math.Round((double)cachedTokens / inputTokens, 4)
-            : 0;
+        var llm = Find(rows, MetricKinds.LlmCall);
+        var retrieval = Find(rows, MetricKinds.Retrieval);
+        var jev = Find(rows, MetricKinds.JevJudge);
 
         return new
         {
             llm = new
             {
-                calls = llm?.Count ?? 0,
-                inputTokens,
-                outputTokens = llm?.TotalOutputTokens ?? 0,
-                cachedInputTokens = cachedTokens,
+                calls = facts.LlmCalls,
+                inputTokens = facts.InputTokens,
+                outputTokens = facts.OutputTokens,
+                cachedInputTokens = facts.CachedInputTokens,
                 cacheHitRate,
-                avgMs = Math.Round(llm?.AvgMs ?? 0, 1),
+                avgMs = Math.Round(facts.LlmAvgMs, 1),
                 maxMs = Math.Round(llm?.MaxMs ?? 0, 1),
-                retries = retry?.Count ?? 0,
+                retries = facts.LlmRetries,
             },
             retrieval = new
             {
-                count = retrievalCount,
-                hitCount = hit?.Count ?? 0,
-                hitMessages,
-                hitRate,
-                avgHitsPerHit = hit is not null && hit.Count > 0
-                    ? Math.Round((double)hitMessages / hit.Count, 2)
+                count = facts.RetrievalCount,
+                hitCount = facts.RetrievalHits,
+                hitMessages = facts.HitMessages,
+                hitRate = facts.HitRate,
+                avgHitsPerHit = facts.RetrievalHits > 0
+                    ? Math.Round((double)facts.HitMessages / facts.RetrievalHits, 2)
                     : 0,
                 avgMs = Math.Round(retrieval?.AvgMs ?? 0, 1),
             },
             jev = new
             {
-                count = jevCount,
-                replies = jevReplies,
-                silences = Math.Max(0, jevCount - jevReplies),
-                replyRate = jevCount > 0 ? Math.Round((double)jevReplies / jevCount, 4) : 0,
-                degradeCount = degrade?.Count ?? 0,
+                count = facts.JevCount,
+                replies = facts.JevReplies,
+                silences = Math.Max(0, facts.JevCount - facts.JevReplies),
+                replyRate = facts.JevCount > 0
+                    ? Math.Round((double)facts.JevReplies / facts.JevCount, 4)
+                    : 0,
+                degradeCount = facts.JevDegrade,
                 avgMs = Math.Round(jev?.AvgMs ?? 0, 1),
             },
-            summary = new { count = summary?.Count ?? 0 },
+            summary = new { count = facts.SummaryCount },
             tools = new
             {
-                sendMessage = sendMessage?.Count ?? 0,
-                embeddingBackfill = embedding?.Count ?? 0,
+                sendMessage = facts.SendMessage,
+                embeddingBackfill = facts.EmbeddingBackfill,
             },
             kinds = rows
                 .OrderByDescending(r => r.Count)

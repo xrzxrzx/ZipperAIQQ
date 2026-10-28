@@ -3,7 +3,7 @@ using ZipperAIQQ.Agent.Llm;
 namespace ZipperAIQQ.Server.Configuration;
 
 /// <summary>
-/// Server 的全部运行配置。**只从环境变量读取**，代码里不写死任何 URL / 模型名（FR-8.13）。
+/// Server 的全部运行配置。**YAML 优先、环境变量兜底**，代码里不写死任何 URL / 模型名（FR-8.13）。
 /// </summary>
 /// <remarks>
 /// <para>
@@ -12,7 +12,8 @@ namespace ZipperAIQQ.Server.Configuration;
 /// 等到某个组件构造时才炸。
 /// </para>
 /// <para>
-/// 环境变量 → 字段的映射集中在这一个文件，以后换成配置文件 / 客户端下发，只改这里。
+/// 环境变量 → 字段的映射集中在这一个文件；<see cref="ServerConfigLoader"/> 负责用
+/// <c>config/server.yaml</c> 覆盖它，再调用 <see cref="ValidateRequired"/> 统一校验。
 /// </para>
 /// </remarks>
 public sealed record ServerOptions
@@ -183,24 +184,11 @@ public sealed record ServerOptions
     public bool OtelConsole { get; init; }
 
     /// <summary>
-    /// 从环境变量构建。**缺必需项直接抛异常**，而不是带着半个配置启动
-    /// —— 半个配置跑起来只会让人误以为"服务正常"。
+    /// 从环境变量构建。**缺项不在这里抛** —— 由 <see cref="ServerConfigLoader"/> 合并 YAML 后
+    /// 调 <see cref="ValidateRequired"/> 统一校验（否则只写 YAML 的部署会在读文件前就失败）。
     /// </summary>
     public static ServerOptions FromEnvironment()
     {
-        var missing = new List<string>();
-
-        string Require(string name)
-        {
-            var value = Environment.GetEnvironmentVariable(name);
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                missing.Add(name);
-                return string.Empty;
-            }
-            return value;
-        }
-
         string? Optional(string name) => Environment.GetEnvironmentVariable(name);
 
         int IntOrDefault(string name, int fallback) =>
@@ -212,23 +200,11 @@ public sealed record ServerOptions
         static IReadOnlyList<string> SplitList(string? raw) =>
             (raw ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-        var wsUrl = Require("ZIPPER_NAPCAT_WS");
-        var apiKey = Require("ZIPPER_LLM_APIKEY");
-        var baseUrl = Require("ZIPPER_LLM_BASEURL");
-        var model = Require("ZIPPER_LLM_MODEL");
-
-        if (missing.Count > 0)
-        {
-            throw new InvalidOperationException(
-                $"缺少必需的环境变量：{string.Join(", ", missing)}。" +
-                "参考 scripts/run-server.template.ps1 了解完整清单。");
-        }
-
         var apiKindText = Optional("ZIPPER_LLM_APIKIND");
 
         return new ServerOptions
         {
-            NapCatWebSocketUrl = wsUrl,
+            NapCatWebSocketUrl = Optional("ZIPPER_NAPCAT_WS") ?? string.Empty,
             NapCatAccessToken = Optional("ZIPPER_NAPCAT_TOKEN"),
             SearchEnabled = BoolOrDefault("ZIPPER_SEARCH_ENABLED", true),
             SearchBaseUrl = Optional("ZIPPER_SEARCH_BASEURL"),
@@ -241,9 +217,9 @@ public sealed record ServerOptions
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             SttEnabled = Optional("ZIPPER_STT_ENABLED") is not "0",
 
-            LlmApiKey = apiKey,
-            LlmBaseUrl = baseUrl,
-            LlmModel = model,
+            LlmApiKey = Optional("ZIPPER_LLM_APIKEY") ?? string.Empty,
+            LlmBaseUrl = Optional("ZIPPER_LLM_BASEURL") ?? string.Empty,
+            LlmModel = Optional("ZIPPER_LLM_MODEL") ?? string.Empty,
             LlmApiKind = string.IsNullOrWhiteSpace(apiKindText)
                 ? LlmApiKind.Responses
                 : Enum.Parse<LlmApiKind>(apiKindText, ignoreCase: true),
@@ -269,5 +245,41 @@ public sealed record ServerOptions
 
             OtelConsole = Optional("ZIPPER_OTEL_CONSOLE") == "1",
         };
+    }
+
+    /// <summary>
+    /// 校验必需项（**YAML 合并之后**调用）。缺一项就拒绝启动，不带半个配置继续跑。
+    /// </summary>
+    /// <exception cref="InvalidOperationException">缺少必需配置。</exception>
+    public void ValidateRequired()
+    {
+        var missing = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(NapCatWebSocketUrl))
+        {
+            missing.Add("ZIPPER_NAPCAT_WS（或 napcat.wsUrl）");
+        }
+
+        if (string.IsNullOrWhiteSpace(LlmApiKey))
+        {
+            missing.Add("ZIPPER_LLM_APIKEY（或 llm.apiKey）");
+        }
+
+        if (string.IsNullOrWhiteSpace(LlmBaseUrl))
+        {
+            missing.Add("ZIPPER_LLM_BASEURL（或 llm.baseUrl）");
+        }
+
+        if (string.IsNullOrWhiteSpace(LlmModel))
+        {
+            missing.Add("ZIPPER_LLM_MODEL（或 llm.model）");
+        }
+
+        if (missing.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"缺少必需配置：{string.Join("、", missing)}。" +
+                "可写在 config/server.yaml 或环境变量；参考 scripts/run-server.template.ps1 了解完整清单。");
+        }
     }
 }

@@ -1,11 +1,13 @@
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using ZipperAIQQ.Agent;
+using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Server.Configuration;
+using ZipperAIQQ.Server.Metrics;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Metrics;
@@ -108,16 +110,23 @@ public sealed class StatusCommand : ICommand, IImageCommand
     private readonly IMetricsStore _metrics;
     private readonly IMessageStore _messages;
     private readonly ServerOptions _options;
+    private readonly IChatClientProvider _clients;
 
-    public StatusCommand(IMetricsStore metrics, IMessageStore messages, ServerOptions options)
+    public StatusCommand(
+        IMetricsStore metrics,
+        IMessageStore messages,
+        ServerOptions options,
+        IChatClientProvider clients)
     {
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(clients);
 
         _metrics = metrics;
         _messages = messages;
         _options = options;
+        _clients = clients;
     }
 
     public string Name => "status";
@@ -137,33 +146,28 @@ public sealed class StatusCommand : ICommand, IImageCommand
         var summaryRows = new List<string[]>();
         if (metrics.Count > 0)
         {
-            var llm = metrics.FirstOrDefault(m => m.Kind == "llm.call");
-            var retrieval = metrics.FirstOrDefault(m => m.Kind == "retrieval");
-            var hit = metrics.FirstOrDefault(m => m.Kind == "retrieval.hit");
-            var jev = metrics.FirstOrDefault(m => m.Kind == "jev.judge");
-            var degrade = metrics.FirstOrDefault(m => m.Kind == "jev.degrade");
-            var summary = metrics.FirstOrDefault(m => m.Kind == "summary");
+            var facts = MetricFacts.From(metrics);
 
-            var hitRate = retrieval is { Count: > 0 }
-                ? $"{(hit?.Count ?? 0) * 100.0 / retrieval.Count:F0}%"
+            var hitRate = facts.RetrievalCount > 0
+                ? $"{(double)facts.RetrievalHits * 100 / facts.RetrievalCount:F0}%"
                 : "—";
 
-            var jevText = jev is { Count: > 0 }
-                ? $"{jev.Count} 次（回 {jev.TotalInputTokens} / 不回 {jev.Count - jev.TotalInputTokens}）"
+            var jevText = facts.JevCount > 0
+                ? $"{facts.JevCount} 次（回 {facts.JevReplies} / 不回 {facts.JevCount - facts.JevReplies}）"
                 : "未启用";
 
-            summaryRows.Add(["LLM 调用", $"{llm?.Count ?? 0} 次"]);
-            summaryRows.Add(["平均耗时", $"{llm?.AvgMs ?? 0:F0} ms"]);
-            summaryRows.Add(["Token 输入", $"{llm?.TotalInputTokens ?? 0:N0}"]);
-            summaryRows.Add(["Token 输出", $"{llm?.TotalOutputTokens ?? 0:N0}"]);
+            summaryRows.Add(["LLM 调用", $"{facts.LlmCalls} 次"]);
+            summaryRows.Add(["平均耗时", $"{facts.LlmAvgMs:F0} ms"]);
+            summaryRows.Add(["Token 输入", $"{facts.InputTokens:N0}"]);
+            summaryRows.Add(["Token 输出", $"{facts.OutputTokens:N0}"]);
             summaryRows.Add(["检索命中率", hitRate]);
             summaryRows.Add(["JEV 判断", jevText]);
-            if (degrade is { Count: > 0 })
+            if (facts.JevDegrade > 0)
             {
-                summaryRows.Add(["JEV 降级", $"{degrade.Count} 次"]);
+                summaryRows.Add(["JEV 降级", $"{facts.JevDegrade} 次"]);
             }
 
-            summaryRows.Add(["上下文压缩", $"{summary?.Count ?? 0} 次"]);
+            summaryRows.Add(["上下文压缩", $"{facts.SummaryCount} 次"]);
         }
         else
         {
@@ -187,7 +191,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
 
         var png = StatusImageRenderer.Render(
             "ZipperAIQQ · 状态",
-            $"模型 {_options.LlmModel} · 本会话 {count} 条消息 · {BeijingTime.Now:MM-dd HH:mm}",
+            $"模型 {_clients.CurrentModel ?? _options.LlmModel} · 本会话 {count} 条消息 · {BeijingTime.Now:MM-dd HH:mm}",
             tables);
 
         // **只发图片**：文字和图放一条消息里，QQ 的图文混排会挤在一起、气泡也怪
@@ -204,7 +208,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
         var metrics = await _metrics.GetSummaryAsync(24, ct: ct).ConfigureAwait(false);
 
         var sb = new StringBuilder();
-        sb.AppendLine($"**状态** · 模型 `{_options.LlmModel}` · 本会话 {count} 条消息");
+        sb.AppendLine($"**状态** · 模型 `{_clients.CurrentModel ?? _options.LlmModel}` · 本会话 {count} 条消息");
         sb.AppendLine();
 
         if (metrics.Count == 0)
@@ -213,28 +217,23 @@ public sealed class StatusCommand : ICommand, IImageCommand
             return sb.ToString();
         }
 
-        var llm = metrics.FirstOrDefault(m => m.Kind == "llm.call");
-        var retrieval = metrics.FirstOrDefault(m => m.Kind == "retrieval");
-        var hit = metrics.FirstOrDefault(m => m.Kind == "retrieval.hit");
-        var jev = metrics.FirstOrDefault(m => m.Kind == "jev.judge");
-        var degrade = metrics.FirstOrDefault(m => m.Kind == "jev.degrade");
-        var summary = metrics.FirstOrDefault(m => m.Kind == "summary");
+        var facts = MetricFacts.From(metrics);
 
         // ⚠️ QQ 不渲染 Markdown、框线在比例字体下也对不齐 —— 这里只用「键值行」
-        var hitRate = retrieval is { Count: > 0 }
-            ? $"{(hit?.Count ?? 0) * 100.0 / retrieval.Count:F0}%（{retrieval.Count} 次检索里命中 {hit?.Count ?? 0} 次）"
+        var hitRate = facts.RetrievalCount > 0
+            ? $"{(double)facts.RetrievalHits * 100 / facts.RetrievalCount:F0}%（{facts.RetrievalCount} 次检索里命中 {facts.RetrievalHits} 次）"
             : "—";
 
-        var jevText = jev is { Count: > 0 }
-            ? $"{jev.Count} 次 · 回 {jev.TotalInputTokens} · 不回 {jev.Count - jev.TotalInputTokens} · 降级 {degrade?.Count ?? 0}"
+        var jevText = facts.JevCount > 0
+            ? $"{facts.JevCount} 次 · 回 {facts.JevReplies} · 不回 {facts.JevCount - facts.JevReplies} · 降级 {facts.JevDegrade}"
             : "未启用";
 
         sb.AppendLine("【近 24 小时】");
-        sb.AppendLine($"· LLM 调用：{llm?.Count ?? 0} 次（平均 {llm?.AvgMs ?? 0:F0}ms）");
-        sb.AppendLine($"· Token：输入 {llm?.TotalInputTokens ?? 0:N0} / 输出 {llm?.TotalOutputTokens ?? 0:N0}");
+        sb.AppendLine($"· LLM 调用：{facts.LlmCalls} 次（平均 {facts.LlmAvgMs:F0}ms）");
+        sb.AppendLine($"· Token：输入 {facts.InputTokens:N0} / 输出 {facts.OutputTokens:N0}");
         sb.AppendLine($"· 检索命中率：{hitRate}");
         sb.AppendLine($"· JEV 判断：{jevText}");
-        sb.AppendLine($"· 上下文压缩：{summary?.Count ?? 0} 次");
+        sb.AppendLine($"· 上下文压缩：{facts.SummaryCount} 次");
         sb.AppendLine();
         sb.AppendLine("【调用类别 · 次数 / 平均耗时】");
         foreach (var m in metrics)
@@ -379,15 +378,16 @@ public sealed class SearchCommand : ICommand
 /// <summary>立即压缩一次摘要。</summary>
 public sealed class CompactCommand : ICommand
 {
-    /// <summary>与 ChatAgentOptions 默认值一致；命令只触发一次压缩，不改热窗。</summary>
-    private const int HotWindow = 20;
-
     private readonly SummaryService _summaries;
+    private readonly ServerOptions _options;
 
-    public CompactCommand(SummaryService summaries)
+    public CompactCommand(SummaryService summaries, ServerOptions options)
     {
         ArgumentNullException.ThrowIfNull(summaries);
+        ArgumentNullException.ThrowIfNull(options);
+
         _summaries = summaries;
+        _options = options;
     }
 
     public string Name => "compact";
@@ -397,7 +397,7 @@ public sealed class CompactCommand : ICommand
     public async Task<string> ExecuteAsync(CommandContext context, string args, CancellationToken ct = default)
     {
         var compressed = await _summaries
-            .TryCompressAsync(context.Chat.SessionId, HotWindow, ct)
+            .TryCompressAsync(context.Chat.SessionId, _options.HotWindowMessages, ct)
             .ConfigureAwait(false);
 
         return compressed

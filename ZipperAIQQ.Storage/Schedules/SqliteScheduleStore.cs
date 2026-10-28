@@ -124,9 +124,11 @@ public sealed class SqliteScheduleStore : IScheduleStore
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = """
                 UPDATE ScheduleTasks
-                SET Status = 2
-                WHERE Id = @id AND SessionId = @sessionId AND Status = 0;
+                SET Status = @cancelled
+                WHERE Id = @id AND SessionId = @sessionId AND Status = @pending;
                 """;
+            cmd.Parameters.AddWithValue("@cancelled", (int)ScheduleStatus.Cancelled);
+            cmd.Parameters.AddWithValue("@pending", (int)ScheduleStatus.Pending);
             cmd.Parameters.AddWithValue("@id", id);
             cmd.Parameters.AddWithValue("@sessionId", sessionId);
             return await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);

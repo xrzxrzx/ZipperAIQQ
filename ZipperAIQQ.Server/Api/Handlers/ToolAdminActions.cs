@@ -113,9 +113,11 @@ public sealed class SetToolPolicyAction : IApiAction
         {
             if (element.ValueKind != JsonValueKind.Object ||
                 !element.TryGetProperty("category", out var categoryElement) ||
-                !element.TryGetProperty("key", out var keyElement))
+                categoryElement.ValueKind != JsonValueKind.String ||
+                !element.TryGetProperty("key", out var keyElement) ||
+                keyElement.ValueKind != JsonValueKind.String)
             {
-                throw new ApiException(ApiResponse.BadRequest, "每一项都需要 category 与 key。");
+                throw new ApiException(ApiResponse.BadRequest, "每一项都需要 category 与 key（字符串）。");
             }
 
             var category = ParseCategory(categoryElement.GetString());
@@ -142,7 +144,8 @@ public sealed class SetToolPolicyAction : IApiAction
             Role? role = null;
             if (element.TryGetProperty("role", out var roleElement))
             {
-                if (!Enum.TryParse<Role>(roleElement.GetString(), ignoreCase: true, out var parsed))
+                if (roleElement.ValueKind != JsonValueKind.String ||
+                    !Enum.TryParse<Role>(roleElement.GetString(), ignoreCase: true, out var parsed))
                 {
                     throw new ApiException(ApiResponse.BadRequest,
                         $"{key}.role 只能是 Normal / Whitelist / Admin / Owner。");
@@ -165,32 +168,51 @@ public sealed class SetToolPolicyAction : IApiAction
             pending.Add((item, enabled, role));
         }
 
+        var applied = new List<PolicyItem>();
+
         foreach (var (item, enabled, role) in pending)
         {
-            if (enabled is not null)
+            var changed = false;
+
+            if (enabled is not null &&
+                _policy.IsEnabled(item.Category, item.Key, item.DefaultEnabled) != enabled.Value)
             {
                 await _settings.SetAsync(
                     ExecutionPolicy.BuildKey(item.Category, item.Key, "enabled"),
                     enabled.Value ? "1" : "0",
                     ct).ConfigureAwait(false);
+                changed = true;
             }
 
-            if (role is not null)
+            if (role is not null &&
+                _policy.MinRole(item.Category, item.Key, item.DefaultRole) != role.Value)
             {
                 await _settings.SetAsync(
                     ExecutionPolicy.BuildKey(item.Category, item.Key, "role"),
                     role.Value.ToString(),
                     ct).ConfigureAwait(false);
+                changed = true;
             }
+
+            if (changed)
+            {
+                applied.Add(item);
+            }
+        }
+
+        if (applied.Count == 0)
+        {
+            // #10：同值重复保存不产生审计噪声
+            return new { updated = 0, skipped = true };
         }
 
         await _policy.ReloadAsync(ct).ConfigureAwait(false);
 
         await _configs
-            .AppendAuditAsync("setToolPolicy", Actor, string.Join(",", pending.Select(p => p.Item.Key)), ct)
+            .AppendAuditAsync("setToolPolicy", Actor, string.Join(",", applied.Select(p => p.Key)), ct)
             .ConfigureAwait(false);
 
-        return new { updated = pending.Count };
+        return new { updated = applied.Count, skipped = false };
     }
 
     private static PolicyCategory ParseCategory(string? raw) => raw?.ToLowerInvariant() switch

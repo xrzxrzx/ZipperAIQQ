@@ -70,7 +70,7 @@ public sealed class SearchOptionsService
         }
 
         _current = new SearchSnapshot(
-            enabled is null ? _bootstrap.SearchEnabled : enabled is "1" or "true" or "True",
+            enabled is null ? _bootstrap.SearchEnabled : SettingsValue.IsTrue(enabled),
             baseUrl.TrimEnd('/'),
             endpoint?.KeyCipher is not null);
 

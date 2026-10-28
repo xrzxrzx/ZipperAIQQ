@@ -115,25 +115,30 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
 
         foreach (var platform in directories.Platforms)
         {
-            var ownerId = await ZipperAIQQ.Server.Access.AccessSettings
-                .GetOwnerAsync(settingsStore, platform, CancellationToken.None);
-            if (!string.IsNullOrWhiteSpace(ownerId) && resolver is not null)
+            var (ownerFound, ownerId, _) = await ZipperAIQQ.Server.Access.AccessSettings
+                .TryGetOwnerAsync(settingsStore, platform, CancellationToken.None);
+            if (ownerFound && resolver is not null)
             {
+                // 显式清空也要应用（ownerId 为 null = 清掉运行时的主人）
                 resolver.SetOwner(platform, ownerId);
-                Log.Logger.Information("{Platform} 主人已加载：{Owner}", platform, ownerId);
+                Log.Logger.Information(
+                    "{Platform} 主人已加载：{Owner}",
+                    platform,
+                    string.IsNullOrWhiteSpace(ownerId) ? "(已清空)" : ownerId);
             }
 
-            var admins = await ZipperAIQQ.Server.Access.AccessSettings
-                .GetAdminsAsync(settingsStore, platform, CancellationToken.None);
-            if (admins.Count > 0 && resolver is not null)
+            var (adminsFound, admins) = await ZipperAIQQ.Server.Access.AccessSettings
+                .TryGetAdminsAsync(settingsStore, platform, CancellationToken.None);
+            if (adminsFound && resolver is not null)
             {
+                // 空列表也是有效状态：用户清空管理员后，重启不能把旧名单带回来
                 resolver.SetAdmins(platform, admins);
                 Log.Logger.Information("{Platform} 管理员已加载：{Count} 人", platform, admins.Count);
             }
 
-            var (whitelist, blacklist) = await ZipperAIQQ.Server.Access.AccessSettings
-                .GetListsAsync(settingsStore, platform, CancellationToken.None);
-            if (whitelist.Count > 0 || blacklist.Count > 0)
+            var (listsFound, whitelist, blacklist) = await ZipperAIQQ.Server.Access.AccessSettings
+                .TryGetListsAsync(settingsStore, platform, CancellationToken.None);
+            if (listsFound)
             {
                 filter.Update(platform, new ZipperAIQQ.Channel.Filtering.ChatFilterOptions
                 {
@@ -144,6 +149,21 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
                 Log.Logger.Information(
                     "{Platform} 名单已加载：白 {White} / 黑 {Black}",
                     platform, whitelist.Count, blacklist.Count);
+            }
+        }
+
+        // 机器人自身账号：把库里按平台存的值灌进注册表 —— 平台握手前也能判 @
+        var selfIds = app.Services.GetRequiredService<ZipperAIQQ.Server.Identity.ISelfIdRegistry>();
+        foreach (var platform in directories.Platforms)
+        {
+            var stored = await settingsStore
+                .GetAsync(
+                    ZipperAIQQ.Server.Identity.SelfIdRecorder.PlatformStorageKey(platform),
+                    CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(stored))
+            {
+                selfIds.Set(platform, stored.Trim());
+                Log.Logger.Information("{Platform} 机器人自身账号已回灌：{SelfId}", platform, stored);
             }
         }
     }

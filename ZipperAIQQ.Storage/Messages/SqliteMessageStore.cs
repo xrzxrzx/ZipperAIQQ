@@ -447,16 +447,6 @@ public sealed class SqliteMessageStore : IMessageStore
         LIMIT @limit;
         """;
 
-    private const string SelectSearchSql = """
-        SELECT Id, Platform, ChatType, ChatId, MessageId,
-               SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
-               ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction
-        FROM Messages
-        WHERE SessionId = @sessionId AND PlainText LIKE @pattern
-        ORDER BY SentAtMs DESC, Id DESC
-        LIMIT @limit;
-        """;
-
     private const string SelectRecentSql = """
         SELECT Id, Platform, ChatType, ChatId, MessageId,
                SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,

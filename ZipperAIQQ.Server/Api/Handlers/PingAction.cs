@@ -8,7 +8,7 @@ namespace ZipperAIQQ.Server.Api.Handlers;
 public sealed class PingAction : IApiAction
 {
     /// <summary>服务端协议 / 实现版本（客户端据此判断兼容性）。</summary>
-    public const string ServerVersion = "0.5.0";
+    public const string ServerVersion = "0.5.1";
 
     public string Name => "ping";
 

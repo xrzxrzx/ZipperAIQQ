@@ -63,8 +63,9 @@ public sealed partial class AuditViewModel : ObservableObject
                 Audits.Add(item);
             }
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"客户端异常：{ex}");
             // 心跳失败不打扰
         }
     }

@@ -147,6 +147,9 @@ public sealed partial class PlatformsViewModel : ObservableObject
     /// <summary>上一次画出来的二维码 base64：轮询时内容没变就不重复解码。</summary>
     private string _lastQrBase64 = string.Empty;
 
+    /// <summary>当前二维码的图片流：换码 / 清码时释放，避免每次登录泄漏一个流。</summary>
+    private Windows.Storage.Streams.InMemoryRandomAccessStream? _qrStream;
+
     public PlatformsViewModel(ServerApiClient api)
     {
         ArgumentNullException.ThrowIfNull(api);
@@ -233,7 +236,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
     public partial string DouyinStateText { get; set; } = "还没加载";
 
     [ObservableProperty]
-    public partial string DouyinEndpointText { get; set; } = "/ws/channel";
+    public partial string DouyinEndpointText { get; set; } = ClientDefaults.DouyinEndpoint;
 
     /// <summary>抖音自己的账号 ID（顶部 chip 用；没连上时为空）。</summary>
     [ObservableProperty]
@@ -435,6 +438,13 @@ public sealed partial class PlatformsViewModel : ObservableObject
             : "邮件通道：已停用 —— 关闭后不再连 IMAP 收信；已收的邮件与账号仍保留";
 
     /// <summary>
+    /// 保存邮件开关（两个开关共用同一个 action 与 payload 形状）。
+    /// 传 <c>null</c> 表示"该项不改"，与服务端的字段可省略语义一致。
+    /// </summary>
+    private Task<SaveMailResultDto?> SaveMailAsync(bool? enabled, bool? personaDigest) =>
+        _api.CallAsync<SaveMailResultDto>("saveMail", new { enabled, personaDigest });
+
+    /// <summary>
     /// 邮件总开关（<c>saveMail</c>，运行时热切）。失败**把开关拨回去**并把原因写出来；
     /// 旧服务端（未知 action = 404）额外说明"不支持运行时开关"，同时禁用开关。
     /// </summary>
@@ -451,7 +461,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
         try
         {
-            var result = await _api.CallAsync<SaveMailResultDto>("saveMail", new { enabled })
+            var result = await SaveMailAsync(enabled: enabled, personaDigest: null)
                 .ConfigureAwait(true);
 
             // 以服务端回的真值为准（skipped = 本来就是这值，不算错）。
@@ -500,7 +510,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
         try
         {
-            var result = await _api.CallAsync<SaveMailResultDto>("saveMail", new { personaDigest = enabled })
+            var result = await SaveMailAsync(enabled: null, personaDigest: enabled)
                 .ConfigureAwait(true);
 
             MailPersonaDigest = result?.PersonaDigest ?? enabled;
@@ -550,7 +560,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
             DouyinLoginAvailable = false;
             DouyinLoginStatus = "服务端不支持运行时登录管理（旧版本）";
             DouyinStateText = "服务端未返回抖音配置（旧版本？抖音页需要新服务端）";
-            DouyinEndpointText = "/ws/channel";
+            DouyinEndpointText = ClientDefaults.DouyinEndpoint;
             return;
         }
 
@@ -569,7 +579,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
             ? (string.IsNullOrWhiteSpace(douyin.SelfId) ? "sidecar 已连入" : $"sidecar 已连入 · selfId {douyin.SelfId}")
             : (douyin.Enabled ? "未连入（sidecar 还没连上来 / 登录态可能过期）" : "未启用（启用后 /ws/channel 才会监听）");
         DouyinEndpointText = string.IsNullOrWhiteSpace(douyin.Endpoint)
-            ? "/ws/channel"
+            ? ClientDefaults.DouyinEndpoint
             : douyin.Endpoint;
 
         // 登录态：**旧服务端的 douyin 块里没有 loginState（空串）** → 登录/退出按钮禁用
@@ -617,7 +627,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
             await PollLoginAsync(token).ConfigureAwait(true);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             // 切页 / 再点一次 / 退出登录打断的 —— 正常流程，不打扰用户
         }
@@ -685,7 +695,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
             {
                 await Task.Delay(LoginPollInterval, token).ConfigureAwait(true);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 return;
             }
@@ -705,7 +715,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
                     return;
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 return;
             }
@@ -781,12 +791,10 @@ public sealed partial class PlatformsViewModel : ObservableObject
             return;
         }
 
+        var stream = new InMemoryRandomAccessStream();
         try
         {
             var bytes = Convert.FromBase64String(base64);
-
-            // 注意：这个流**故意不 Dispose** —— BitmapImage 解码完前还得能读它
-            var stream = new InMemoryRandomAccessStream();
             var writer = new DataWriter(stream);
             writer.WriteBytes(bytes);
             await writer.StoreAsync();     // WinRT 的 IAsyncOperation 可以直接 await
@@ -798,22 +806,30 @@ public sealed partial class PlatformsViewModel : ObservableObject
             var image = new BitmapImage();
             await image.SetSourceAsync(stream);
 
+            // 上一张码的流现在没人读了，换新的同时释放旧的
+            _qrStream?.Dispose();
+            _qrStream = stream;
+
             _lastQrBase64 = base64;
             DouyinQrImage = image;
             DouyinHasQr = true;
         }
         catch (FormatException ex)
         {
+            stream.Dispose();
             DouyinLoginStatus = $"二维码解码失败（base64 不合法）：{ex.Message}";
         }
         catch (Exception ex)
         {
+            stream.Dispose();
             DouyinLoginStatus = $"二维码显示失败：{ex.Message}";
         }
     }
 
     private void ClearQr()
     {
+        _qrStream?.Dispose();
+        _qrStream = null;
         DouyinQrImage = null;
         DouyinHasQr = false;
         _lastQrBase64 = string.Empty;
@@ -879,6 +895,27 @@ public sealed partial class PlatformsViewModel : ObservableObject
             // 失败：输入框里的 token 保留，用户不用重打
             DouyinStatus = $"保存失败：{ex.Message}";
         }
+    }
+
+    /// <summary>校验收信账号输入；返回错误文案，<c>null</c> = 通过。</summary>
+    public static string? ValidateMailAccount(string address, string imapHost, double imapPort)
+    {
+        if (address.Length == 0 || !address.Contains('@') || address.Any(char.IsWhiteSpace))
+        {
+            return "邮箱地址不合法：要像 someone@qq.com，且不能有空格。";
+        }
+
+        if (imapHost.Length == 0 || imapHost.Any(char.IsWhiteSpace))
+        {
+            return "IMAP 主机不能为空，也不能有空格（如 imap.qq.com）。";
+        }
+
+        if (double.IsNaN(imapPort) || imapPort is < 1 or > 65535)
+        {
+            return "端口必须在 1~65535（IMAP 通常是 993）。";
+        }
+
+        return null;
     }
 
     /// <summary>

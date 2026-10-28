@@ -296,10 +296,6 @@ public static class OneBotEventMapper
                     // 丢弃会让 AI 完全不知道"这里有个表情/语音"，读起来就像对方什么都没发。
                     var label = type switch
                     {
-                        // 表情包：带上 summary（"猫猫头"这类），但**标明它是表情包**
-                        // 只给 [表情] 两个字时，模型读不出"对方发了个表情"，也不会跟着发表情
-                        "mface" => "[表情包]",
-                        "record" => "[语音]",
                         "video" => "[视频]",
                         "json" => "[卡片消息]",
                         "file" => "[文件]",

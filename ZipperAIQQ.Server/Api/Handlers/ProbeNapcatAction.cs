@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Apis;
 
 namespace ZipperAIQQ.Server.Api.Handlers;
 
@@ -126,18 +127,9 @@ public sealed class ProbeNapcatAction : IApiAction
         return new { allowlist = NapCatAllowlist, results };
     }
 
-    /// <summary>与 <c>NapCatChannel.ActionAllowlist</c> 保持一致（诊断输出用）。</summary>
+    /// <summary>只读 action 白名单：直接复用 <see cref="ChannelApiCatalog"/>（唯一清单）。</summary>
     private static readonly string[] NapCatAllowlist =
-    [
-        "get_friend_list",
-        "get_group_list",
-        "get_group_info",
-        "get_group_member_list",
-        "get_group_member_info",
-        "get_stranger_info",
-        "get_login_info",
-        "get_version_info",
-    ];
+        ChannelApiCatalog.All.Where(a => !a.IsWrite).Select(a => a.Action).ToArray();
 
     private async Task<JsonNode?> SafeNodeAsync(string action)
     {

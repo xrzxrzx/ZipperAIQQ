@@ -63,10 +63,9 @@ public static class WsChannelEndpoint
             }
 
             var policy = services.GetRequiredService<HttpAccessPolicy>();
-            var token = ExtractToken(context.Request);
+            var token = HttpAccessPolicy.ExtractToken(context.Request);
             var configured = douyin.Token;
-            var tokenMatches = !string.IsNullOrWhiteSpace(configured)
-                && string.Equals(configured, token, StringComparison.Ordinal);
+            var tokenMatches = HttpAccessPolicy.Matches(token, configured);
 
             if (!policy.IsAllowed(token) && !tokenMatches)
             {
@@ -154,22 +153,6 @@ public static class WsChannelEndpoint
             // 心跳失败不能把端点带崩：连接本身会由通道层的断开检测处理
             logger.Warning(ex, "向 sidecar 发送心跳失败");
         }
-    }
-
-    /// <summary>从 <c>Authorization: Bearer</c> 或 <c>?token=</c> 取 token（sidecar 两种都常用）。</summary>
-    private static string? ExtractToken(HttpRequest request)
-    {
-        var header = request.Headers.Authorization.ToString();
-        if (!string.IsNullOrWhiteSpace(header))
-        {
-            const string prefix = "Bearer ";
-            return header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                ? header[prefix.Length..].Trim()
-                : header.Trim();
-        }
-
-        var query = request.Query["token"].ToString();
-        return string.IsNullOrWhiteSpace(query) ? null : query.Trim();
     }
 }
 

@@ -86,15 +86,6 @@ internal static class ToolPlatformGrouping
     /// <summary>通用组的键（空串，免得和真实平台码撞上）。</summary>
     internal const string GeneralKey = "";
 
-    /// <summary>已知平台的展示顺序（通用之后依次）。</summary>
-    private static readonly string[] KnownPlatformOrder = ["qq", "douyin"];
-
-    private static readonly Dictionary<string, string> PlatformLabels = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["qq"] = "QQ",
-        ["douyin"] = "抖音",
-    };
-
     /// <summary>平台表 → 分组键：单个平台给该平台码，空表 / 多平台给通用。</summary>
     internal static string KeyOf(IReadOnlyList<string> platforms)
     {
@@ -122,9 +113,7 @@ internal static class ToolPlatformGrouping
 
     /// <summary>平台码 → 界面文案；空串 = 通用，未知平台码原样显示。</summary>
     internal static string LabelOf(string key) =>
-        string.IsNullOrEmpty(key)
-            ? "通用"
-            : PlatformLabels.TryGetValue(key, out var label) ? label : key;
+        string.IsNullOrEmpty(key) ? "通用" : PlatformCatalog.LabelOf(key);
 
     /// <summary>分组标题：「通用」/「QQ 专用」/「抖音专用」（中文后直接接，拉丁字母后留一个空格）。</summary>
     internal static string TitleOf(string key)
@@ -139,18 +128,8 @@ internal static class ToolPlatformGrouping
     }
 
     /// <summary>组的排序：通用 → QQ → 抖音 → 未知平台（排在后面，按码排）。</summary>
-    internal static int OrderOf(string key)
-    {
-        if (string.IsNullOrEmpty(key))
-        {
-            return 0;
-        }
-
-        var index = Array.FindIndex(
-            KnownPlatformOrder,
-            known => string.Equals(known, key, StringComparison.OrdinalIgnoreCase));
-        return index < 0 ? KnownPlatformOrder.Length + 1 : index + 1;
-    }
+    internal static int OrderOf(string key) =>
+        string.IsNullOrEmpty(key) ? 0 : PlatformCatalog.OrderOf(key) + 1;
 }
 
 /// <summary>

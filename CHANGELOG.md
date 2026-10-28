@@ -3,6 +3,35 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.1] - 2026-10-28
+
+完整的发布说明见 [`docs/发布/v0.5.1.md`](docs/发布/v0.5.1.md)。
+
+### Added
+- 外部 WS token **加密落库**（`ISecretProtector`），旧明文启动时自动迁移
+- 平台 selfId 启动回灌内存注册表（握手前也能正确判断 @）
+- 邮件摘要按 `MaxConcurrentSummaries` 真并发
+- 出站队列（512，DropOldest）、正向 WS 单帧（1MB）、网页抓取（4MB）上限
+- 命令目录一致性测试、ChatAgent 内存历史测试（测试总数 348 → 373）
+
+### Changed
+- **契约**：`getExternal` 不再回显 `token`，改回 `tokenConfigured`；`setExternal` 的 `token` 改为三态（不传保持 / `""` 清除 / 非空更新）
+- 状态页 / `/status` 显示运行时模型；`/compact` 使用运行时热窗
+- 主人反馈按平台存键（`feedback.{platform}.*`，qq 镜像旧键）
+- `ServiceRegistration` 拆分为 Mail / Channels / Agent partial；新增 `MetricFacts` 统一指标口径
+- 客户端 DTO 从 1016 行拆为 8 个业务域文件
+
+### Fixed
+- 只写 `server.yaml` 无法启动（必需项校验移到 YAML 合并后）
+- 清空管理员 / 白名单后重启复活
+- 邮件管道源启动失败后永久停摆
+- 外部 WS token 明文落库 / 明文回显
+- `setBehavior` / `setConfig` 先写后校验导致的半套状态
+- 缺 payload / 非对象 payload 返回 500（现为 400）
+- 人设 `{"enabled": false}` 被误拒；全局人设缺 name 固定回退「小衣」
+- 抖音 token 显式清空被启动配置复活；删除废弃 YAML `douyin.allowedSessions`
+- 客户端 `async void` 崩溃、登录轮询超时被吞、二维码流泄漏、审计页订阅泄漏
+
 ## [0.5.0] - 2026-10-28
 
 完整的发布说明见 [`docs/发布/v0.5.0.md`](docs/发布/v0.5.0.md)。
@@ -29,6 +58,7 @@
 - 163 水位卡死（旧 UID 重投→自行过滤取最新）；成功后清除 `LastError`
 - 抖音卡片类消息把原始 JSON 当正文
 - 客户端对话框/按钮主题不统一（显式 ControlTemplate）
+
 ## [0.4.0] - 2026-10-25
 
 完整的发布说明见 [`docs/发布/v0.4.0.md`](docs/发布/v0.4.0.md)。

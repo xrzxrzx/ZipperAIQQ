@@ -119,6 +119,13 @@ public sealed class RuntimeConfigService
         };
     }
 
+    /// <summary>当前库里的端点名（给 setConfig 做写入前的整体校验，避免"端点已写、roles 报错"）。</summary>
+    public async Task<HashSet<string>> GetEndpointNamesAsync(CancellationToken ct = default)
+    {
+        var endpoints = await _store.ListEndpointsAsync(ct).ConfigureAwait(false);
+        return endpoints.Select(e => e.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
     /// <summary>写端点：校验 → 加密 → 落库 → 审计 → 热更新。</summary>
     /// <returns>是否真的发生了变更（全等时跳过写库与审计，问题记录 #10）。</returns>
     public async Task<bool> SetEndpointAsync(EndpointInput input, string actor, CancellationToken ct = default)

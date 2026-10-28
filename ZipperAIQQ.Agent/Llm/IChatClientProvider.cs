@@ -22,6 +22,9 @@ public interface IChatClientProvider
     /// <summary>当前客户端。未初始化时抛异常 —— 调用方应先用 <see cref="HasClient"/> 判断。</summary>
     IChatClient Current { get; }
 
+    /// <summary>当前生效的模型名；未初始化时为 <c>null</c>（状态页要用运行时真值）。</summary>
+    string? CurrentModel { get; }
+
     /// <summary>
     /// 按最新配置重建；**失败时保留旧客户端**（不能因为一次配置写错就把对话能力弄没）。
     /// </summary>

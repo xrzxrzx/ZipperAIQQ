@@ -24,32 +24,28 @@ namespace ZipperAIQQ.Server.Api.Handlers;
 public sealed class GetPlatformsAction : IApiAction
 {
     private readonly IMessageChannel _channel;
-    private readonly DouyinChannel _douyin;
+    private readonly IChannelLogin _douyin;
     private readonly DouyinOptionsService _douyinOptions;
     private readonly IMailRepository _mailRepository;
-    private readonly MailOptions _mailOptions;
     private readonly MailOptionsService _mailSwitch;
 
     public GetPlatformsAction(
         IMessageChannel channel,
-        DouyinChannel douyin,
+        IChannelLogin douyin,
         DouyinOptionsService douyinOptions,
         IMailRepository mailRepository,
-        MailOptions mailOptions,
         MailOptionsService mailSwitch)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(douyin);
         ArgumentNullException.ThrowIfNull(douyinOptions);
         ArgumentNullException.ThrowIfNull(mailRepository);
-        ArgumentNullException.ThrowIfNull(mailOptions);
         ArgumentNullException.ThrowIfNull(mailSwitch);
 
         _channel = channel;
         _douyin = douyin;
         _douyinOptions = douyinOptions;
         _mailRepository = mailRepository;
-        _mailOptions = mailOptions;
         _mailSwitch = mailSwitch;
     }
 
@@ -86,21 +82,8 @@ public sealed class GetPlatformsAction : IApiAction
                 // 「汇总再经人格润色」的可选项（2026-10-28 用户要求）
                 personaDigest = _mailSwitch.PersonaDigest,
                 accounts = accounts
-                    .Select(a => new
-                    {
-                        id = a.Id,
-                        address = a.Address,
-                        displayName = a.DisplayName,
-                        imapHost = a.ImapHost,
-                        imapPort = a.ImapPort,
-                        useSsl = a.UseSsl,
-                        username = a.Username,
-                        enabled = a.Enabled,
-                        lastSyncAt = a.LastSyncAt?.ToUnixTimeMilliseconds(),
-                        lastError = a.LastError,
-                        // 永不下发密文/明文，只告诉客户端"配没配"
-                        hasSecret = !string.IsNullOrEmpty(a.SecretCipher),
-                    })
+                    // 复用 MailViews：字段清单只维护一份（密文永不下发）
+                    .Select(MailViews.Account)
                     .ToList(),
             },
 
@@ -340,9 +323,9 @@ public sealed class SaveMailAction : IApiAction
 /// </remarks>
 public sealed class GetDouyinLoginAction : IApiAction
 {
-    private readonly DouyinChannel _channel;
+    private readonly IChannelLogin _channel;
 
-    public GetDouyinLoginAction(DouyinChannel channel)
+    public GetDouyinLoginAction(IChannelLogin channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
         _channel = channel;
@@ -366,10 +349,10 @@ public sealed class StartDouyinLoginAction : IApiAction
 {
     private const string Actor = "http-client";
 
-    private readonly DouyinChannel _channel;
+    private readonly IChannelLogin _channel;
     private readonly IConfigStore _configs;
 
-    public StartDouyinLoginAction(DouyinChannel channel, IConfigStore configs)
+    public StartDouyinLoginAction(IChannelLogin channel, IConfigStore configs)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(configs);
@@ -407,10 +390,10 @@ public sealed class LogoutDouyinAction : IApiAction
 {
     private const string Actor = "http-client";
 
-    private readonly DouyinChannel _channel;
+    private readonly IChannelLogin _channel;
     private readonly IConfigStore _configs;
 
-    public LogoutDouyinAction(DouyinChannel channel, IConfigStore configs)
+    public LogoutDouyinAction(IChannelLogin channel, IConfigStore configs)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(configs);

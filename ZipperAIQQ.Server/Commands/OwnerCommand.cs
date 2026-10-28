@@ -33,18 +33,15 @@ public sealed class OwnerCommand : ICommand
     private const string Actor = "command:owner";
 
     private readonly IRuntimeSettingsStore _settings;
-    private readonly IRoleResolver _roles;
-    private readonly IConfigStore _configs;
+    private readonly OwnerService _owners;
 
-    public OwnerCommand(IRuntimeSettingsStore settings, IRoleResolver roles, IConfigStore configs)
+    public OwnerCommand(IRuntimeSettingsStore settings, OwnerService owners)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        ArgumentNullException.ThrowIfNull(roles);
-        ArgumentNullException.ThrowIfNull(configs);
+        ArgumentNullException.ThrowIfNull(owners);
 
         _settings = settings;
-        _roles = roles;
-        _configs = configs;
+        _owners = owners;
     }
 
     public string Name => "owner";
@@ -104,25 +101,8 @@ public sealed class OwnerCommand : ICommand
             return $"主人已经是 {newOwner} 了，不用改。";
         }
 
-        await _settings.SetAsync(AccessKeys.Owner(platform), newOwner, ct).ConfigureAwait(false);
-        if (AccessKeys.HasLegacyKeys(platform))
-        {
-            // 旧键同步一份：回退到旧版程序时主人不会消失
-            await _settings.SetAsync(AccessKeys.LegacyOwnerKey, newOwner, ct).ConfigureAwait(false);
-        }
-
-        // 立即生效：权限解析器持有内存里的各平台 owner
-        if (_roles is ConfiguredRoleResolver configured)
-        {
-            configured.SetOwner(platform, newOwner);
-        }
-
-        await _configs
-            .AppendAuditAsync(
-                "transferOwner",
-                Actor,
-                $"{platform}:{(string.IsNullOrWhiteSpace(current) ? "（空）" : current)} → {newOwner}",
-                ct)
+        await _owners
+            .SetOwnerAsync(platform, newOwner, null, Actor, ct)
             .ConfigureAwait(false);
 
         var sb = new StringBuilder();

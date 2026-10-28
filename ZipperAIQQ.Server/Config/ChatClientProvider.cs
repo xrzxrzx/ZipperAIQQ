@@ -21,6 +21,7 @@ public sealed class ChatClientProvider : IChatClientProvider
     private readonly ILogger _logger;
 
     private volatile IChatClient? _current;
+    private volatile string? _currentModel;
 
     public ChatClientProvider(IConfigStore store, ISecretProtector protector, ILogger logger)
     {
@@ -37,6 +38,9 @@ public sealed class ChatClientProvider : IChatClientProvider
 
     public IChatClient Current => _current
         ?? throw new InvalidOperationException("LLM 客户端尚未初始化：请先配置 Chat 角色端点。");
+
+    /// <summary>当前生效的模型名（状态页用运行时真值，不是启动配置）。</summary>
+    public string? CurrentModel => _currentModel;
 
     public async Task ReloadAsync(CancellationToken ct = default)
     {
@@ -77,6 +81,7 @@ public sealed class ChatClientProvider : IChatClientProvider
 
         var previous = _current;
         _current = client;
+        _currentModel = endpoint.Model;
 
         if (previous is IDisposable disposable)
         {

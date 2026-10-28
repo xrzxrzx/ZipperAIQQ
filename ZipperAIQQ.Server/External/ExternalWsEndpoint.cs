@@ -31,11 +31,10 @@ public static class ExternalWsEndpoint
             var logger = context.RequestServices.GetRequiredService<ILogger>();
             var external = context.RequestServices.GetRequiredService<ExternalOptionsService>();
 
-            var token = ExtractToken(context.Request);
+            var token = HttpAccessPolicy.ExtractBearerToken(context.Request);
             var block = external.Current.ReverseServers
                 .FirstOrDefault(s => s.Enabled && s.Port == context.Connection.LocalPort);
-            var tokenAllowed =
-                (!string.IsNullOrWhiteSpace(block?.Token) && string.Equals(block.Token, token, StringComparison.Ordinal));
+            var tokenAllowed = HttpAccessPolicy.Matches(token, block?.Token);
 
             if (!policy.IsAllowed(token) && !tokenAllowed)
             {
@@ -143,14 +142,5 @@ public static class ExternalWsEndpoint
                 session.Enqueue(ExternalProtocol.Ack(null, false, ex.Message));
             }
         }
-    }
-
-    private static string? ExtractToken(HttpRequest request)
-    {
-        var header = request.Headers.Authorization.ToString();
-        const string prefix = "Bearer ";
-        return header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? header[prefix.Length..].Trim()
-            : null;
     }
 }

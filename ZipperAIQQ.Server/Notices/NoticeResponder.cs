@@ -45,6 +45,7 @@ public sealed class NoticeResponder
     private readonly IMessageChannel _channel;
     private readonly ServerOptions _options;
     private readonly OwnerFeedbackService _feedback;
+    private readonly Identity.ISelfIdRegistry _selfIds;
     private readonly ILogger _logger;
 
     public NoticeResponder(
@@ -54,6 +55,7 @@ public sealed class NoticeResponder
         IMessageChannel channel,
         ServerOptions options,
         OwnerFeedbackService feedback,
+        Identity.ISelfIdRegistry selfIds,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(notices);
@@ -62,6 +64,7 @@ public sealed class NoticeResponder
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(feedback);
+        ArgumentNullException.ThrowIfNull(selfIds);
         ArgumentNullException.ThrowIfNull(logger);
 
         _notices = notices;
@@ -70,6 +73,7 @@ public sealed class NoticeResponder
         _channel = channel;
         _options = options;
         _feedback = feedback;
+        _selfIds = selfIds;
         _logger = logger;
     }
 
@@ -116,7 +120,9 @@ public sealed class NoticeResponder
         }
 
         // 按平台取 selfId（S3-A）：多平台下 QQ 号不能拿来判抖音通知
-        var selfId = _channel.SelfIdFor(notice.Chat.Platform) ?? _options.SelfIdFor(notice.Chat.Platform);
+        var selfId = _channel.SelfIdFor(notice.Chat.Platform)
+            ?? _options.SelfIdFor(notice.Chat.Platform)
+            ?? _selfIds.Get(notice.Chat.Platform);
         var text = Describe(notice, selfId);
 
         try
@@ -159,7 +165,7 @@ public sealed class NoticeResponder
             .ReadNoticeValueAsync(_settings, platform, type, ct)
             .ConfigureAwait(false);
 
-        return value is "1" or "true";
+        return NoticeSettings.IsOn(value);
     }
 
     /// <summary>把通知翻译成给模型看的一句话（保留 actor / target 的区分）。</summary>

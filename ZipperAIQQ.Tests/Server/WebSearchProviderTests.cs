@@ -10,8 +10,6 @@ namespace ZipperAIQQ.Tests.Server;
 /// <summary>网页搜索（#1）：官方契约、失败语义、fetch 回落。</summary>
 public sealed class WebSearchProviderTests
 {
-    private readonly ILogger _logger = new LoggerConfiguration().CreateLogger();
-
     private sealed class FakeHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _respond;

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.AspNetCore.Http;
 
 namespace ZipperAIQQ.Server.Api;
 
@@ -30,8 +31,59 @@ public sealed class HttpAccessPolicy
         }
     }
 
-    /// <summary>是否强制要求 token（非 loopback 时 true）。</summary>
-    public bool RequiresToken => _requireToken;
+    /// <summary>
+    /// 从 <c>Authorization: Bearer &lt;token&gt;</c> 取 token；没有或格式不符返回 <c>null</c>。
+    /// </summary>
+    /// <remarks>
+    /// 所有 HTTP / WS 端点共用这一份 —— 以前四个端点各抄了一遍，改一处漏三处。
+    /// </remarks>
+    public static string? ExtractBearerToken(HttpRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var header = request.Headers.Authorization.ToString();
+        const string prefix = "Bearer ";
+
+        return header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? header[prefix.Length..].Trim()
+            : null;
+    }
+
+    /// <summary>
+    /// 从 Bearer 头或 <c>?token=</c> 查询串取 token（sidecar 两种都常用）。
+    /// </summary>
+    public static string? ExtractToken(HttpRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var header = request.Headers.Authorization.ToString();
+        if (!string.IsNullOrWhiteSpace(header))
+        {
+            const string prefix = "Bearer ";
+
+            // 有些 sidecar 直接把 token 放在 Authorization 里（不带 Bearer 前缀）
+            return header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                ? header[prefix.Length..].Trim()
+                : header.Trim();
+        }
+
+        var query = request.Query["token"].ToString();
+        return string.IsNullOrWhiteSpace(query) ? null : query.Trim();
+    }
+
+    /// <summary>定长比较两个 token（长度不同直接 false；避免按字节提前返回的时序侧信道）。</summary>
+    public static bool Matches(string? provided, string? expected)
+    {
+        if (string.IsNullOrEmpty(provided) || string.IsNullOrEmpty(expected))
+        {
+            return false;
+        }
+
+        var a = Encoding.UTF8.GetBytes(provided);
+        var b = Encoding.UTF8.GetBytes(expected);
+
+        return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
+    }
 
     /// <summary>请求是否放行。</summary>
     public bool IsAllowed(string? providedToken)

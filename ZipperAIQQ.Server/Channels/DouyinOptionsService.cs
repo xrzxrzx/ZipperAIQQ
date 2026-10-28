@@ -115,12 +115,25 @@ public sealed class DouyinOptionsService
 
         var bootstrap = _bootstrap.Douyin;
 
-        var token = string.IsNullOrWhiteSpace(cipher) ? bootstrap.Token : _protector.Unprotect(cipher);
-        if (!string.IsNullOrWhiteSpace(cipher) && token is null)
+        // null = 从未配置（用启动配置兜底）；"" = 显式清除（不能再用启动配置复活）；
+        // 非空 = 密文（解不开才退回启动配置，并告警）
+        string? token;
+        if (cipher is null)
         {
-            // 主密钥换了：解不开就退回启动配置（若也没有 = 没配置），并明确告警
-            _logger.Warning("抖音 token 解不开（主密钥可能已变更），回退到启动配置的值");
             token = bootstrap.Token;
+        }
+        else if (cipher.Length == 0)
+        {
+            token = null;
+        }
+        else
+        {
+            token = _protector.Unprotect(cipher);
+            if (token is null)
+            {
+                _logger.Warning("抖音 token 解不开（主密钥可能已变更），回退到启动配置的值");
+                token = bootstrap.Token;
+            }
         }
 
         _current = new DouyinSnapshot(
@@ -249,14 +262,8 @@ public sealed class DouyinOptionsService
         return changed;
     }
 
-    private static bool IsTrue(string raw) => raw is "1" or "true" or "True";
+    private static bool IsTrue(string raw) => SettingsValue.IsTrue(raw);
 
     private static int ParseInt(string? raw, int fallback) =>
         int.TryParse(raw, out var value) && value > 0 ? value : fallback;
-
-    /// <summary>逗号分隔的列表（与其它配置节同口径）。</summary>
-    private static IReadOnlyList<string> SplitList(string raw) =>
-        raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
 }

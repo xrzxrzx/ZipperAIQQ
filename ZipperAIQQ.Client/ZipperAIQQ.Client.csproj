@@ -42,8 +42,4 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
   </ItemGroup>
 
-  <!-- 客户端自己维护一份 wire DTO（架构 §3.8），**不引用** Server / Agent -->
-  <ItemGroup>
-  </ItemGroup>
-
 </Project>

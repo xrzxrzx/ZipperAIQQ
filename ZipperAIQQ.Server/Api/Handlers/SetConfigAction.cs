@@ -37,28 +37,32 @@ public sealed class SetConfigAction : IApiAction
             throw new ApiException(ApiResponse.BadRequest, "payload 必须是对象。");
         }
 
-        var didSomething = false;
         var updated = 0;
 
-        if (payload.TryGetProperty("endpoint", out var endpoint) && endpoint.ValueKind == JsonValueKind.Object)
+        EndpointInput? pendingEndpoint = null;
+        if (payload.TryGetProperty("endpoint", out var endpoint))
         {
-            var input = new EndpointInput(
+            if (endpoint.ValueKind != JsonValueKind.Object)
+            {
+                throw new ApiException(ApiResponse.BadRequest, "endpoint 必须是对象。");
+            }
+
+            pendingEndpoint = new EndpointInput(
                 Name: PayloadReader.GetString(endpoint, "name"),
                 BaseUrl: PayloadReader.GetString(endpoint, "baseUrl"),
                 Model: PayloadReader.GetString(endpoint, "model"),
                 ApiKind: PayloadReader.GetString(endpoint, "apiKind"),
                 Key: PayloadReader.GetString(endpoint, "key"));
-
-            if (await _config.SetEndpointAsync(input, Actor, ct).ConfigureAwait(false))
-            {
-                updated++;
-            }
-
-            didSomething = true;
         }
 
-        if (payload.TryGetProperty("roles", out var roles) && roles.ValueKind == JsonValueKind.Object)
+        var pendingRoles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (payload.TryGetProperty("roles", out var roles))
         {
+            if (roles.ValueKind != JsonValueKind.Object)
+            {
+                throw new ApiException(ApiResponse.BadRequest, "roles 必须是 { 角色: 端点名 } 对象。");
+            }
+
             foreach (var role in roles.EnumerateObject())
             {
                 if (role.Value.ValueKind != JsonValueKind.String)
@@ -66,18 +70,52 @@ public sealed class SetConfigAction : IApiAction
                     throw new ApiException(ApiResponse.BadRequest, $"roles.{role.Name} 必须是字符串。");
                 }
 
-                if (await _config.SetRoleAsync(role.Name, role.Value.GetString()!, Actor, ct).ConfigureAwait(false))
+                var target = role.Value.GetString()?.Trim();
+                if (string.IsNullOrWhiteSpace(target))
                 {
-                    updated++;
+                    throw new ApiException(ApiResponse.BadRequest, $"roles.{role.Name} 不能为空。");
                 }
 
-                didSomething = true;
+                pendingRoles[role.Name] = target;
             }
         }
 
-        if (!didSomething)
+        if (pendingEndpoint is null && pendingRoles.Count == 0)
         {
             throw new ApiException(ApiResponse.BadRequest, "payload 里至少要给 endpoint 或 roles 之一。");
+        }
+
+        // roles 先整体预校验：目标端点必须已存在，或就是本次要写的端点。
+        // 否则会出现「端点已落库、roles 报错」的半套状态。
+        if (pendingRoles.Count > 0)
+        {
+            var known = await _config.GetEndpointNamesAsync(ct).ConfigureAwait(false);
+            if (pendingEndpoint?.Name is { Length: > 0 } name)
+            {
+                known.Add(name.Trim());
+            }
+
+            foreach (var (role, target) in pendingRoles)
+            {
+                if (!known.Contains(target))
+                {
+                    throw new ApiException(ApiResponse.BadRequest, $"roles.{role} 指向不存在的端点：{target}");
+                }
+            }
+        }
+
+        if (pendingEndpoint is not null &&
+            await _config.SetEndpointAsync(pendingEndpoint, Actor, ct).ConfigureAwait(false))
+        {
+            updated++;
+        }
+
+        foreach (var (role, target) in pendingRoles)
+        {
+            if (await _config.SetRoleAsync(role, target, Actor, ct).ConfigureAwait(false))
+            {
+                updated++;
+            }
         }
 
         // #10：没变化时告诉客户端「跳过」，别把它显示成"已保存"

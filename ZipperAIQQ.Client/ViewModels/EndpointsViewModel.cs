@@ -56,7 +56,7 @@ public sealed partial class EndpointsViewModel : ObservableObject
     public partial bool SearchEnabled { get; set; } = true;
 
     [ObservableProperty]
-    public partial string SearchBaseUrl { get; set; } = "https://api.deepseek.com";
+    public partial string SearchBaseUrl { get; set; } = ClientDefaults.LlmBaseUrl;
 
     [ObservableProperty]
     public partial string SearchApiKey { get; set; } = string.Empty;
@@ -86,7 +86,7 @@ public sealed partial class EndpointsViewModel : ObservableObject
             var search = await _api.CallAsync<SearchDto>("getSearch").ConfigureAwait(true);
             SearchEnabled = search?.Enabled != false;
             SearchBaseUrl = string.IsNullOrWhiteSpace(search?.BaseUrl)
-                ? "https://api.deepseek.com"
+                ? ClientDefaults.LlmBaseUrl
                 : search.BaseUrl;
             SearchApiKey = string.Empty;
             SearchStatus = search?.HasKey == true ? "已配置 key" : "未配置 key";

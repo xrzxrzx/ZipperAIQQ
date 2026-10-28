@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Storage.Settings;
@@ -24,7 +25,13 @@ public sealed class GetSettingsAction : IApiAction
         foreach (var setting in NumericSettingsSchema.All)
         {
             var raw = await _settings.GetAsync(setting.Key, ct).ConfigureAwait(false);
-            var current = double.TryParse(raw, out var parsed) ? parsed : setting.Default;
+            var current = double.TryParse(
+                raw,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var parsed)
+                ? parsed
+                : setting.Default;
 
             items.Add(new
             {

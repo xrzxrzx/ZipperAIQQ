@@ -3,6 +3,7 @@ using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Storage.Settings;
 
+using ZipperAIQQ.Server.Config;
 namespace ZipperAIQQ.Server.Commands;
 
 /// <summary>查看 / 开关通知响应（FR-18.3）。</summary>
@@ -11,8 +12,6 @@ namespace ZipperAIQQ.Server.Commands;
 /// </remarks>
 public sealed class NoticeCommand : ICommand
 {
-    private const string KeyPrefix = "notice.reply:";
-
     private static readonly NoticeType[] Replyable =
     [
         NoticeType.Poke,
@@ -49,7 +48,7 @@ public sealed class NoticeCommand : ICommand
                 var current = await GetBehaviorAction
                     .ReadNoticeValueAsync(_settings, statusPlatform, type, ct)
                     .ConfigureAwait(false);
-                statusLines.Add($"- {type}：{(current is "1" or "true" ? "开" : "关")}");
+                statusLines.Add($"- {type}：{(SettingsValue.IsTrue(current) ? "开" : "关")}");
             }
 
             statusLines.Add("用法：`/notice on|off poke`（可选：" + string.Join(" / ", Replyable) + "）");
@@ -77,19 +76,10 @@ public sealed class NoticeCommand : ICommand
         // 一旦客户端保存过 `notice.reply:qq:{type}`，/notice 写老键就会出现
         // 「命令说开了、行为页显示关」的读写分歧 —— 平台化把它变成了真 bug，这里修掉。
         var targetPlatform = GetBehaviorAction.NormalizePlatform(context.Chat.Platform);
-        var flag = action == "on" ? "1" : "0";
 
-        await _settings
-            .SetAsync(GetBehaviorAction.NoticeKey(targetPlatform, noticeType), flag, ct)
+        await Notices.NoticeSettings
+            .WriteAsync(_settings, targetPlatform, noticeType, action == "on", ct)
             .ConfigureAwait(false);
-
-        if (GetBehaviorAction.HasLegacyKeys(targetPlatform))
-        {
-            // qq 镜像写老键：回退到旧版程序时开关不会丢
-            await _settings
-                .SetAsync(GetBehaviorAction.LegacyNoticeKey(noticeType), flag, ct)
-                .ConfigureAwait(false);
-        }
 
         return $"已{(action == "on" ? "开启" : "关闭")} {noticeType} 的通知响应（{targetPlatform}，下一轮生效）。";
     }

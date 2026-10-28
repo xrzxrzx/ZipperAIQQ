@@ -104,7 +104,7 @@ public sealed class PlatformActionsTests : IAsyncLifetime
         });
 
         var action = new GetPlatformsAction(
-            _channel, _douyin, _douyinOptions, new SqliteMailRepository(_db), new MailOptions(), _mailSwitch);
+            _channel, _douyin, _douyinOptions, new SqliteMailRepository(_db), _mailSwitch);
         var json = ToJson(await action.HandleAsync(EmptyPayload(), CancellationToken.None));
 
         var text = json.GetRawText();
@@ -265,7 +265,7 @@ public sealed class PlatformActionsTests : IAsyncLifetime
 
         // getPlatforms 读的是运行时真值
         var get = new GetPlatformsAction(
-            _channel, _douyin, _douyinOptions, new SqliteMailRepository(_db), new MailOptions(), _mailSwitch);
+            _channel, _douyin, _douyinOptions, new SqliteMailRepository(_db), _mailSwitch);
         var platforms = ToJson(await get.HandleAsync(EmptyPayload(), CancellationToken.None));
         Assert.True(platforms.GetProperty("mail").GetProperty("enabled").GetBoolean());
     }
@@ -287,7 +287,7 @@ public sealed class PlatformActionsTests : IAsyncLifetime
         Assert.Equal("0", stored);
 
         var get = new GetPlatformsAction(
-            _channel, _douyin, _douyinOptions, new SqliteMailRepository(_db), new MailOptions(), _mailSwitch);
+            _channel, _douyin, _douyinOptions, new SqliteMailRepository(_db), _mailSwitch);
         var platforms = ToJson(await get.HandleAsync(EmptyPayload(), CancellationToken.None));
         Assert.False(platforms.GetProperty("mail").GetProperty("personaDigest").GetBoolean());
     }

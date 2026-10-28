@@ -10,6 +10,9 @@ namespace ZipperAIQQ.Server.External;
 /// <summary>一个外部 WS 连接（反向连入或正向连出都用它）。</summary>
 public sealed class ExternalSession
 {
+    /// <summary>每连接出站缓冲上限：慢客户端只会丢旧事件，不会把服务端内存拖爆。</summary>
+    private const int MaxOutbox = 512;
+
     private readonly Channel<string> _outbox;
     private volatile bool _messages = true;
     private volatile bool _notices = true;
@@ -18,10 +21,11 @@ public sealed class ExternalSession
     {
         Id = id;
         Name = name;
-        _outbox = System.Threading.Channels.Channel.CreateUnbounded<string>(new UnboundedChannelOptions
+        _outbox = System.Threading.Channels.Channel.CreateBounded<string>(new BoundedChannelOptions(MaxOutbox)
         {
             SingleReader = true,
             SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest,
         });
     }
 
@@ -45,7 +49,8 @@ public sealed class ExternalSession
         _ => false,
     };
 
-    public void Enqueue(string frame) => _outbox.Writer.TryWrite(frame);
+    /// <summary>入队；返回 <c>false</c> 表示队列已满（调用方记一次丢弃）。</summary>
+    public bool Enqueue(string frame) => _outbox.Writer.TryWrite(frame);
 
     internal void Close() => _outbox.Writer.TryComplete();
 }
@@ -57,8 +62,9 @@ public sealed class ExternalWsHub
 {
     private readonly ConcurrentDictionary<Guid, ExternalSession> _sessions = new();
     private readonly ILogger _logger;
-    private readonly ChannelCapabilities _capabilities;
-    private readonly string? _selfId;
+    private readonly IMessageChannel _channel;
+    private readonly Configuration.ServerOptions _options;
+    private int _dropped;
 
     public ExternalWsHub(ILogger logger, IMessageChannel channel, Configuration.ServerOptions options)
     {
@@ -67,8 +73,8 @@ public sealed class ExternalWsHub
         ArgumentNullException.ThrowIfNull(options);
 
         _logger = logger;
-        _capabilities = channel.Capabilities;
-        _selfId = channel.SelfId ?? options.SelfId;
+        _channel = channel;
+        _options = options;
     }
 
     public int Count => _sessions.Count;
@@ -92,11 +98,14 @@ public sealed class ExternalWsHub
 
     public void PublishHello(ExternalSession session)
     {
+        // 现读：外部连接可能早于 QQ 握手，缓存值会让它永远拿到 null
+        var selfId = _channel.SelfIdFor(_channel.Platform) ?? _channel.SelfId ?? _options.SelfId;
+
         session.Enqueue(ExternalProtocol.Frame("hello", new
         {
             version = ExternalProtocol.Version,
-            selfId = _selfId,
-            capabilities = _capabilities.ToString(),
+            selfId,
+            capabilities = _channel.Capabilities.ToString(),
         }));
     }
 
@@ -114,7 +123,7 @@ public sealed class ExternalWsHub
             },
             text = message.PlainText,
             time = message.OccurredAt.ToUnixTimeMilliseconds(),
-            capabilities = _capabilities.ToString(),
+            capabilities = _channel.Capabilities.ToString(),
         };
 
         Broadcast("message", message.Chat.SessionId, payload);
@@ -146,9 +155,18 @@ public sealed class ExternalWsHub
         var frame = ExternalProtocol.Event(kind, session, payload);
         foreach (var client in _sessions.Values)
         {
-            if (client.Wants(kind))
+            if (!client.Wants(kind))
             {
-                client.Enqueue(frame);
+                continue;
+            }
+
+            if (!client.Enqueue(frame))
+            {
+                var dropped = Interlocked.Increment(ref _dropped);
+                if (dropped % 100 == 1)
+                {
+                    _logger.Warning("外部 WS 出站队列已满，丢弃事件（累计 {Dropped} 次）", dropped);
+                }
             }
         }
     }

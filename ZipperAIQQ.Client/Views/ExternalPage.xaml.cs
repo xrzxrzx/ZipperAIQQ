@@ -59,7 +59,18 @@ public sealed partial class ExternalPage : Page
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
         };
         var url = new TextBox { Header = "WS 地址", Text = item.Url, PlaceholderText = "ws://host:port" };
-        var token = new TextBox { Header = "Token", Text = item.Token, PlaceholderText = "留空 = 不鉴权" };
+        var token = new TextBox
+        {
+            Header = "Token",
+            Text = string.Empty,
+            PlaceholderText = item.HasToken ? "已配置 · 留空不修改" : "未配置 · 留空 = 不鉴权",
+        };
+        var clearToken = new CheckBox
+        {
+            Content = "清除已保存的 Token",
+            IsChecked = false,
+            Visibility = item.HasToken ? Visibility.Visible : Visibility.Collapsed,
+        };
         var error = new TextBlock
         {
             Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.OrangeRed),
@@ -88,6 +99,7 @@ public sealed partial class ExternalPage : Page
         }
 
         panel.Children.Add(token);
+        panel.Children.Add(clearToken);
         panel.Children.Add(error);
 
         var dialog = new ContentDialog
@@ -105,28 +117,12 @@ public sealed partial class ExternalPage : Page
 
         dialog.PrimaryButtonClick += (_, args) =>
         {
-            var hostText = host.Text.Trim();
-            if (string.IsNullOrWhiteSpace(hostText))
-            {
-                error.Text = "Host 不能为空。";
-                error.Visibility = Visibility.Visible;
-                args.Cancel = true;
-                return;
-            }
+            var errorText = ExternalViewModel.ValidateServer(
+                item.IsReverse, host.Text.Trim(), port.Value, url.Text.Trim());
 
-            if (item.IsReverse && port.Value is < 1 or > 65535)
+            if (errorText is not null)
             {
-                error.Text = "Port 必须在 1~65535。";
-                error.Visibility = Visibility.Visible;
-                args.Cancel = true;
-                return;
-            }
-
-            var urlText = url.Text.Trim();
-            if (!item.IsReverse &&
-                (!Uri.TryCreate(urlText, UriKind.Absolute, out var parsed) || parsed.Scheme is not ("ws" or "wss")))
-            {
-                error.Text = "WS 地址必须是 ws:// 或 wss://。";
+                error.Text = errorText;
                 error.Visibility = Visibility.Visible;
                 args.Cancel = true;
                 return;
@@ -134,10 +130,13 @@ public sealed partial class ExternalPage : Page
 
             item.Name = string.IsNullOrWhiteSpace(name.Text) ? item.TypeText : name.Text.Trim();
             item.Enabled = enabled.IsOn;
-            item.Host = hostText;
+            item.Host = host.Text.Trim();
             item.Port = port.Value;
-            item.Url = urlText;
-            item.Token = token.Text.Trim();
+            item.Url = url.Text.Trim();
+
+            // token 不回显：留空 = 不修改；勾选"清除" = 明确清除；输入 = 更新
+            item.ClearToken = clearToken.IsChecked == true;
+            item.TokenInput = item.ClearToken ? string.Empty : token.Text.Trim();
         };
 
         await dialog.ShowAsync();

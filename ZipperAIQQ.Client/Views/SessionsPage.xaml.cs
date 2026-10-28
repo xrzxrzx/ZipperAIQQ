@@ -56,8 +56,16 @@ public sealed partial class SessionsPage : Page
 
         DialogTheme.Apply(dialog);
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        try
         {
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"导出对话框失败：{ex}");
             return;
         }
 
@@ -66,8 +74,8 @@ public sealed partial class SessionsPage : Page
             var file = unlimited.IsChecked == true
                 ? await Vm.ExportAsync(null, null)
                 : await Vm.ExportAsync(
-                    new DateTimeOffset(fromPicker.Date.Date, TimeSpan.Zero).ToLocalTime(),
-                    new DateTimeOffset(toPicker.Date.Date.AddDays(1).AddMilliseconds(-1), TimeSpan.Zero).ToLocalTime());
+                    SessionsViewModel.ExportStart(fromPicker.Date),
+                    SessionsViewModel.ExportEnd(toPicker.Date));
 
             var done = new ContentDialog
             {

@@ -251,7 +251,7 @@ public class MailSummaryService : IMailSummaryService
     {
         var body = new StringBuilder();
         body.Append("主题：").AppendLine(mail.Subject);
-        body.Append("发件人：").AppendLine(DescribeSender(mail));
+        body.Append("发件人：").AppendLine(MailText.DescribeSender(mail.FromName, mail.FromAddress));
         body.Append("时间：").AppendLine(BeijingTime.Format(mail.OccurredAt));
 
         if (mail.HasAttachments)
@@ -365,11 +365,6 @@ public class MailSummaryService : IMailSummaryService
 
         return (text[..cut], true);
     }
-
-    private static string DescribeSender(IncomingMail mail) =>
-        string.IsNullOrWhiteSpace(mail.FromName)
-            ? mail.FromAddress
-            : $"{mail.FromName} <{mail.FromAddress}>";
 
     /// <summary>从异常链里挖 HTTP 状态码；挖不到返回 <c>null</c>（= 当传输错误处理）。</summary>
     /// <remarks>

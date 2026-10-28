@@ -2,6 +2,7 @@ using Serilog;
 using ZipperAIQQ.Server.Mail;
 using ZipperAIQQ.Storage.Settings;
 
+using ZipperAIQQ.Server.Config;
 namespace ZipperAIQQ.Server.Mail;
 
 /// <summary>
@@ -117,5 +118,5 @@ public sealed class MailOptionsService
         return changed;
     }
 
-    private static bool IsTrue(string raw) => raw is "1" or "true" or "True";
+    private static bool IsTrue(string raw) => SettingsValue.IsTrue(raw);
 }

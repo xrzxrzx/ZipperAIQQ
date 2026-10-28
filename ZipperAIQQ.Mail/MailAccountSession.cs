@@ -97,9 +97,6 @@ public sealed class MailAccountSession : IAsyncDisposable
     /// <summary>账号 ID（日志与事件形状用）。</summary>
     public string AccountId => _account.Id;
 
-    /// <summary>是否已因不可恢复错误（认证失败）停止。</summary>
-    public bool IsStopped => _stopped;
-
     /// <summary>
     /// 跑「连接 → 同步 → 等一个轮询间隔 → 再同步」的长跑循环，直到取消或认证失败。
     /// </summary>

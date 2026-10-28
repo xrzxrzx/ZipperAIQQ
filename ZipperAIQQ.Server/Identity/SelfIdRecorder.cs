@@ -39,19 +39,23 @@ public sealed class SelfIdRecorder : BackgroundService
 
     private readonly IMessageChannel _channel;
     private readonly IRuntimeSettingsStore _settings;
+    private readonly ISelfIdRegistry _registry;
     private readonly ILogger _logger;
 
     public SelfIdRecorder(
         IMessageChannel channel,
         IRuntimeSettingsStore settings,
+        ISelfIdRegistry registry,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
         _settings = settings;
+        _registry = registry;
         _logger = logger;
     }
 
@@ -110,6 +114,9 @@ public sealed class SelfIdRecorder : BackgroundService
                 await _settings
                     .SetAsync(PlatformStorageKey(platform), selfId, CancellationToken.None)
                     .ConfigureAwait(false);
+
+                // 同步进内存注册表：本进程内不必再读库
+                _registry.Set(platform, selfId);
 
                 _logger.Information("机器人账号已持久化：{Platform} → {SelfId}", platform, selfId);
             }

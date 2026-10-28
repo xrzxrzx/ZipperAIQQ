@@ -27,9 +27,6 @@ public sealed record DouyinOptions
     /// </remarks>
     public string? Token { get; init; }
 
-    /// <summary>允许的会话白名单（空 = 全部；支持 <c>douyin:p*</c> / <c>douyin:g*</c> 前缀）。</summary>
-    public IReadOnlyList<string> AllowedSessions { get; init; } = [];
-
     /// <summary>出站 ack 超时（毫秒）。超时即清理 pending，不泄漏。</summary>
     public int SendTimeoutMs { get; init; } = 15_000;
 

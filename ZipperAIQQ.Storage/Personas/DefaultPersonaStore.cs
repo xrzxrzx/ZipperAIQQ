@@ -136,21 +136,6 @@ public sealed class DefaultPersonaStore : IPersonaStore
         }, ct);
     }
 
-    private Task<Persona?> GetOverrideAsync(string sessionId, CancellationToken ct) =>
-        _db.ReadAsync<Persona?>(async (conn, token) =>
-        {
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT Name, Content FROM SessionPersonas WHERE SessionId = @sid;";
-            cmd.Parameters.AddWithValue("@sid", sessionId);
-
-            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
-            if (!await reader.ReadAsync(token).ConfigureAwait(false))
-            {
-                return null;
-            }
-
-            return new Persona(reader.GetString(0), reader.GetString(1));
-        }, ct);
     /// <summary>
     /// 与 <c>ChatRef.SessionId</c> **必须同构**，否则会话级人设会查不到。
     /// 这里不引 Channel 依赖，所以自己拼一次 —— 两处一起改。

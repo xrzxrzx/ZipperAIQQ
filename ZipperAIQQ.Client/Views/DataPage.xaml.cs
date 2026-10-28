@@ -10,16 +10,13 @@ public sealed partial class DataPage : Page
     public DataPage()
     {
         Stats = App.Services.GetRequiredService<StatsViewModel>();
-        Vm = Stats;
         InitializeComponent();
 
         // 进页面先拉一次（之后由 0.5s 心跳维持）
         _ = Stats.LoadCommand.ExecuteAsync(null);
     }
 
-    /// <summary>页面状态条也走统计 VM（B7：不再依赖原 MainViewModel）。</summary>
-    public StatsViewModel Vm { get; }
-
+    /// <summary>数据页的统计 VM（状态条与所有绑定共用这一个实例）。</summary>
     public StatsViewModel Stats { get; }
 }
 

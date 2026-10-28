@@ -19,16 +19,6 @@ namespace ZipperAIQQ.Client.ViewModels;
 /// </remarks>
 public sealed partial class AccessViewModel : ObservableObject
 {
-    /// <summary>默认平台：S3-C 契约里请求省略 <c>platform</c> 时服务端按 qq 处理。</summary>
-    private const string DefaultPlatform = "qq";
-
-    /// <summary>平台代码 → 界面标签。未知平台原样显示，将来加平台不用改客户端。</summary>
-    private static readonly Dictionary<string, string> PlatformLabels = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["qq"] = "QQ",
-        ["douyin"] = "抖音",
-    };
-
     private readonly ServerApiClient _api;
     private readonly Dictionary<string, string> _ownerDisplayToId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _adminDisplayToId = new(StringComparer.Ordinal);
@@ -38,7 +28,7 @@ public sealed partial class AccessViewModel : ObservableObject
     private readonly Dictionary<string, string> _platformLabelToCode = new(StringComparer.Ordinal);
 
     /// <summary>上一次成功加载的平台标签——切换失败要退回它。</summary>
-    private string _lastGoodPlatform = PlatformLabel(DefaultPlatform);
+    private string _lastGoodPlatform = PlatformLabel(PlatformCatalog.DefaultPlatform);
 
     /// <summary>正在同步平台下拉时，别把 <see cref="SelectedPlatform"/> 的变化当成用户切换。</summary>
     private bool _applyingPlatform;
@@ -47,14 +37,14 @@ public sealed partial class AccessViewModel : ObservableObject
     {
         ArgumentNullException.ThrowIfNull(api);
         _api = api;
-        _platformLabelToCode[PlatformLabel(DefaultPlatform)] = DefaultPlatform;
+        _platformLabelToCode[PlatformLabel(PlatformCatalog.DefaultPlatform)] = PlatformCatalog.DefaultPlatform;
     }
 
     /// <summary>可选平台（界面标签）。首次响应回来前先放默认项，下拉不会空着。</summary>
-    public ObservableCollection<string> Platforms { get; } = [PlatformLabel(DefaultPlatform)];
+    public ObservableCollection<string> Platforms { get; } = [PlatformLabel(PlatformCatalog.DefaultPlatform)];
 
     [ObservableProperty]
-    public partial string SelectedPlatform { get; set; } = PlatformLabel(DefaultPlatform);
+    public partial string SelectedPlatform { get; set; } = PlatformLabel(PlatformCatalog.DefaultPlatform);
 
     /// <summary>平台行右侧的状态 / 错误提示；成功且无话说时为空（不占地方）。</summary>
     [ObservableProperty]
@@ -63,8 +53,8 @@ public sealed partial class AccessViewModel : ObservableObject
     /// <summary>当前选中的平台代码（下拉框里是标签，请求要代码）。</summary>
     private string CurrentPlatform =>
         string.IsNullOrWhiteSpace(SelectedPlatform)
-            ? DefaultPlatform
-            : _platformLabelToCode.GetValueOrDefault(SelectedPlatform, DefaultPlatform);
+            ? PlatformCatalog.DefaultPlatform
+            : _platformLabelToCode.GetValueOrDefault(SelectedPlatform, PlatformCatalog.DefaultPlatform);
 
     public ObservableCollection<string> OwnerOptions { get; } = [];
 
@@ -140,7 +130,7 @@ public sealed partial class AccessViewModel : ObservableObject
             _platformLabelToCode.GetValueOrDefault(label)
             ?? (label.Equals("qq", StringComparison.OrdinalIgnoreCase) ? "qq"
                 : label.Equals("douyin", StringComparison.OrdinalIgnoreCase) ? "douyin"
-                : DefaultPlatform);
+                : PlatformCatalog.DefaultPlatform);
 
         PlatformStatus = $"正在切到 {label}…";
         var error = await LoadForPlatformAsync(code).ConfigureAwait(true);
@@ -318,10 +308,7 @@ public sealed partial class AccessViewModel : ObservableObject
     }
 
     /// <summary>平台代码 → 界面标签；空值按默认平台，未知平台原样显示。</summary>
-    private static string PlatformLabel(string code) =>
-        string.IsNullOrWhiteSpace(code)
-            ? PlatformLabels[DefaultPlatform]
-            : PlatformLabels.TryGetValue(code, out var label) ? label : code;
+    private static string PlatformLabel(string code) => PlatformCatalog.LabelOf(code);
 
     /// <summary>把 ID 转成显示名；候选里没有就补一条「原值」。</summary>
     private static void AddDisplay(
