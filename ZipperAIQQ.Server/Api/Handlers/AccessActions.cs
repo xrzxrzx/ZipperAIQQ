@@ -123,7 +123,7 @@ public sealed class GetAccessAction : IApiAction
                 .Select(f => new
                 {
                     userId = f.UserId,
-                    nickname = string.IsNullOrWhiteSpace(f.Remark) ? f.Nickname : $"{f.Nickname}（{f.Remark}）",
+                    nickname = ContactDisplay.Name(f),
                 })
                 .ToList(),
 

@@ -165,7 +165,7 @@ public sealed class NoticeResponder
             .ReadNoticeValueAsync(_settings, platform, type, ct)
             .ConfigureAwait(false);
 
-        return value is "1" or "true";
+        return NoticeSettings.IsOn(value);
     }
 
     /// <summary>把通知翻译成给模型看的一句话（保留 actor / target 的区分）。</summary>

@@ -159,19 +159,11 @@ public sealed class SetBehaviorAction : IApiAction
 
         foreach (var (itemPlatform, type, enabled) in pending)
         {
-            var value = enabled ? "1" : "0";
-            var key = GetBehaviorAction.NoticeKey(itemPlatform, type);
+            await Notices.NoticeSettings
+                .WriteAsync(_settings, itemPlatform, type, enabled, ct)
+                .ConfigureAwait(false);
 
-            await _settings.SetAsync(key, value, ct).ConfigureAwait(false);
-
-            // qq 镜像老键：回退到旧版程序时开关不会突然变空（读取侧仍然新键优先）
-            if (GetBehaviorAction.HasLegacyKeys(itemPlatform))
-            {
-                await _settings.SetAsync(
-                    GetBehaviorAction.LegacyNoticeKey(type), value, ct).ConfigureAwait(false);
-            }
-
-            changed.Add($"{key}={value}");
+            changed.Add($"{Notices.NoticeSettings.Key(itemPlatform, type)}={(enabled ? "1" : "0")}");
         }
 
         if (changed.Count == 0)

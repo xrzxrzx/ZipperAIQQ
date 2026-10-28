@@ -183,31 +183,29 @@ public sealed class ChatFilter : IChatFilter
     /// 通配太自由反而容易写出"以为收窄了其实放开了"的规则。
     /// </para>
     /// </remarks>
-    private static bool Matches(IReadOnlyCollection<string> entries, string sessionId)
-    {
-        foreach (var entry in entries)
-        {
-            if (string.IsNullOrWhiteSpace(entry))
-            {
-                continue;
-            }
+    private static bool Matches(IReadOnlyCollection<string> entries, string sessionId) =>
+        entries.Any(entry => IsMatch(entry, sessionId));
 
-            var pattern = entry.Trim();
-            if (pattern.EndsWith('*'))
-            {
-                var prefix = pattern[..^1];
-                if (sessionId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-            else if (string.Equals(pattern, sessionId, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
+    /// <summary>
+    /// 单条名单是否命中会话：整串相等，或后缀 <c>*</c> 的前缀匹配（大小写不敏感）。
+    /// </summary>
+    /// <remarks>
+    /// 外部 WS 白名单也用这一套（以前手写了一遍，边界语义容易漂移）。
+    /// </remarks>
+    public static bool IsMatch(string? entry, string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(entry))
+        {
+            return false;
         }
 
-        return false;
+        var pattern = entry.Trim();
+        if (pattern.EndsWith('*'))
+        {
+            return sessionId.StartsWith(pattern[..^1], StringComparison.OrdinalIgnoreCase);
+        }
+
+        return string.Equals(pattern, sessionId, StringComparison.OrdinalIgnoreCase);
     }
 
     public void Update(string platform, ChatFilterOptions options)

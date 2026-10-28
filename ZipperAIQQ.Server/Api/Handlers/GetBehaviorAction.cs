@@ -2,6 +2,7 @@ using System.Text.Json;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Storage.Settings;
 
+using ZipperAIQQ.Server.Config;
 namespace ZipperAIQQ.Server.Api.Handlers;
 
 /// <summary>
@@ -133,7 +134,7 @@ public sealed class GetBehaviorAction : IApiAction
                 label = Describe(type),
                 group = CommonNotices.Contains(type) ? "common" : "other",
                 groupLabel = CommonNotices.Contains(type) ? "常用" : "其他",
-                enabled = value is "1" or "true",
+                enabled = SettingsValue.IsTrue(value),
                 platform = owner,
             });
         }
@@ -156,7 +157,7 @@ public sealed class GetBehaviorAction : IApiAction
 
     /// <summary>规范化平台名（空 → <see cref="DefaultPlatform"/>，统一小写）。</summary>
     public static string NormalizePlatform(string? platform) =>
-        string.IsNullOrWhiteSpace(platform) ? DefaultPlatform : platform.Trim().ToLowerInvariant();
+        Notices.NoticeSettings.NormalizePlatform(platform);
 
     /// <summary>是不是已知平台（入参先用 <see cref="NormalizePlatform"/> 规范化过）。</summary>
     public static bool IsKnownPlatform(string platform) =>
@@ -164,38 +165,26 @@ public sealed class GetBehaviorAction : IApiAction
 
     /// <summary>某平台某通知类型的开关键：<c>notice.reply:{platform}:{type}</c>。</summary>
     public static string NoticeKey(string platform, NoticeType type) =>
-        $"notice.reply:{NormalizePlatform(platform)}:{type}";
+        Notices.NoticeSettings.Key(platform, type);
 
     /// <summary>单平台时代的老键：<c>notice.reply:{type}</c>（只读回退 + qq 镜像写）。</summary>
-    public static string LegacyNoticeKey(NoticeType type) => $"notice.reply:{type}";
+    public static string LegacyNoticeKey(NoticeType type) => Notices.NoticeSettings.LegacyKey(type);
 
     /// <summary>这个平台是否要镜像写老键（只有 <see cref="NoticeCatalog.QqPlatform"/> 有老键）。</summary>
     public static bool HasLegacyKeys(string platform) =>
-        string.Equals(NormalizePlatform(platform), NoticeCatalog.QqPlatform, StringComparison.Ordinal);
+        Notices.NoticeSettings.HasLegacyKeys(platform);
 
     /// <summary>读某平台某通知类型的开关值（新键优先，仅 qq 回退老键）。</summary>
     /// <remarks>
     /// 回退**不写回**：迁移是惰性的 —— 只要不写新键，老键就一直读得到，
     /// 用户不会因为一次升级被动改配置（与 S3-C 的 access 键同一口径）。
     /// </remarks>
-    public static async Task<string?> ReadNoticeValueAsync(
+    public static Task<string?> ReadNoticeValueAsync(
         IRuntimeSettingsStore settings,
         string platform,
         NoticeType type,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(settings);
-
-        var value = await settings.GetAsync(NoticeKey(platform, type), ct).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(value))
-        {
-            return value;
-        }
-
-        return HasLegacyKeys(platform)
-            ? await settings.GetAsync(LegacyNoticeKey(type), ct).ConfigureAwait(false)
-            : null;
-    }
+        CancellationToken ct = default) =>
+        Notices.NoticeSettings.ReadAsync(settings, platform, type, ct);
 
     private static string Describe(NoticeType type) => type switch
     {

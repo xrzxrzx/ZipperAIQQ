@@ -90,7 +90,7 @@ public sealed class ExternalOptionsService
         var (forward, migratedFromForward) = ParseForward(forwardJson, _current.ForwardServers);
 
         _current = new ExternalSnapshot(
-            allow is null ? _bootstrap.ExternalAllowSend : allow is "1" or "true" or "True",
+            allow is null ? _bootstrap.ExternalAllowSend : SettingsValue.IsTrue(allow),
             sessions is null
                 ? _bootstrap.ExternalAllowedSessions
                 : sessions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),

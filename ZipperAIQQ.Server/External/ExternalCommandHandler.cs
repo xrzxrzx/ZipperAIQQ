@@ -149,25 +149,6 @@ public sealed class ExternalCommandHandler
     private bool IsAllowed(string sessionId)
     {
         var allowed = _external.Current.AllowedSessions;
-        if (allowed.Count == 0)
-        {
-            return true;
-        }
-
-        foreach (var pattern in allowed)
-        {
-            if (string.Equals(pattern, sessionId, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            if (pattern.EndsWith('*') &&
-                sessionId.StartsWith(pattern[..^1], StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return allowed.Count == 0 || allowed.Any(pattern => Channel.Filtering.ChatFilter.IsMatch(pattern, sessionId));
     }
 }

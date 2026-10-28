@@ -262,7 +262,7 @@ public sealed class DouyinOptionsService
         return changed;
     }
 
-    private static bool IsTrue(string raw) => raw is "1" or "true" or "True";
+    private static bool IsTrue(string raw) => SettingsValue.IsTrue(raw);
 
     private static int ParseInt(string? raw, int fallback) =>
         int.TryParse(raw, out var value) && value > 0 ? value : fallback;

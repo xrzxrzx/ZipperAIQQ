@@ -181,7 +181,7 @@ public sealed class SessionNameResolver : ISessionNameResolver
                     var friends = await directory.GetFriendsAsync(ct).ConfigureAwait(false);
                     map[platform] = friends.ToDictionary(
                         f => f.UserId,
-                        f => string.IsNullOrWhiteSpace(f.Remark) ? f.Nickname : $"{f.Nickname}（{f.Remark}）",
+                        f => ContactDisplay.Name(f),
                         StringComparer.Ordinal);
                 }
                 catch (Exception ex)

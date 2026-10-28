@@ -27,7 +27,7 @@ namespace ZipperAIQQ.Server.Channels;
 /// 由上层转成「回填给模型的失败原因」（FR-2.3）。静默吞掉会让模型以为发出去了。
 /// </para>
 /// </remarks>
-public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDisposable
+public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannelLogin, IAsyncDisposable
 {
     /// <summary>平台标识，与 <see cref="ChatRef.Platform"/>、<c>session</c> 前缀一致。</summary>
     public const string PlatformName = "douyin";

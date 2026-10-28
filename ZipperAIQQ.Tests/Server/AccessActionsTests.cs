@@ -262,7 +262,8 @@ public sealed class AccessActionsTests : IAsyncLifetime
 
     private GetOwnerAction NewGetOwner() => new(_settings, _directories, Logger);
 
-    private SetOwnerAction NewSetOwner() => new(_settings, _roles, new FakeOwnerScope(), _configs);
+    private SetOwnerAction NewSetOwner() =>
+        new(new OwnerService(_settings, _roles, new FakeOwnerScope(), _configs));
 
     private static async Task<JsonElement> RunAsync(IApiAction action, string payload)
     {

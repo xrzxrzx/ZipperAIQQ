@@ -67,7 +67,7 @@ public sealed class GetOwnerAction : IApiAction
                 .Select(f => new
                 {
                     userId = f.UserId,
-                    nickname = string.IsNullOrWhiteSpace(f.Remark) ? f.Nickname : $"{f.Nickname}（{f.Remark}）",
+                    nickname = ContactDisplay.Name(f),
                 })
                 .ToList(),
         };
@@ -79,26 +79,12 @@ public sealed class GetOwnerAction : IApiAction
 /// </summary>
 public sealed class SetOwnerAction : IApiAction
 {
-    private readonly IRuntimeSettingsStore _settings;
-    private readonly IRoleResolver _roles;
-    private readonly IOwnerScope _ownerScope;
-    private readonly Storage.Config.IConfigStore _configs;
+    private readonly OwnerService _owners;
 
-    public SetOwnerAction(
-        IRuntimeSettingsStore settings,
-        IRoleResolver roles,
-        IOwnerScope ownerScope,
-        Storage.Config.IConfigStore configs)
+    public SetOwnerAction(OwnerService owners)
     {
-        ArgumentNullException.ThrowIfNull(settings);
-        ArgumentNullException.ThrowIfNull(roles);
-        ArgumentNullException.ThrowIfNull(ownerScope);
-        ArgumentNullException.ThrowIfNull(configs);
-
-        _settings = settings;
-        _roles = roles;
-        _ownerScope = ownerScope;
-        _configs = configs;
+        ArgumentNullException.ThrowIfNull(owners);
+        _owners = owners;
     }
 
     public string Name => "setOwner";
@@ -115,29 +101,9 @@ public sealed class SetOwnerAction : IApiAction
 
         var platform = AccessKeys.Normalize(PayloadReader.GetString(payload, "platform"));
 
-        await _settings.SetAsync(AccessKeys.Owner(platform), userId, ct).ConfigureAwait(false);
-        await _settings.SetAsync(AccessKeys.OwnerName(platform), nickname ?? string.Empty, ct).ConfigureAwait(false);
-
-        // 旧键也同步一份（仅 qq）：万一回退到旧版程序，主人不会突然"消失"
-        if (AccessKeys.HasLegacyKeys(platform))
-        {
-            await _settings.SetAsync(AccessKeys.LegacyOwnerKey, userId, ct).ConfigureAwait(false);
-            await _settings.SetAsync(AccessKeys.LegacyOwnerNameKey, nickname ?? string.Empty, ct).ConfigureAwait(false);
-        }
-
-        // 立即生效：权限解析器持有内存里的各平台 owner
-        if (_roles is ConfiguredRoleResolver configured)
-        {
-            configured.SetOwner(platform, userId);
-        }
-
-        await _configs
-            .AppendAuditAsync("setOwner", "http-client", $"{platform}:owner={userId}", ct)
+        await _owners
+            .SetOwnerAsync(platform, userId, nickname, "http-client", ct)
             .ConfigureAwait(false);
-
-        // 主人变了 → 放行范围也要跟着变（私聊 + 主人所在的群）。
-        // 不 await：解析群成员可能是几千毫秒，别让保存主人卡住；后台服务失败会自己重试。
-        _ = _ownerScope.RefreshAsync();
 
         return new { ownerId = userId, ownerName = nickname, platform, effective = "immediate" };
     }

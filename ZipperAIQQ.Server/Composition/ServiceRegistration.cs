@@ -18,6 +18,7 @@ using ZipperAIQQ.Channel.NapCat;
 using ZipperAIQQ.Channel.Throttling;
 using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Mail;
+using ZipperAIQQ.Server.Access;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Mail;
 using ZipperAIQQ.Server.Api;
@@ -146,6 +147,9 @@ public static class ServiceRegistration
         // #36：重启（优雅停止 + 外部守护拉起）
         services.AddSingleton<IServerRestartService, ServerRestartService>();
         services.AddSingleton<IApiAction, RestartServerAction>();
+
+        // 主人写入的唯一入口（setOwner action 与 /owner 命令共用）
+        services.AddSingleton<OwnerService>();
 
         // 自我身份（问题记录 02 #3）：通道发现 self_id 后持久化，并提供只读诊断
         services.AddSingleton<ISelfIdRegistry, SelfIdRegistry>();
@@ -336,6 +340,10 @@ public static class ServiceRegistration
             // 会话过滤与 QQ 同一套（access.douyin.whitelist / blacklist，入口在「人员与名单」）
             sp.GetRequiredService<IChatFilter>(),
             sp.GetRequiredService<ILogger>()));
+
+        // 登录相关 action 只依赖窄接口，不直接注入具体通道（换实现不用改 action）
+        services.AddSingleton<Channels.IChannelLogin>(sp =>
+            sp.GetRequiredService<Channels.DouyinChannel>());
 
         // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围 / 平台专用工具都只认平台名。
         // ⚠️ 抖音**无条件**注册（S3-F 补）：之前按启动配置决定加不加，结果"客户端打开开关"不生效 ——
