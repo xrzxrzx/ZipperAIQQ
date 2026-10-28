@@ -22,7 +22,7 @@ douyin-im（登录 / 事件 / 发送）
 | 依赖 | 版本 | 说明 |
 |---|---|---|
 | **Node.js** | **≥ 22.5** | 需要全局 `WebSocket` / 内置 `fetch`；`douyin-im` 本身要求 `node:sqlite` |
-| `douyin-im` | **你的 fork** | 见下面的"替换占位"步骤，**不用 submodule / 不用 vendor/** |
+| `douyin-im` | **`1.1.0`（或你的 fork）** | 默认锁 npm 包 `1.1.0`；若用 fork，见下面的"替换依赖"步骤，**不用 submodule / 不用 vendor/** |
 | `typescript` + `@types/node` | devDependencies | 编译（`npm run build`） |
 | `tsx` | devDependency | **只用于 `npm run dev`**（本项目只选 tsx，不用 ts-node） |
 
@@ -31,9 +31,8 @@ douyin-im（登录 / 事件 / 发送）
 ```powershell
 cd douyin-sidecar
 
-# ① 把 package.json 里的占位改成你的 fork + 固定 commit：
-#    "douyin-im": "github:USER/douyin-im#COMMIT"
-#    → "douyin-im": "github:xrzxrzx/douyin-im#<commit-sha>"
+# ① 可选：改用你的 fork + 固定 commit（默认已锁 npm 包 1.1.0）
+#    "douyin-im": "github:xrzxrzx/douyin-im#<commit-sha>"
 #    （务必钉 commit：分支名会漂，出问题无法复现）
 notepad package.json
 
