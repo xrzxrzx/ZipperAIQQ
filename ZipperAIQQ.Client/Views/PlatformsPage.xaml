@@ -191,6 +191,39 @@
                                 </StackPanel>
                                 <TextBlock Text="{x:Bind Vm.DouyinEndpointText, Mode=OneWay}"
                                            Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                                <!-- 登录态 + 登录/退出（二维码由 sidecar 生成，这边只负责显示） -->
+                                <StackPanel Spacing="8">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <TextBlock Text="登录状态" Style="{StaticResource CaptionStyle}"
+                                                   VerticalAlignment="Center" />
+                                        <TextBlock Text="{x:Bind Vm.DouyinLoginStateText, Mode=OneWay}"
+                                                   FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    </StackPanel>
+
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button Content="登录（显示二维码）"
+                                                Style="{StaticResource JpAccentButtonStyle}"
+                                                IsEnabled="{x:Bind Vm.DouyinLoginAvailable, Mode=OneWay}"
+                                                Command="{x:Bind Vm.DouyinLoginCommand}" />
+                                        <Button Content="退出登录"
+                                                Style="{StaticResource JpButtonStyle}"
+                                                IsEnabled="{x:Bind Vm.DouyinLoginAvailable, Mode=OneWay}"
+                                                Command="{x:Bind Vm.DouyinLogoutCommand}" />
+                                        <TextBlock Text="{x:Bind Vm.DouyinLoginStatus, Mode=OneWay}"
+                                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center"
+                                                   TextWrapping="Wrap" MaxWidth="420" />
+                                    </StackPanel>
+
+                                    <!-- 二维码要能扫：白底 + 保持比例；没二维码时整块不生成 -->
+                                    <Border x:Name="DouyinQrBox" Background="White" CornerRadius="8"
+                                            Padding="8" HorizontalAlignment="Left"
+                                            x:Load="{x:Bind Vm.DouyinHasQr, Mode=OneWay}">
+                                        <Image Source="{x:Bind Vm.DouyinQrImage, Mode=OneWay}"
+                                               Width="220" Height="220" Stretch="Uniform" />
+                                    </Border>
+                                </StackPanel>
+
                                 <TextBlock Text="sidecar 是独立的 Node 进程（douyin-sidecar/），要单独部署并主动连入 /ws/channel —— 本页只改配置，不负责拉起它。"
                                            Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
                             </StackPanel>

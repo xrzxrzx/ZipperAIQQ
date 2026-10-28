@@ -40,7 +40,51 @@ public static class DouyinFrameTypes
 
     /// <summary>sidecar → Server：心跳应答。</summary>
     public const string Pong = "pong";
+
+    // ── 登录管理（2026-10-28：客户端可直接发起登录 / 退出）──
+
+    /// <summary>Server → sidecar：开始登录（sidecar 走 douyin-im 登录流程并回传二维码）。</summary>
+    public const string LoginStart = "login.start";
+
+    /// <summary>Server → sidecar：退出抖音登录（只清登录态，sidecar 进程继续跑）。</summary>
+    public const string LoginLogout = "login.logout";
+
+    /// <summary>sidecar → Server：登录二维码（base64 PNG）。</summary>
+    public const string LoginQr = "login.qr";
+
+    /// <summary>sidecar → Server：登录状态变化（online / waitingQr / loggedOut / error）。</summary>
+    public const string LoginState = "login.state";
 }
+
+/// <summary>抖音登录状态（字符串常量，进 JSON 也进 API 响应）。</summary>
+public static class DouyinLoginState
+{
+    /// <summary>已登录且在线。</summary>
+    public const string Online = "online";
+
+    /// <summary>已发起登录，等用户扫码。</summary>
+    public const string WaitingQr = "waitingQr";
+
+    /// <summary>已退出登录（sidecar 可能还连着）。</summary>
+    public const string LoggedOut = "loggedOut";
+
+    /// <summary>登录过程出错（原因见 message）。</summary>
+    public const string Error = "error";
+
+    /// <summary>还没从 sidecar 收到过状态。</summary>
+    public const string Unknown = "unknown";
+}
+
+/// <summary>登录二维码帧体（<c>login.qr</c>）。</summary>
+/// <param name="QrCodeBase64">PNG 的 base64（无 data: 前缀）。</param>
+public sealed record DouyinLoginQr(string QrCodeBase64);
+
+/// <summary>登录状态帧体（<c>login.state</c>）。</summary>
+/// <param name="State">见 <see cref="DouyinLoginState"/>。</param>
+/// <param name="SelfId">登录成功后的 uid。</param>
+/// <param name="Nickname">昵称（日志与界面用）。</param>
+/// <param name="Message">出错原因 / 补充说明。</param>
+public sealed record DouyinLoginStateFrame(string State, string? SelfId, string? Nickname, string? Message);
 
 /// <summary>一帧 <c>/ws/channel</c> 消息：<c>{type, time, data}</c>（设计 §3.1）。</summary>
 /// <param name="Type">帧类型，见 <see cref="DouyinFrameTypes"/>。</param>
@@ -395,6 +439,9 @@ public static class DouyinProtocol
 
     /// <summary>拼一帧 <c>ping</c>（MVP 用 WS 层心跳，保留给需要应用层心跳时）。</summary>
     public static string BuildPing() => Frame(DouyinFrameTypes.Ping, new JsonObject());
+
+    /// <summary>登录控制帧（服务端 → sidecar）：<c>login.start</c> / <c>login.logout</c>。</summary>
+    public static string BuildLoginCommand(string type) => Frame(type, new JsonObject());
 
     /// <summary>
     /// 把超长文本按 <paramref name="maxChars"/> 切成若干段，**不切断代理对**。
@@ -800,6 +847,29 @@ public static class DouyinProtocol
             JsonValue value when value.TryGetValue<string>(out var text) => text,
             _ => node.ToJsonString(),
         };
+    }
+
+    /// <summary>解析登录二维码帧（<c>login.qr</c>）。缺 base64 时返回 null。</summary>
+    public static DouyinLoginQr? ParseLoginQr(JsonObject? data)
+    {
+        var base64 = GetNonEmpty(data, "qrcodeBase64") ?? GetNonEmpty(data, "qrCodeBase64");
+        return base64 is null ? null : new DouyinLoginQr(base64);
+    }
+
+    /// <summary>解析登录状态帧（<c>login.state</c>）。缺 state 时返回 null。</summary>
+    public static DouyinLoginStateFrame? ParseLoginState(JsonObject? data)
+    {
+        var state = GetNonEmpty(data, "state");
+        if (state is null)
+        {
+            return null;
+        }
+
+        return new DouyinLoginStateFrame(
+            state,
+            GetNonEmpty(data, "selfId") ?? GetNonEmpty(data, "uid"),
+            GetNonEmpty(data, "nickname"),
+            GetNonEmpty(data, "message") ?? GetNonEmpty(data, "error"));
     }
 
     private static string? GetNonEmpty(JsonObject? obj, string key)

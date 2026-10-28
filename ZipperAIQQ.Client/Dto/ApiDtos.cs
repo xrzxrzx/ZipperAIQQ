@@ -928,6 +928,47 @@ public sealed class DouyinPlatformDto
     /// <summary>sidecar 连入的端点（<c>/ws/channel</c>）。</summary>
     [JsonPropertyName("endpoint")]
     public string Endpoint { get; set; } = "/ws/channel";
+
+    /// <summary>
+    /// 登录态：<c>online</c> / <c>waitingQr</c> / <c>loggedOut</c> / <c>error</c> / <c>unknown</c>。
+    /// **旧服务端不返回 → 空串**，客户端据此把「登录 / 退出」按钮禁用（不假装支持）。
+    /// </summary>
+    [JsonPropertyName("loginState")]
+    public string LoginState { get; set; } = string.Empty;
+}
+
+/// <summary>抖音登录态详情（<c>getDouyinLogin</c> / <c>startDouyinLogin</c>）。</summary>
+public sealed class DouyinLoginDto
+{
+    /// <summary>online / waitingQr / loggedOut / error / unknown。</summary>
+    [JsonPropertyName("state")]
+    public string State { get; set; } = "unknown";
+
+    [JsonPropertyName("selfId")]
+    public string? SelfId { get; set; }
+
+    /// <summary>登录二维码（**PNG 的 base64，无 <c>data:</c> 前缀**）；没有时 null。</summary>
+    [JsonPropertyName("qrcodeBase64")]
+    public string? QrcodeBase64 { get; set; }
+
+    /// <summary>二维码生成时间（Unix 毫秒，UTC）；没有二维码时为 0。</summary>
+    [JsonPropertyName("qrcodeAt")]
+    public long QrcodeAt { get; set; }
+
+    /// <summary>出错时的原因（<c>state = error</c> 才有）；其它状态通常 null。</summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+}
+
+/// <summary>退出抖音登录的结果（<c>logoutDouyin</c>）。</summary>
+/// <remarks>只退出**登录态**，sidecar 进程继续跑（不会被本操作杀掉）。</remarks>
+public sealed class DouyinLogoutResultDto
+{
+    [JsonPropertyName("state")]
+    public string State { get; set; } = "loggedOut";
+
+    [JsonPropertyName("loggedOut")]
+    public bool LoggedOut { get; set; }
 }
 
 /// <summary>保存抖音配置的结果（<c>saveDouyin</c>）。</summary>

@@ -248,6 +248,9 @@ public static class ServiceRegistration
         // 邮件账号的增删改直接用上面那批 mail action，不重复造一套。
         services.AddSingleton<IApiAction, GetPlatformsAction>();
         services.AddSingleton<IApiAction, SaveDouyinAction>();
+        services.AddSingleton<IApiAction, GetDouyinLoginAction>();
+        services.AddSingleton<IApiAction, StartDouyinLoginAction>();
+        services.AddSingleton<IApiAction, LogoutDouyinAction>();
 
         // ── M2-E：回复触发模式（FR-11）：every / mention / jev（判断失败降级 mention）──
         services.AddSingleton<IRuntimeSettingsStore, SqliteRuntimeSettingsStore>();

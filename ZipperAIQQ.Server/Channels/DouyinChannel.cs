@@ -72,6 +72,12 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
     /// <summary>由 <c>hello</c> 帧写入；读方可能在别的线程，故用 <c>volatile</c> 保证可见性。</summary>
     private volatile string? _selfId;
 
+    // ── 登录管理（2026-10-28）：客户端可直接发起登录 / 退出 / 看二维码 ──
+    private volatile string _loginState = DouyinLoginState.Unknown;
+    private volatile string? _loginMessage;
+    private string? _loginQrBase64;
+    private DateTimeOffset? _loginQrAt;
+
     private bool _disposed;
 
     /// <summary>构造通道（不连接，等 <see cref="AttachAsync"/>）。</summary>
@@ -117,6 +123,60 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
 
     /// <summary>当前是否有 sidecar 连接（健康检查 / 断线诊断用）。</summary>
     public bool IsConnected => _connection is not null;
+
+    /// <summary>登录状态（见 <see cref="DouyinLoginState"/>）。</summary>
+    public string LoginState => _loginState;
+
+    /// <summary>登录相关的补充说明（出错原因 / 提示）。</summary>
+    public string? LoginMessage => _loginMessage;
+
+    /// <summary>最近一次二维码（PNG base64；没有则为 null）。</summary>
+    public string? LoginQrBase64 => _loginQrBase64;
+
+    /// <summary>最近一次二维码的生成时间。</summary>
+    public DateTimeOffset? LoginQrAt => _loginQrAt;
+
+    /// <summary>
+    /// 让 sidecar 开始登录（客户端点「登录」时调）。
+    /// </summary>
+    /// <remarks>
+    /// 走的是同一条 <c>/ws/channel</c>：sidecar 收到 <c>login.start</c> 后调 douyin-im 登录，
+    /// 二维码通过 <c>login.qr</c> 回来 —— 这条链路不需要开新端口。
+    /// </remarks>
+    public async Task RequestLoginAsync(CancellationToken ct = default)
+    {
+        var connection = RequireConnection();
+        _loginQrBase64 = null;
+        _loginQrAt = null;
+        _loginState = DouyinLoginState.WaitingQr;
+        _loginMessage = null;
+
+        await connection
+            .SendAsync(DouyinProtocol.BuildLoginCommand(DouyinFrameTypes.LoginStart), ct)
+            .ConfigureAwait(false);
+
+        _logger.Information("已请求 sidecar 发起抖音登录");
+    }
+
+    /// <summary>
+    /// 退出抖音登录（**只清登录态，sidecar 进程继续跑** —— 用户 2026-10-28 选定的语义）。
+    /// </summary>
+    public async Task LogoutAsync(CancellationToken ct = default)
+    {
+        var connection = RequireConnection();
+
+        await connection
+            .SendAsync(DouyinProtocol.BuildLoginCommand(DouyinFrameTypes.LoginLogout), ct)
+            .ConfigureAwait(false);
+
+        _loginQrBase64 = null;
+        _loginQrAt = null;
+        _loginState = DouyinLoginState.LoggedOut;
+        _loginMessage = null;
+        UpdateSelfId(null);
+
+        _logger.Information("已请求 sidecar 退出抖音登录");
+    }
 
     /// <summary>
     /// 热替换运行参数（决策七：客户端在「第三方平台接入」页保存后立即生效）。
@@ -390,6 +450,57 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IAsyncDi
 
         switch (frame.Type)
         {
+            case DouyinFrameTypes.LoginQr:
+            {
+                var qr = DouyinProtocol.ParseLoginQr(frame.Data);
+                if (qr is null)
+                {
+                    _logger.Debug("抖音 login.qr 帧体为空，忽略");
+                    break;
+                }
+
+                _loginQrBase64 = qr.QrCodeBase64;
+                _loginQrAt = DateTimeOffset.UtcNow;
+                _loginState = DouyinLoginState.WaitingQr;
+                _logger.Information("收到抖音登录二维码（长度 {Length}），等待扫码", qr.QrCodeBase64.Length);
+                break;
+            }
+
+            case DouyinFrameTypes.LoginState:
+            {
+                var state = DouyinProtocol.ParseLoginState(frame.Data);
+                if (state is null)
+                {
+                    _logger.Debug("抖音 login.state 帧体为空，忽略");
+                    break;
+                }
+
+                _loginState = state.State;
+                _loginMessage = state.Message;
+
+                if (state.State == DouyinLoginState.Online)
+                {
+                    // 登录成功：二维码失效，清掉避免界面还挂着旧码
+                    _loginQrBase64 = null;
+                    _loginQrAt = null;
+                    UpdateSelfId(state.SelfId);
+                    _logger.Information("抖音登录成功：{Nickname}（selfId={SelfId}）", state.Nickname, state.SelfId);
+                }
+                else if (state.State == DouyinLoginState.LoggedOut)
+                {
+                    _loginQrBase64 = null;
+                    _loginQrAt = null;
+                    UpdateSelfId(null);
+                    _logger.Information("抖音已退出登录（sidecar 仍在运行）");
+                }
+                else if (state.State == DouyinLoginState.Error)
+                {
+                    _logger.Warning("抖音登录出错：{Message}", state.Message);
+                }
+
+                break;
+            }
+
             case DouyinFrameTypes.Hello:
             {
                 var hello = DouyinProtocol.ParseHello(frame.Data);

@@ -722,6 +722,11 @@ interface DouyinAdapterOptions {
   onInbound: (event: NormalizedInbound) => void;
   /** 需要人机交互时的提示（验证 URL）。 */
   onLoginPrompt: (url: string, hint: string) => void;
+  /**
+   * 往 Server 发一帧（登录管理用，2026-10-28）。
+   * 二维码 / 登录状态要主动推给服务端，客户端才能显示。
+   */
+  emit: (frame: Frame) => void;
 }
 
 /**
@@ -736,6 +741,7 @@ export class DouyinImAdapter {
   private readonly log: Logger;
   private readonly onInbound: (event: NormalizedInbound) => void;
   private readonly onLoginPrompt: (url: string, hint: string) => void;
+  private readonly emit: (frame: Frame) => void;
 
   private client: DouyinClient | null = null;
   private selfId = "";
@@ -748,10 +754,98 @@ export class DouyinImAdapter {
     this.log = options.log;
     this.onInbound = options.onInbound;
     this.onLoginPrompt = options.onLoginPrompt;
+    this.emit = options.emit;
   }
 
   getSelfId(): string {
     return this.selfId;
+  }
+
+  /**
+   * 把**当前**登录态推给服务端（连上 Server 后补一次）。
+   *
+   * 为什么需要：登录事件（system.online）发生在 sidecar 连上服务端**之前**，
+   * 那一次的 login.state 发不出去 —— 服务端就会一直显示 unknown（2026-10-28 实测）。
+   */
+  emitLoginState(): void {
+    if (this.selfId) {
+      this.emit({ type: "login.state", time: Date.now(), data: { state: "online", selfId: this.selfId } });
+    } else {
+      this.emit({ type: "login.state", time: Date.now(), data: { state: "waitingQr" } });
+    }
+  }
+
+  /**
+   * 客户端点「登录」时调（服务端下发 `login.start`）。
+   *
+   * 先回一个 waitingQr 状态，再走 douyin-im 的 login()：
+   * 二维码会通过 `system.login.qrcode` 事件回来，再由 handleLoginEvent 推给服务端。
+   */
+  async startLogin(): Promise<void> {
+    const client = this.client;
+    if (!client) {
+      this.emit({
+        type: "login.state",
+        time: Date.now(),
+        data: { state: "error", message: "douyin-im 客户端还没创建" },
+      });
+      return;
+    }
+
+    this.emit({ type: "login.state", time: Date.now(), data: { state: "waitingQr" } });
+
+    const login = firstFunction(client, ["login", "start", "connect", "init"]);
+    if (!login) {
+      this.emit({
+        type: "login.state",
+        time: Date.now(),
+        data: { state: "error", message: "douyin-im 客户端没有 login()" },
+      });
+      return;
+    }
+
+    try {
+      this.log.info("收到 login.start：开始抖音登录（等待扫码）");
+      await Promise.resolve((login as AnyFn).call(client, { dataDir: this.dataDir }));
+    } catch (err) {
+      this.emit({
+        type: "login.state",
+        time: Date.now(),
+        data: { state: "error", message: describeError(err) },
+      });
+    }
+  }
+
+  /**
+   * 客户端点「退出登录」时调（服务端下发 `login.logout`）。
+   *
+   * 语义（用户 2026-10-28 选定）：**只清抖音登录态，sidecar 进程继续跑**。
+   */
+  async logout(): Promise<void> {
+    const client = this.client;
+    const stopper = client ? firstFunction(client, ["logout"]) : null;
+
+    if (!stopper) {
+      this.emit({
+        type: "login.state",
+        time: Date.now(),
+        data: { state: "error", message: "douyin-im 客户端没有 logout()" },
+      });
+      return;
+    }
+
+    try {
+      this.log.info("收到 login.logout：退出抖音登录（sidecar 继续运行）");
+      await Promise.resolve((stopper as AnyFn).call(client));
+      this.selfId = "";
+      this.emit({ type: "login.state", time: Date.now(), data: { state: "loggedOut" } });
+    } catch (err) {
+      this.emit({
+        type: "login.state",
+        time: Date.now(),
+        data: { state: "error", message: describeError(err) },
+      });
+    }
   }
 
   /** `hello` 帧（设计 §3.3）：登录完成后调用，`selfId` 可能为空。 */
@@ -990,6 +1084,11 @@ export class DouyinImAdapter {
               mkdirSync(path.dirname(file), { recursive: true });
               writeFileSync(file, Buffer.from(base64, "base64"), { mode: 0o600 });
               this.log.info(`登录二维码已保存：${file}（用抖音 App 扫码，并在手机上确认）`);
+              this.emit({
+                type: "login.qr",
+                time: Date.now(),
+                data: { qrcodeBase64: base64 },
+              });
             } catch (err) {
               this.log.warn(`写二维码文件失败：${describeError(err)}（仍可继续等待扫码）`);
             }
@@ -1029,11 +1128,21 @@ export class DouyinImAdapter {
             this.selfId = uid;
           }
           this.log.info(`抖音已上线：${nickname}（selfId=${uid ?? this.selfId ?? "未知"}）`);
+          this.emit({
+            type: "login.state",
+            time: Date.now(),
+            data: { state: "online", selfId: uid ?? this.selfId ?? null, nickname },
+          });
           return;
         }
 
         case "system.login.error": {
           this.log.error(`抖音登录失败：${str(data.error) ?? "未知原因"}`);
+          this.emit({
+            type: "login.state",
+            time: Date.now(),
+            data: { state: "error", message: str(data.error) ?? "未知原因" },
+          });
           return;
         }
 
@@ -1242,6 +1351,8 @@ interface ChannelLinkOptions {
   heartbeatIntervalMs: number;
   deadAfterMs: number;
   log: Logger;
+  /** 连接建立并发出 hello 之后回调（用来补报登录态，2026-10-28）。 */
+  onConnected?: () => void;
 }
 
 /**
@@ -1370,6 +1481,10 @@ export class ChannelLink {
         try {
           socket.send(JSON.stringify(this.options.buildHello()));
           this.options.log.info("已连上 Server，hello 已发送");
+
+          // 连上立刻补报当前登录态：system.online 往往早于这次连接，
+          // 那一次的 login.state 发不出去（服务端就会一直显示 unknown）。
+          this.options.onConnected?.();
         } catch (err) {
           this.options.log.error(`发送 hello 失败：${describeError(err)}`);
           try {
@@ -1499,6 +1614,16 @@ function handleServerFrame(
   const { link, log } = context;
 
   switch (frame.type) {
+    case "login.start":
+      // 客户端点「登录」→ 服务端转成这一帧（2026-10-28）
+      void context.adapter.startLogin();
+      return;
+
+    case "login.logout":
+      // 客户端点「退出登录」：只清抖音登录态，sidecar 继续跑
+      void context.adapter.logout();
+      return;
+
     case "heartbeat":
       // Server 主动心跳（2026-10-28）：只用于"链路还活着"，不需要回任何东西。
       // 不要落成 warn —— 25 秒一次会把日志刷满。
@@ -1516,7 +1641,11 @@ function handleServerFrame(
 
     case "pong":
     case "hello":
-      // hello 由 Server 回发时也接受（不同实现可能两边都发），不需要动作
+      // hello 由 Server 回发时也接受（不同实现可能两边都发）。
+      //
+      // 这里顺手补报一次登录态：system.online 往往发生在 sidecar 连上 Server **之前**，
+      // 那一次的 login.state 发不出去 —— 不补的话服务端一直显示 unknown（2026-10-28 实测）。
+      context.adapter.emitLoginState();
       return;
 
     case "outbound":
@@ -1647,6 +1776,8 @@ async function main(): Promise<void> {
 
   // 连接层要等登录完成后才建（先登录再连 Server），入站回调通过这个引用拿到它
   let linkRef: ChannelLink | null = null;
+/** 适配层引用：连上 Server 后要补报登录态（登录事件可能早于连接建立）。 */
+
 
   const adapter = new DouyinImAdapter({
     dataDir: config.dataDir,
@@ -1681,7 +1812,14 @@ async function main(): Promise<void> {
         log.warn(`入站消息未能转发（连接未就绪）：${describeError(err)}`);
       }
     },
-    onLoginPrompt: (url, hint) => {
+    emit: (frame) => {
+    try {
+      linkRef?.send(frame);
+    } catch (err) {
+      log.debug(`推送登录帧失败（连接可能已断）：${describeError(err)}`);
+    }
+  },
+  onLoginPrompt: (url, hint) => {
       // 登录要人机交互：URL 打到 stdout，远程宿主抓 stdout 后在自己浏览器里打开
       log.prompt([
         "【需要人工登录】抖音登录要人机交互（扫码 / 短信 / 滑块），sidecar 不能自己完成。",
@@ -1713,6 +1851,8 @@ async function main(): Promise<void> {
     deadAfterMs: config.deadAfterMs,
     log,
     onFrame: (frame) => handleServerFrame(frame, context),
+    // 连上后补报登录态：登录事件早于连接建立，不补服务端就是 unknown
+    onConnected: () => adapter.emitLoginState(),
   });
   // 入站回调通过 linkRef 拿到连接层（`context.link` 也读它）
   linkRef = link;
@@ -1745,3 +1885,4 @@ main().catch((err: unknown) => {
   process.stderr.write(`[FATAL] 抖音 sidecar 启动失败：${describeError(err)}\n`);
   process.exitCode = 1;
 });
+

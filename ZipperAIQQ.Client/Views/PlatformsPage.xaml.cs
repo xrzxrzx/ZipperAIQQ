@@ -25,6 +25,9 @@ public sealed partial class PlatformsPage : Page
         InitializeComponent();
 
         _ = Vm.LoadCommand.ExecuteAsync(null);
+
+        // 切页 / 页面卸载就把登录轮询停掉，别在后台一直打 getDouyinLogin
+        Unloaded += (_, _) => Vm.StopDouyinLoginWatch();
     }
 
     public PlatformsViewModel Vm { get; }

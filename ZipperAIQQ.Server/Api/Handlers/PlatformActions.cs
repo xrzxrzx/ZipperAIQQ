@@ -116,6 +116,9 @@ public sealed class GetPlatformsAction : IApiAction
                 queryTimeoutMs = douyin.QueryTimeoutMs,
                 // sidecar 要连的端点：给客户端显示，便于用户对着配 sidecar
                 endpoint = "/ws/channel",
+                // 登录管理（2026-10-28）：online / waitingQr / loggedOut / error / unknown
+                loginState = _douyin.LoginState,
+                loginMessage = _douyin.LoginMessage,
             },
         };
     }
@@ -331,5 +334,108 @@ public sealed class SaveMailAction : IApiAction
             JsonValueKind.False => false,
             _ => throw new ApiException(ApiResponse.BadRequest, $"{name} 必须是布尔值。"),
         };
+    }
+}
+
+/// <summary>抖音登录状态（<c>getDouyinLogin</c>）：状态 + 二维码 + selfId。</summary>
+/// <remarks>
+/// 客户端用轮询拿它：点「登录」→ 每 2 秒取一次 → 二维码出来就显示 → <c>online</c> 就停。
+/// 二维码只放内存，进程重启就没了（重新登录会再生成一张），不落库。
+/// </remarks>
+public sealed class GetDouyinLoginAction : IApiAction
+{
+    private readonly DouyinChannel _channel;
+
+    public GetDouyinLoginAction(DouyinChannel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        _channel = channel;
+    }
+
+    public string Name => "getDouyinLogin";
+
+    public Task<object?> HandleAsync(JsonElement payload, CancellationToken ct) =>
+        Task.FromResult<object?>(new
+        {
+            state = _channel.LoginState,
+            selfId = _channel.SelfId,
+            qrcodeBase64 = _channel.LoginQrBase64,
+            qrcodeAt = _channel.LoginQrAt?.ToUnixTimeMilliseconds(),
+            message = _channel.LoginMessage,
+        });
+}
+
+/// <summary>让 sidecar 发起抖音登录（<c>startDouyinLogin</c>）。</summary>
+public sealed class StartDouyinLoginAction : IApiAction
+{
+    private const string Actor = "http-client";
+
+    private readonly DouyinChannel _channel;
+    private readonly IConfigStore _configs;
+
+    public StartDouyinLoginAction(DouyinChannel channel, IConfigStore configs)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(configs);
+
+        _channel = channel;
+        _configs = configs;
+    }
+
+    public string Name => "startDouyinLogin";
+
+    public async Task<object?> HandleAsync(JsonElement payload, CancellationToken ct)
+    {
+        if (!_channel.IsConnected)
+        {
+            throw new ApiException(ApiResponse.BadRequest,
+                "sidecar 还没连上来，无法发起登录；先把 sidecar 起起来（本页上方能看到状态）。");
+        }
+
+        await _channel.RequestLoginAsync(ct).ConfigureAwait(false);
+        await _configs.AppendAuditAsync("startDouyinLogin", Actor, "start", ct).ConfigureAwait(false);
+
+        return new
+        {
+            state = _channel.LoginState,
+            selfId = _channel.SelfId,
+            qrcodeBase64 = _channel.LoginQrBase64,
+            qrcodeAt = _channel.LoginQrAt?.ToUnixTimeMilliseconds(),
+            message = _channel.LoginMessage,
+        };
+    }
+}
+
+/// <summary>退出抖音登录（<c>logoutDouyin</c>）：只清登录态，sidecar 继续跑。</summary>
+public sealed class LogoutDouyinAction : IApiAction
+{
+    private const string Actor = "http-client";
+
+    private readonly DouyinChannel _channel;
+    private readonly IConfigStore _configs;
+
+    public LogoutDouyinAction(DouyinChannel channel, IConfigStore configs)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(configs);
+
+        _channel = channel;
+        _configs = configs;
+    }
+
+    public string Name => "logoutDouyin";
+
+    public async Task<object?> HandleAsync(JsonElement payload, CancellationToken ct)
+    {
+        if (!_channel.IsConnected)
+        {
+            throw new ApiException(ApiResponse.BadRequest,
+                "sidecar 没连上来，无处下发退出命令；请先确认 sidecar 在运行。");
+        }
+
+        await _channel.LogoutAsync(ct).ConfigureAwait(false);
+        await _configs.AppendAuditAsync("logoutDouyin", Actor, "logout", ct).ConfigureAwait(false);
+
+        return new { state = _channel.LoginState, loggedOut = true };
     }
 }

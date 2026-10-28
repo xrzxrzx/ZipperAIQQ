@@ -1,6 +1,9 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Storage.Streams;
 using ZipperAIQQ.Client.Dto;
 using ZipperAIQQ.Client.Services;
 
@@ -123,11 +126,26 @@ public sealed partial class PlatformsViewModel : ObservableObject
     private const int DefaultMaxTextLength = 16_000;
     private const int DefaultQueryTimeoutMs = 10_000;
 
+    /// <summary>登录二维码轮询间隔（契约：二维码要 1~3 秒才出来，2 秒一次够用又不吵）。</summary>
+    private static readonly TimeSpan LoginPollInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>一次登录最多等多久（超时就停，提示用户重新点「登录」）。</summary>
+    private static readonly TimeSpan LoginPollTimeout = TimeSpan.FromMinutes(3);
+
+    /// <summary>轮询连续失败这么多次就停（别在服务端挂掉时无限打接口）。</summary>
+    private const int MaxConsecutivePollFailures = 3;
+
     private readonly ServerApiClient _api;
 
     /// <summary>上一次拿到的 mail / douyin 块：开关与 chips 都要用它算文案（null = 旧服务端没给）。</summary>
     private MailPlatformDto? _mailBlock;
     private DouyinPlatformDto? _douyinBlock;
+
+    /// <summary>登录轮询的取消源：切页 / 再次点登录 / 退出登录时取消。</summary>
+    private CancellationTokenSource? _loginWatchCts;
+
+    /// <summary>上一次画出来的二维码 base64：轮询时内容没变就不重复解码。</summary>
+    private string _lastQrBase64 = string.Empty;
 
     public PlatformsViewModel(ServerApiClient api)
     {
@@ -220,6 +238,30 @@ public sealed partial class PlatformsViewModel : ObservableObject
     /// <summary>抖音自己的账号 ID（顶部 chip 用；没连上时为空）。</summary>
     [ObservableProperty]
     public partial string DouyinSelfId { get; set; } = string.Empty;
+
+    // ── 抖音登录 / 二维码 ─────────────────────────────────────────
+    /// <summary><c>loginState</c> 的中文文案（online=已登录 / waitingQr=等待扫码 / …）。</summary>
+    [ObservableProperty]
+    public partial string DouyinLoginStateText { get; set; } = "未知";
+
+    /// <summary>
+    /// 「登录 / 退出」能不能点：**旧服务端（getPlatforms 里没有 loginState）→ false**，
+    /// 这时按钮禁用并说明"不支持运行时登录管理"，不假装成功。
+    /// </summary>
+    [ObservableProperty]
+    public partial bool DouyinLoginAvailable { get; set; }
+
+    /// <summary>登录 / 退出的状态位（成功、等待、超时、失败原因都写这儿）。</summary>
+    [ObservableProperty]
+    public partial string DouyinLoginStatus { get; set; } = string.Empty;
+
+    /// <summary>二维码图（base64 解出来的 PNG）；没二维码时为 null。</summary>
+    [ObservableProperty]
+    public partial ImageSource? DouyinQrImage { get; set; }
+
+    /// <summary>有二维码才显示那块白底容器（x:Load 用；VM 不碰 Visibility）。</summary>
+    [ObservableProperty]
+    public partial bool DouyinHasQr { get; set; }
 
     /// <summary>刷新页面（两个 Tab 一起刷）。</summary>
     [RelayCommand]
@@ -425,7 +467,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
             // 再拉一次平台总览回显（不自己猜服务端状态）
             await LoadPlatformsAsync().ConfigureAwait(true);
         }
-        catch (ApiCallException ex) when (ex.Code == 404 && ex.Message.Contains("未知 action", StringComparison.Ordinal))
+        catch (ApiCallException ex) when (IsUnknownAction(ex))
         {
             MailEnabled = previous;
             ShowMailChannelState(previous);
@@ -472,7 +514,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
             await LoadPlatformsAsync().ConfigureAwait(true);
         }
-        catch (ApiCallException ex) when (ex.Code == 404 && ex.Message.Contains("未知 action", StringComparison.Ordinal))
+        catch (ApiCallException ex) when (IsUnknownAction(ex))
         {
             MailPersonaDigest = previous;
             MailSwitchAvailable = false;
@@ -504,6 +546,9 @@ public sealed partial class PlatformsViewModel : ObservableObject
             DouyinConnected = false;
             DouyinOffline = true;
             DouyinSelfId = string.Empty;
+            DouyinLoginStateText = "未知";
+            DouyinLoginAvailable = false;
+            DouyinLoginStatus = "服务端不支持运行时登录管理（旧版本）";
             DouyinStateText = "服务端未返回抖音配置（旧版本？抖音页需要新服务端）";
             DouyinEndpointText = "/ws/channel";
             return;
@@ -526,7 +571,271 @@ public sealed partial class PlatformsViewModel : ObservableObject
         DouyinEndpointText = string.IsNullOrWhiteSpace(douyin.Endpoint)
             ? "/ws/channel"
             : douyin.Endpoint;
+
+        // 登录态：**旧服务端的 douyin 块里没有 loginState（空串）** → 登录/退出按钮禁用
+        DouyinLoginStateText = LoginStateLabel(douyin.LoginState);
+        DouyinLoginAvailable = !string.IsNullOrWhiteSpace(douyin.LoginState);
+        if (!DouyinLoginAvailable)
+        {
+            DouyinLoginStatus = "服务端不支持运行时登录管理（旧版本）";
+        }
     }
+
+    // ── 抖音登录 / 退出（getDouyinLogin / startDouyinLogin / logoutDouyin）──
+
+    /// <summary>停掉登录轮询：切页、页面卸载、再次点「登录」、退出登录时都要调。</summary>
+    public void StopDouyinLoginWatch() => _loginWatchCts?.Cancel();
+
+    /// <summary>
+    /// 「登录（显示二维码）」：先通知 sidecar 开始登录，然后每 2 秒轮询 <c>getDouyinLogin</c>；
+    /// 二维码出来就显示，<c>state = online</c> 停；最多 3 分钟、连续失败 3 次也停。
+    /// </summary>
+    [RelayCommand]
+    private async Task DouyinLoginAsync()
+    {
+        StopDouyinLoginWatch();   // 上一次还在轮询就先掐掉，避免两路并发
+
+        var cts = new CancellationTokenSource();
+        _loginWatchCts = cts;
+        var token = cts.Token;
+
+        DouyinLoginStatus = "正在发起登录…";
+
+        try
+        {
+            var start = await _api.CallAsync<DouyinLoginDto>("startDouyinLogin", null, token)
+                .ConfigureAwait(true);
+
+            await ApplyLoginAsync(start).ConfigureAwait(true);
+
+            if (IsOnline(start))
+            {
+                DouyinLoginStatus = "已登录";
+                await LoadPlatformsAsync().ConfigureAwait(true);
+                return;
+            }
+
+            await PollLoginAsync(token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            // 切页 / 再点一次 / 退出登录打断的 —— 正常流程，不打扰用户
+        }
+        catch (ApiCallException ex) when (IsUnknownAction(ex))
+        {
+            DouyinLoginAvailable = false;
+            DouyinLoginStatus = "服务端不支持运行时登录管理（旧版本）";
+        }
+        catch (Exception ex)
+        {
+            DouyinLoginStatus = $"登录失败：{ex.Message}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_loginWatchCts, cts))
+            {
+                _loginWatchCts = null;
+            }
+
+            cts.Dispose();
+        }
+    }
+
+    /// <summary>「退出登录」：只退出抖音登录态，sidecar 进程继续跑。</summary>
+    [RelayCommand]
+    private async Task DouyinLogoutAsync()
+    {
+        try
+        {
+            DouyinLoginStatus = "正在退出登录…";
+            var result = await _api.CallAsync<DouyinLogoutResultDto>("logoutDouyin")
+                .ConfigureAwait(true);
+
+            // 先停轮询：否则下一次轮询会把状态又刷回「等待扫码」
+            StopDouyinLoginWatch();
+            ClearQr();
+            DouyinLoginStateText = LoginStateLabel(result?.State ?? "loggedOut");
+            DouyinLoginStatus = result?.LoggedOut == true
+                ? "已退出登录（sidecar 进程仍在运行）"
+                : "退出请求已发送";
+
+            await LoadPlatformsAsync().ConfigureAwait(true);
+        }
+        catch (ApiCallException ex) when (IsUnknownAction(ex))
+        {
+            StopDouyinLoginWatch();
+            DouyinLoginAvailable = false;
+            DouyinLoginStatus = "服务端不支持运行时登录管理（旧版本）";
+        }
+        catch (Exception ex)
+        {
+            DouyinLoginStatus = $"退出登录失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>每 2 秒拉一次登录态，直到 online / 超时 / 连续失败 / 被取消。</summary>
+    private async Task PollLoginAsync(CancellationToken token)
+    {
+        var deadline = DateTimeOffset.UtcNow + LoginPollTimeout;
+        var failures = 0;
+
+        while (!token.IsCancellationRequested && DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                await Task.Delay(LoginPollInterval, token).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            try
+            {
+                var info = await _api.CallAsync<DouyinLoginDto>("getDouyinLogin", null, token)
+                    .ConfigureAwait(true);
+
+                failures = 0;
+                await ApplyLoginAsync(info).ConfigureAwait(true);
+
+                if (IsOnline(info))
+                {
+                    DouyinLoginStatus = "已登录";
+                    await LoadPlatformsAsync().ConfigureAwait(true);   // 顶部 chip / 连接状态同步
+                    return;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                DouyinLoginStatus = $"轮询登录状态失败（第 {failures} 次）：{ex.Message}";
+                if (failures >= MaxConsecutivePollFailures)
+                {
+                    DouyinLoginStatus = $"登录状态轮询已停止（连续失败 {failures} 次）：{ex.Message}";
+                    return;
+                }
+            }
+        }
+
+        if (!token.IsCancellationRequested)
+        {
+            DouyinLoginStatus = "等二维码超时（3 分钟）—— 可以再点一次「登录」";
+        }
+    }
+
+    /// <summary>把一次登录态响应铺到界面：中文文案、selfId、二维码。</summary>
+    private async Task ApplyLoginAsync(DouyinLoginDto? info)
+    {
+        if (info is null)
+        {
+            return;
+        }
+
+        DouyinLoginStateText = LoginStateLabel(info.State);
+
+        if (!string.IsNullOrWhiteSpace(info.SelfId))
+        {
+            DouyinSelfId = info.SelfId.Trim();
+        }
+
+        if (string.Equals(info.State, "error", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(info.Message))
+        {
+            DouyinLoginStatus = $"登录出错：{info.Message}";
+        }
+
+        if (string.Equals(info.State, "loggedOut", StringComparison.OrdinalIgnoreCase))
+        {
+            ClearQr();
+            return;
+        }
+
+        // 登录成功：二维码已经没用了，主动清掉（否则界面会一直挂着那张"过期码"，
+        // 视觉上也分不清到底登没登上）
+        if (string.Equals(info.State, "online", StringComparison.OrdinalIgnoreCase))
+        {
+            ClearQr();
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(info.QrcodeBase64))
+        {
+            await SetQrAsync(info.QrcodeBase64).ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>
+    /// base64(PNG) → <see cref="BitmapImage"/>。
+    /// ⚠️ WinUI3 **不支持** <c>BitmapImage.UriSource = "data:image/png;base64,…"</c>，
+    /// 必须解成字节，经 <see cref="InMemoryRandomAccessStream"/> + <see cref="BitmapImage.SetSourceAsync"/>。
+    /// </summary>
+    private async Task SetQrAsync(string base64)
+    {
+        // 等待扫码期间二维码是同一张 —— 每 2 秒重解码一次纯属浪费，内容没变就直接返回
+        if (DouyinHasQr && string.Equals(base64, _lastQrBase64, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        try
+        {
+            var bytes = Convert.FromBase64String(base64);
+
+            // 注意：这个流**故意不 Dispose** —— BitmapImage 解码完前还得能读它
+            var stream = new InMemoryRandomAccessStream();
+            var writer = new DataWriter(stream);
+            writer.WriteBytes(bytes);
+            await writer.StoreAsync();     // WinRT 的 IAsyncOperation 可以直接 await
+            await writer.FlushAsync();
+            writer.DetachStream();         // 先脱离，否则 writer.Dispose 会把流一起关掉
+            writer.Dispose();
+
+            stream.Seek(0);
+            var image = new BitmapImage();
+            await image.SetSourceAsync(stream);
+
+            _lastQrBase64 = base64;
+            DouyinQrImage = image;
+            DouyinHasQr = true;
+        }
+        catch (FormatException ex)
+        {
+            DouyinLoginStatus = $"二维码解码失败（base64 不合法）：{ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            DouyinLoginStatus = $"二维码显示失败：{ex.Message}";
+        }
+    }
+
+    private void ClearQr()
+    {
+        DouyinQrImage = null;
+        DouyinHasQr = false;
+        _lastQrBase64 = string.Empty;
+    }
+
+    private static bool IsOnline(DouyinLoginDto? info) =>
+        string.Equals(info?.State, "online", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>「未知 action」= 旧服务端没这个接口（<c>ActionDispatcher</c> 统一回 404）。</summary>
+    private static bool IsUnknownAction(ApiCallException ex) =>
+        ex.Code == 404 && ex.Message.Contains("未知 action", StringComparison.Ordinal);
+
+    /// <summary>登录态 → 中文文案；未知值原样显示（方便以后加状态）。</summary>
+    private static string LoginStateLabel(string? state) => state?.Trim().ToLowerInvariant() switch
+    {
+        "online" => "已登录",
+        "waitingqr" => "等待扫码",
+        "loggedout" => "已退出登录",
+        "error" => "出错（见下）",
+        "unknown" or null or "" => "未知",
+        _ => state!.Trim(),
+    };
 
     /// <summary>保存抖音配置：`token` 留空 = 不改；保存成功后清掉输入框里的明文。</summary>
     [RelayCommand]
