@@ -143,7 +143,7 @@ public sealed class NoticesPlatformTests : IAsyncLifetime
         channel.SelfIds["qq"] = "10001";
         channel.SelfIds["douyin"] = "douyin-self-9527";
 
-        var recorder = new SelfIdRecorder(channel, _settings, Logger);
+        var recorder = new SelfIdRecorder(channel, _settings, new SelfIdRegistry(), Logger);
 
         await ((IHostedService)recorder).StartAsync(CancellationToken.None);
         try
@@ -174,7 +174,7 @@ public sealed class NoticesPlatformTests : IAsyncLifetime
         channel.SelfIds["qq"] = "10001";
         channel.SelfIds["douyin"] = null;      // 抖音还没握手
 
-        var recorder = new SelfIdRecorder(channel, _settings, Logger);
+        var recorder = new SelfIdRecorder(channel, _settings, new SelfIdRegistry(), Logger);
 
         await ((IHostedService)recorder).StartAsync(CancellationToken.None);
         try
@@ -266,6 +266,7 @@ public sealed class NoticesPlatformTests : IAsyncLifetime
             actualChannel,
             TestServerOptions(),
             new OwnerFeedbackService(_settings, _messages, actualChannel, Logger),
+            new SelfIdRegistry(),
             Logger);
     }
 

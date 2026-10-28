@@ -148,7 +148,9 @@ public static class ServiceRegistration
         services.AddSingleton<IApiAction, RestartServerAction>();
 
         // 自我身份（问题记录 02 #3）：通道发现 self_id 后持久化，并提供只读诊断
-        services.AddHostedService<SelfIdRecorder>();
+        services.AddSingleton<ISelfIdRegistry, SelfIdRegistry>();
+        services.AddSingleton<SelfIdRecorder>();
+        services.AddHostedService(sp => sp.GetRequiredService<SelfIdRecorder>());
         services.AddSingleton<IApiAction, GetSelfInfoAction>();
 
         // #38：网页搜索（与模型端点独立：自己的 baseUrl + 加密 key）

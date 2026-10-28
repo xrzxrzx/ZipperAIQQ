@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Serilog;
@@ -29,6 +30,9 @@ public sealed class DeepSeekWebSearchProvider : IWebSearchProvider
 {
     private const string SearchPath = "/v1/tools/search";
     private const string FetchPath = "/v1/tools/fetch";
+
+    /// <summary>自建抓取的响应上限：网页正文远小于这个量，超过基本是二进制 / 恶意大页。</summary>
+    private const int MaxFetchBytes = 4 * 1024 * 1024;
 
     private readonly HttpClient _http;
     private readonly Func<CancellationToken, Task<string?>> _keyProvider;
@@ -187,7 +191,10 @@ public sealed class DeepSeekWebSearchProvider : IWebSearchProvider
     /// <summary>自建抓取：GET 页面 + 正则剥标签（免费，但站点一拦就抓不到）。</summary>
     private async Task<string?> SelfFetchAsync(Uri uri, CancellationToken ct)
     {
-        using var response = await _http.GetAsync(uri, ct).ConfigureAwait(false);
+        using var response = await _http
+            .GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct)
+            .ConfigureAwait(false);
+
         if (!response.IsSuccessStatusCode)
         {
             throw new WebSearchException(
@@ -195,7 +202,12 @@ public sealed class DeepSeekWebSearchProvider : IWebSearchProvider
                 (int)response.StatusCode);
         }
 
-        var html = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (response.Content.Headers.ContentLength is { } declared && declared > MaxFetchBytes)
+        {
+            throw new WebSearchException($"页面过大（{declared} 字节），已跳过");
+        }
+
+        var html = await ReadLimitedAsync(response.Content, MaxFetchBytes, ct).ConfigureAwait(false);
 
         var text = Regex.Replace(
             html,
@@ -207,6 +219,30 @@ public sealed class DeepSeekWebSearchProvider : IWebSearchProvider
         text = Regex.Replace(text, "\\s{2,}", " ").Trim();
 
         return text.Length == 0 ? null : text;
+    }
+
+    /// <summary>流式读取并限制总字符数（Content-Length 可能缺失或撒谎）。</summary>
+    private static async Task<string> ReadLimitedAsync(
+        HttpContent content, int maxChars, CancellationToken ct)
+    {
+        await using var stream = await content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+
+        var buffer = new char[8192];
+        var builder = new StringBuilder();
+
+        int read;
+        while ((read = await reader.ReadAsync(buffer.AsMemory(), ct).ConfigureAwait(false)) > 0)
+        {
+            if (builder.Length + read > maxChars)
+            {
+                throw new WebSearchException($"页面正文超过 {maxChars} 字符上限，已跳过");
+            }
+
+            builder.Append(buffer, 0, read);
+        }
+
+        return builder.ToString();
     }
 
     private static async Task<string> ReadBodySnippetAsync(

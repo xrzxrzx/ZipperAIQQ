@@ -303,30 +303,56 @@ public sealed class MailPipeline : BackgroundService
 
         _logger.Information("邮件摘要：本轮待处理 {Count} 封", pending.Count);
 
-        foreach (var mail in pending)
+        var parallelism = Math.Max(1, _options.MaxConcurrentSummaries);
+        if (parallelism == 1)
         {
-            ct.ThrowIfCancellationRequested();
-
-            // 摘要服务自己吞掉所有失败并回填原因（邮件必须保留）——
-            // 这里只负责把结果写进库，不替它兜底。
-            var summary = await _summaries.SummarizeAsync(ToIncoming(mail), ct).ConfigureAwait(false);
-
-            var status = summary.Error is null ? "ok" : "failed";
-            await _repository
-                .SaveSummaryAsync(mail.Id, summary.Text, summary.NeedsAction, status, summary.Error, ct)
-                .ConfigureAwait(false);
-
-            if (summary.Error is null)
+            foreach (var mail in pending)
             {
-                _logger.Information(
-                    "邮件摘要完成：#{Id} 主题={Subject} 需处理={NeedsAction}",
-                    mail.Id, mail.Subject, summary.NeedsAction);
+                await SummarizeOneAsync(mail, ct).ConfigureAwait(false);
             }
-            else
+
+            return;
+        }
+
+        await Parallel.ForEachAsync(
+            pending,
+            new ParallelOptions
             {
-                _logger.Warning("邮件摘要失败（邮件保留）：#{Id} 主题={Subject} 原因={Error}",
-                    mail.Id, mail.Subject, summary.Error);
-            }
+                MaxDegreeOfParallelism = parallelism,
+                CancellationToken = ct,
+            },
+            async (mail, token) => await SummarizeOneAsync(mail, token).ConfigureAwait(false))
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 摘要一封邮件并回写结果（失败也回写原因，邮件必须保留）。
+    /// </summary>
+    /// <remarks>
+    /// 并发执行时，<c>SqliteMailRepository</c> 的写路径由 <c>ISqliteDatabase</c> 串行化，
+    /// 不会出现多写者竞争同一个 SQLite 连接。
+    /// </remarks>
+    private async Task SummarizeOneAsync(StoredMail mail, CancellationToken ct)
+    {
+        // 摘要服务自己吞掉所有失败并回填原因（邮件必须保留）——
+        // 这里只负责把结果写进库，不替它兜底。
+        var summary = await _summaries.SummarizeAsync(ToIncoming(mail), ct).ConfigureAwait(false);
+
+        var status = summary.Error is null ? "ok" : "failed";
+        await _repository
+            .SaveSummaryAsync(mail.Id, summary.Text, summary.NeedsAction, status, summary.Error, ct)
+            .ConfigureAwait(false);
+
+        if (summary.Error is null)
+        {
+            _logger.Information(
+                "邮件摘要完成：#{Id} 主题={Subject} 需处理={NeedsAction}",
+                mail.Id, mail.Subject, summary.NeedsAction);
+        }
+        else
+        {
+            _logger.Warning("邮件摘要失败（邮件保留）：#{Id} 主题={Subject} 原因={Error}",
+                mail.Id, mail.Subject, summary.Error);
         }
     }
 

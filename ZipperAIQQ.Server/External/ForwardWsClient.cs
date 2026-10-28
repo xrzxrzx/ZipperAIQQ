@@ -163,6 +163,16 @@ public sealed class ForwardWsClient : BackgroundService
             }
 
             builder.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+
+            // 与反向端点同口径：单帧上限 1MB，超了就断开重连，避免恶意/异常对端把内存打爆
+            if (builder.Length > WsChannelEndpoint.MaxFrameBytes)
+            {
+                _logger.Warning(
+                    "正向 WS 单帧超过 {Max} 字节，断开连接等待重连",
+                    WsChannelEndpoint.MaxFrameBytes);
+                return;
+            }
+
             if (!result.EndOfMessage)
             {
                 continue;

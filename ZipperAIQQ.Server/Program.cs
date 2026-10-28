@@ -151,6 +151,21 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
                     platform, whitelist.Count, blacklist.Count);
             }
         }
+
+        // 机器人自身账号：把库里按平台存的值灌进注册表 —— 平台握手前也能判 @
+        var selfIds = app.Services.GetRequiredService<ZipperAIQQ.Server.Identity.ISelfIdRegistry>();
+        foreach (var platform in directories.Platforms)
+        {
+            var stored = await settingsStore
+                .GetAsync(
+                    ZipperAIQQ.Server.Identity.SelfIdRecorder.PlatformStorageKey(platform),
+                    CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(stored))
+            {
+                selfIds.Set(platform, stored.Trim());
+                Log.Logger.Information("{Platform} 机器人自身账号已回灌：{SelfId}", platform, stored);
+            }
+        }
     }
     catch (Exception ex)
     {

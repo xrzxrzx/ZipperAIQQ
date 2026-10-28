@@ -29,6 +29,7 @@ public sealed class MessageRouter : BackgroundService
     private readonly Notices.NoticeResponder _noticeResponder;
     private readonly External.ExternalWsHub _external;
     private readonly Configuration.ServerOptions _options;
+    private readonly Identity.ISelfIdRegistry _selfIds;
     private readonly ILogger _logger;
 
     public MessageRouter(
@@ -42,6 +43,7 @@ public sealed class MessageRouter : BackgroundService
         Notices.NoticeResponder noticeResponder,
         External.ExternalWsHub external,
         Configuration.ServerOptions options,
+        Identity.ISelfIdRegistry selfIds,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -54,6 +56,7 @@ public sealed class MessageRouter : BackgroundService
         ArgumentNullException.ThrowIfNull(noticeResponder);
         ArgumentNullException.ThrowIfNull(external);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(selfIds);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
@@ -66,6 +69,7 @@ public sealed class MessageRouter : BackgroundService
         _noticeResponder = noticeResponder;
         _external = external;
         _options = options;
+        _selfIds = selfIds;
         _logger = logger;
     }
 
@@ -134,6 +138,7 @@ public sealed class MessageRouter : BackgroundService
     private string ResolveSelfId(string platform) =>
         _channel.SelfIdFor(platform)
         ?? _options.SelfIdFor(platform)
+        ?? _selfIds.Get(platform)
         ?? string.Empty;
 
     /// <summary>同一会话的收集窗口缓冲。</summary>
@@ -141,6 +146,9 @@ public sealed class MessageRouter : BackgroundService
     {
         public readonly List<IncomingMessage> Messages = [];
         public bool Processing;
+
+        /// <summary>已从字典摘除：拿到它的处理循环要让调用方重新取新缓冲。</summary>
+        public bool Retired;
     }
 
     private readonly ConcurrentDictionary<string, SessionBuffer> _buffers = new(StringComparer.Ordinal);
@@ -199,16 +207,28 @@ public sealed class MessageRouter : BackgroundService
         }
 
         // ③ 放进该会话的缓冲区；若已有处理循环，它会在下一轮把它一起取走
-        var buffer = _buffers.GetOrAdd(msg.Chat.SessionId, _ => new SessionBuffer());
-        lock (buffer)
+        SessionBuffer buffer;
+        while (true)
         {
-            buffer.Messages.Add(msg);
-            if (buffer.Processing)
+            buffer = _buffers.GetOrAdd(msg.Chat.SessionId, _ => new SessionBuffer());
+            lock (buffer)
             {
-                return;
+                // 缓冲已在本批结束时从字典摘除：重新 GetOrAdd，避免两条处理循环并发
+                if (buffer.Retired)
+                {
+                    continue;
+                }
+
+                buffer.Messages.Add(msg);
+                if (buffer.Processing)
+                {
+                    return;
+                }
+
+                buffer.Processing = true;
             }
 
-            buffer.Processing = true;
+            break;
         }
 
         _ = ProcessBatchAsync(msg.Chat, buffer, ct);
@@ -269,6 +289,8 @@ public sealed class MessageRouter : BackgroundService
         }
         finally
         {
+            var retired = false;
+
             lock (buffer)
             {
                 buffer.Processing = false;
@@ -279,6 +301,20 @@ public sealed class MessageRouter : BackgroundService
                     buffer.Processing = true;
                     _ = ProcessBatchAsync(chat, buffer, ct);
                 }
+                else
+                {
+                    // 空且空闲：摘掉字典项，防止长期运行后 _buffers 只增不删。
+                    // 先置 Retired（与入队路径同一把锁校验），再精确移除；竞态下入队方
+                    // 会看到 Retired 并重新 GetOrAdd，不会出现两条并发循环。
+                    buffer.Retired = true;
+                    retired = true;
+                }
+            }
+
+            if (retired)
+            {
+                _buffers.TryRemove(
+                    new KeyValuePair<string, SessionBuffer>(chat.SessionId, buffer));
             }
         }
     }
