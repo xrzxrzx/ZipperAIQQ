@@ -38,6 +38,19 @@ QQ 侧通过 **NapCat**（OneBot 11）接入；AI 侧基于 **MEAI（`Microsoft.
 | JSON | **`System.Text.Json`**（全项目统一） |
 | 存储 | SQLite |
 
+### 🔗 外部项目依赖
+
+本项目**不包含、也不分发**下面两个第三方项目，只提供适配层；使用前需要自行安装 / 部署：
+
+| 项目 | 作用 | 与本项目的关系 | 怎么获取 |
+|---|---|---|---|
+| **NapCat**（[NapNeko/NapCatQQ](https://github.com/NapNeko/NapCatQQ)） | QQ 协议端（OneBot 11） | 服务端作为**正向 WebSocket 客户端**连它；QQ 只是 `IMessageChannel` 的第一个实现 | 按上游文档自行部署；**必须开启 `access_token`**（否则握手后会被关闭） |
+| **douyin-im**（[xrzxrzx/douyin-im](https://github.com/xrzxrzx/douyin-im)，MIT） | 抖音协议库（Node / TypeScript） | `douyin-sidecar/` 以 npm 依赖引入，跨进程桥接；**不 vendor、不用 submodule** | 见 [`douyin-sidecar/README.md`](douyin-sidecar/README.md)；建议锁定 commit |
+
+> - 两个上游项目**各自独立维护**：它们的问题请提到各自仓库，本仓库只维护适配代码。
+> - **NapCat 的许可与使用条款以上游仓库为准**（本项目不复制其代码；GitHub 未标注 SPDX，故不在此断言具体协议）。
+> - 不用抖音时**不需要** douyin-im / Node；QQ 部署只需要 NapCat。
+
 ### 通信契约
 
 - **HTTP 只发命令**：`POST /api`，body `{action, payload}`，响应 `{code, message, data}`
@@ -56,6 +69,7 @@ QQ 侧通过 **NapCat**（OneBot 11）接入；AI 侧基于 **MEAI（`Microsoft.
 | 需要什么 | 说明 |
 |---|---|
 | **NapCat** | OneBot 11 **正向 WebSocket**，且**必须开启 access_token**（没 token 会在握手后被关掉） |
+| **douyin-im**（仅抖音） | Node ≥ 22.5 的 sidecar 依赖；不用抖音可跳过，安装见 [`douyin-sidecar/README.md`](douyin-sidecar/README.md) |
 | **LLM API** | 任意 OpenAI 兼容端点（DeepSeek / 兼容 Responses 或 Chat 接口） |
 | **.NET 10 SDK** | **仅构建时需要**；运行时若用 self-contained 发布则目标机无需安装 |
 
