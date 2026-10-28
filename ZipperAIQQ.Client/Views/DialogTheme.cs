@@ -20,13 +20,36 @@ namespace ZipperAIQQ.Client.Views;
 /// </remarks>
 public static class DialogTheme
 {
-    /// <summary>App.xaml 里的对话框样式键（主/次/关闭按钮 + 不透明底 + 圆角 12 都在里面）。</summary>
+    /// <summary>App.xaml 里的对话框样式键（不透明底 + 圆角 12 都在里面）。</summary>
     public const string StyleKey = "JpDialogStyle";
+
+    /// <summary>主按钮样式键（粉色实心）。</summary>
+    public const string AccentButtonStyleKey = "JpAccentButtonStyle";
+
+    /// <summary>次按钮 / 关闭按钮样式键（近黑底 + 粉字）。</summary>
+    public const string NormalButtonStyleKey = "JpButtonStyle";
+
+    /// <summary>对话框按钮统一的圆角（主/次/关闭三者一致，用户反复要求过）。</summary>
+    public const double ButtonCornerRadius = 10;
 
     /// <summary>
     /// 给对话框套上日系主题：Dark + <see cref="StyleKey"/>，
     /// 顺手把内容根也设成 Dark（内容还没设的话，稍后自己调 <see cref="ApplyToContent"/>）。
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>三个按钮样式必须在这里再显式赋一遍</b>（2026-10-28 实测结论）：只写在
+    /// <c>JpDialogStyle</c> 的 Setter 里时，主按钮实测仍按系统强调色渲染
+    /// （截图逐像素采样得到 <c>#F98FB2</c> = <c>SystemAccentColorLight2</c>），
+    /// 说明 ContentDialog 应用模板时没有把 Style 里的 <c>PrimaryButtonStyle</c> 带下去。
+    /// 直接赋属性是确定的 —— 属性值优先于样式 Setter。
+    /// </para>
+    /// <para>
+    /// 另外把 <c>ControlCornerRadius</c> 限定在对话框子树内为 10：万一某个按钮最终还是落到
+    /// 系统默认模板（圆角取 <c>ControlCornerRadius</c>），圆角也和我们的模板一致，不会再出现
+    /// 「保存 10 / 关闭 4」这种不一致。
+    /// </para>
+    /// </remarks>
     public static void Apply(ContentDialog dialog)
     {
         ArgumentNullException.ThrowIfNull(dialog);
@@ -38,6 +61,21 @@ public static class DialogTheme
         {
             dialog.Style = dialogStyle;
         }
+
+        // 直接赋值（覆盖 Style Setter 与模板默认值），三个按钮一起对齐
+        if (Application.Current.Resources.TryGetValue(AccentButtonStyleKey, out var accent) && accent is Style accentStyle)
+        {
+            dialog.PrimaryButtonStyle = accentStyle;
+        }
+
+        if (Application.Current.Resources.TryGetValue(NormalButtonStyleKey, out var normal) && normal is Style normalStyle)
+        {
+            dialog.SecondaryButtonStyle = normalStyle;
+            dialog.CloseButtonStyle = normalStyle;
+        }
+
+        // 兜底：任何落在系统默认模板上的按钮，圆角也按我们的口径
+        dialog.Resources["ControlCornerRadius"] = new CornerRadius(ButtonCornerRadius);
 
         if (dialog.Content is FrameworkElement root)
         {
