@@ -1894,10 +1894,12 @@ async function main(): Promise<void> {
     },
   });
 
-  // ① 先起 douyin-im（可能阻塞到有人完成登录）
-  await adapter.start();
+  // ① **先连 Server**（2026-10-28 调整顺序）：
+  //    登录要人机交互，可能要等好几分钟扫码；而"发起登录 / 拿二维码"这些命令是
+  //    **服务端通过 /ws/channel 下发的**。以前先 await login() 再连，结果扫码期间
+  //    根本没有控制通道 —— 客户端点什么都发不出去（实测：connected=False + 400）。
+  //    Server 没起来也不致命：ChannelLink 会一直退避重连。
 
-  // ② 再连 Server；Server 没起来也不致命，会一直退避重连
   const context = {
     adapter,
     log,
@@ -1934,8 +1936,21 @@ async function main(): Promise<void> {
     log.error(`未处理的 Promise 拒绝：${describeError(reason)}`);
   });
 
+  // ③ 连接跑起来（不 await：它会一直重连到进程退出），
+  //    同时并行去起 douyin-im —— 登录可能阻塞几分钟等扫码，
+  //    但控制通道已经通了，客户端点「登录/退出」随时能拿到二维码或状态。
+  const linkTask = link.start();
+
   try {
-    await link.start();
+    await adapter.start();
+  } catch (err) {
+    // 登录失败不致命：连接照常跑，客户端还能点「登录（显示二维码）」重试
+    log.error(`启动 douyin-im 失败（连接仍保持，可重试登录）：${describeError(err)}`);
+    adapter.emitLoginState();
+  }
+
+  try {
+    await linkTask;
   } finally {
     await adapter.stop();
   }
