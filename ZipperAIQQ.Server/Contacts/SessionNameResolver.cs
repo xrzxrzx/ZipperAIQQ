@@ -60,26 +60,32 @@ public static class SessionIds
 /// 缓存 5 分钟：好友/群列表一次要拉全量，0.5 秒心跳里反复查会把 NapCat 打满。
 /// 拿不到时**保留旧缓存并记 Warning**，不让页面因为一次查询失败就变回编号。
 /// </para>
+/// <para>
+/// **按平台取目录**（2026-10-28 修）：以前只注入默认平台（QQ）的目录，
+/// 抖音会话永远解析不出昵称 → 会话页显示 <c>douyin:p888…</c> 这种原始 id。
+/// 现在每个平台各存一份好友/群表，标签用 <see cref="PlatformLabels"/>（QQ / 抖音）。
+/// </para>
 /// </remarks>
 public sealed class SessionNameResolver : ISessionNameResolver
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(5);
 
-    private readonly IContactDirectory _contacts;
+    private readonly IContactDirectoryRegistry _directories;
     private readonly ILogger _logger;
     private readonly object _gate = new();
 
-    private Dictionary<string, string> _friends = new(StringComparer.Ordinal);
-    private Dictionary<string, string> _groups = new(StringComparer.Ordinal);
+    /// <summary>平台 → (id → 昵称)。外层键不区分大小写（<c>QQ</c>/<c>qq</c> 都算同一个）。</summary>
+    private Dictionary<string, Dictionary<string, string>> _friends = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, Dictionary<string, string>> _groups = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset _friendsAt = DateTimeOffset.MinValue;
     private DateTimeOffset _groupsAt = DateTimeOffset.MinValue;
 
-    public SessionNameResolver(IContactDirectory contacts, ILogger logger)
+    public SessionNameResolver(IContactDirectoryRegistry directories, ILogger logger)
     {
-        ArgumentNullException.ThrowIfNull(contacts);
+        ArgumentNullException.ThrowIfNull(directories);
         ArgumentNullException.ThrowIfNull(logger);
 
-        _contacts = contacts;
+        _directories = directories;
         _logger = logger;
     }
 
@@ -126,29 +132,31 @@ public sealed class SessionNameResolver : ISessionNameResolver
         }
 
         var (platform, isGroup, id) = parsed.Value;
-        var platformLabel = platform.Equals("qq", StringComparison.OrdinalIgnoreCase)
-            ? "QQ"
-            : platform.ToUpperInvariant();
+        var platformLabel = PlatformLabels.Label(platform);
 
         if (isGroup)
         {
-            var name = Snapshot(_groups).GetValueOrDefault(id);
+            var name = Lookup(_groups, platform, id);
             return string.IsNullOrWhiteSpace(name)
                 ? sessionId
                 : $"{platformLabel}群 · {name}";
         }
 
-        var friend = Snapshot(_friends).GetValueOrDefault(id);
+        var friend = Lookup(_friends, platform, id);
         return string.IsNullOrWhiteSpace(friend)
             ? sessionId
             : $"{platformLabel} · {friend}";
     }
 
-    private Dictionary<string, string> Snapshot(Dictionary<string, string> source)
+    /// <summary>从"平台 → 表"里取值；平台没有表就当没查到（回落原始 id）。</summary>
+    private string? Lookup(
+        Dictionary<string, Dictionary<string, string>> source,
+        string platform,
+        string id)
     {
         lock (_gate)
         {
-            return new Dictionary<string, string>(source, StringComparer.Ordinal);
+            return source.TryGetValue(platform, out var map) ? map.GetValueOrDefault(id) : null;
         }
     }
 
@@ -158,43 +166,85 @@ public sealed class SessionNameResolver : ISessionNameResolver
 
         if (needFriends && now - _friendsAt > Ttl)
         {
-            try
-            {
-                var friends = await _contacts.GetFriendsAsync(ct).ConfigureAwait(false);
-                var map = friends.ToDictionary(
-                    f => f.UserId,
-                    f => string.IsNullOrWhiteSpace(f.Remark) ? f.Nickname : $"{f.Nickname}（{f.Remark}）",
-                    StringComparer.Ordinal);
+            var map = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
 
-                lock (_gate)
+            foreach (var platform in _directories.Platforms)
+            {
+                var directory = _directories.For(platform);
+                if (directory is null)
                 {
-                    _friends = map;
-                    _friendsAt = now;
+                    continue;
+                }
+
+                try
+                {
+                    var friends = await directory.GetFriendsAsync(ct).ConfigureAwait(false);
+                    map[platform] = friends.ToDictionary(
+                        f => f.UserId,
+                        f => string.IsNullOrWhiteSpace(f.Remark) ? f.Nickname : $"{f.Nickname}（{f.Remark}）",
+                        StringComparer.Ordinal);
+                }
+                catch (Exception ex)
+                {
+                    // 单个平台失败不影响其它平台：保留它上一次的表（没有就回落 id）
+                    _logger.Warning(ex, "解析 {Platform} 好友昵称失败，沿用上一次缓存（会话页会显示编号）", platform);
+                    var previous = Snapshot(_friends).GetValueOrDefault(platform);
+                    if (previous is not null)
+                    {
+                        map[platform] = previous;
+                    }
                 }
             }
-            catch (Exception ex)
+
+            lock (_gate)
             {
-                _logger.Warning(ex, "解析好友昵称失败，沿用上一次缓存（会话页会显示编号）");
+                _friends = map;
+                _friendsAt = now;
             }
         }
 
         if (needGroups && now - _groupsAt > Ttl)
         {
-            try
-            {
-                var groups = await _contacts.GetGroupsAsync(ct).ConfigureAwait(false);
-                var map = groups.ToDictionary(g => g.GroupId, g => g.Name, StringComparer.Ordinal);
+            var map = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
 
-                lock (_gate)
+            foreach (var platform in _directories.Platforms)
+            {
+                var directory = _directories.For(platform);
+                if (directory is null)
                 {
-                    _groups = map;
-                    _groupsAt = now;
+                    continue;
+                }
+
+                try
+                {
+                    var groups = await directory.GetGroupsAsync(ct).ConfigureAwait(false);
+                    map[platform] = groups.ToDictionary(g => g.GroupId, g => g.Name, StringComparer.Ordinal);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warning(ex, "解析 {Platform} 群名失败，沿用上一次缓存（会话页会显示编号）", platform);
+                    var previous = Snapshot(_groups).GetValueOrDefault(platform);
+                    if (previous is not null)
+                    {
+                        map[platform] = previous;
+                    }
                 }
             }
-            catch (Exception ex)
+
+            lock (_gate)
             {
-                _logger.Warning(ex, "解析群名失败，沿用上一次缓存（会话页会显示编号）");
+                _groups = map;
+                _groupsAt = now;
             }
+        }
+    }
+
+    private Dictionary<string, Dictionary<string, string>> Snapshot(
+        Dictionary<string, Dictionary<string, string>> source)
+    {
+        lock (_gate)
+        {
+            return new Dictionary<string, Dictionary<string, string>>(source, StringComparer.OrdinalIgnoreCase);
         }
     }
 }

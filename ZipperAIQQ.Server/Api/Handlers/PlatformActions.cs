@@ -123,12 +123,8 @@ public sealed class GetPlatformsAction : IApiAction
         };
     }
 
-    private static string LabelOf(string platform) => platform.ToLowerInvariant() switch
-    {
-        "qq" => "QQ",
-        "douyin" => "抖音",
-        _ => platform,
-    };
+    // 标签统一由 Contacts.PlatformLabels 提供（会话标题也用同一份，避免两处口径不一致）
+    private static string LabelOf(string platform) => Contacts.PlatformLabels.Label(platform);
 
     private static List<string> FeaturesOf(ChannelCapabilities capabilities)
     {
