@@ -480,6 +480,14 @@ public sealed partial class PlatformsViewModel : ObservableObject
             MailChannelText = "邮件通道：服务端不支持运行时开关（旧版本）—— 只能改 server.yaml 后重启";
             MailPersonaDigestStatus = $"未保存：服务端没有 saveMail（{ex.Message}）";
         }
+        catch (ApiCallException ex) when (ex.Message.Contains("需要 enabled", StringComparison.Ordinal))
+        {
+            // 半新半旧：saveMail 存在，但只认 enabled（今天之前部署的服务端）——
+            // 重试也没用，直接把开关禁用并说清原因，别让用户一直拨。
+            MailPersonaDigest = previous;
+            MailPersonaDigestStatus =
+                "未保存：服务端版本过旧（saveMail 还不认 personaDigest）—— 重新部署服务端后即可使用";
+        }
         catch (Exception ex)
         {
             MailPersonaDigest = previous;
