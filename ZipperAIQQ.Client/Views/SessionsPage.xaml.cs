@@ -56,8 +56,16 @@ public sealed partial class SessionsPage : Page
 
         DialogTheme.Apply(dialog);
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        try
         {
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"导出对话框失败：{ex}");
             return;
         }
 

@@ -211,7 +211,7 @@
                 </StackPanel>
             </Border>
 
-            <TextBlock Text="{x:Bind Vm.StatusLine, Mode=OneWay}"
+            <TextBlock Text="{x:Bind Stats.StatusLine, Mode=OneWay}"
                        Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
         </StackPanel>
     </ScrollViewer>

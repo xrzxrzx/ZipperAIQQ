@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using ZipperAIQQ.Client.ViewModels;
 
@@ -17,10 +18,21 @@ public sealed partial class AuditPage : Page
         Vm = App.Services.GetRequiredService<AuditViewModel>();
         InitializeComponent();
 
-        Vm.Audits.CollectionChanged += OnAuditsChanged;
+        // VM 是单例：只在页面存活期间订阅，否则每进出一次就多挂一个处理器（整页泄漏）
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
     }
 
     public AuditViewModel Vm { get; }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        Vm.Audits.CollectionChanged -= OnAuditsChanged;
+        Vm.Audits.CollectionChanged += OnAuditsChanged;
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e) =>
+        Vm.Audits.CollectionChanged -= OnAuditsChanged;
 
     private void OnAuditsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {

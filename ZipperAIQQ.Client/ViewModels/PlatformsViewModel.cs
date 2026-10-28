@@ -147,6 +147,9 @@ public sealed partial class PlatformsViewModel : ObservableObject
     /// <summary>上一次画出来的二维码 base64：轮询时内容没变就不重复解码。</summary>
     private string _lastQrBase64 = string.Empty;
 
+    /// <summary>当前二维码的图片流：换码 / 清码时释放，避免每次登录泄漏一个流。</summary>
+    private Windows.Storage.Streams.InMemoryRandomAccessStream? _qrStream;
+
     public PlatformsViewModel(ServerApiClient api)
     {
         ArgumentNullException.ThrowIfNull(api);
@@ -617,7 +620,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
             await PollLoginAsync(token).ConfigureAwait(true);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             // 切页 / 再点一次 / 退出登录打断的 —— 正常流程，不打扰用户
         }
@@ -685,7 +688,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
             {
                 await Task.Delay(LoginPollInterval, token).ConfigureAwait(true);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 return;
             }
@@ -705,7 +708,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
                     return;
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 return;
             }
@@ -781,12 +784,10 @@ public sealed partial class PlatformsViewModel : ObservableObject
             return;
         }
 
+        var stream = new InMemoryRandomAccessStream();
         try
         {
             var bytes = Convert.FromBase64String(base64);
-
-            // 注意：这个流**故意不 Dispose** —— BitmapImage 解码完前还得能读它
-            var stream = new InMemoryRandomAccessStream();
             var writer = new DataWriter(stream);
             writer.WriteBytes(bytes);
             await writer.StoreAsync();     // WinRT 的 IAsyncOperation 可以直接 await
@@ -798,22 +799,30 @@ public sealed partial class PlatformsViewModel : ObservableObject
             var image = new BitmapImage();
             await image.SetSourceAsync(stream);
 
+            // 上一张码的流现在没人读了，换新的同时释放旧的
+            _qrStream?.Dispose();
+            _qrStream = stream;
+
             _lastQrBase64 = base64;
             DouyinQrImage = image;
             DouyinHasQr = true;
         }
         catch (FormatException ex)
         {
+            stream.Dispose();
             DouyinLoginStatus = $"二维码解码失败（base64 不合法）：{ex.Message}";
         }
         catch (Exception ex)
         {
+            stream.Dispose();
             DouyinLoginStatus = $"二维码显示失败：{ex.Message}";
         }
     }
 
     private void ClearQr()
     {
+        _qrStream?.Dispose();
+        _qrStream = null;
         DouyinQrImage = null;
         DouyinHasQr = false;
         _lastQrBase64 = string.Empty;
