@@ -438,6 +438,13 @@ public sealed partial class PlatformsViewModel : ObservableObject
             : "邮件通道：已停用 —— 关闭后不再连 IMAP 收信；已收的邮件与账号仍保留";
 
     /// <summary>
+    /// 保存邮件开关（两个开关共用同一个 action 与 payload 形状）。
+    /// 传 <c>null</c> 表示"该项不改"，与服务端的字段可省略语义一致。
+    /// </summary>
+    private Task<SaveMailResultDto?> SaveMailAsync(bool? enabled, bool? personaDigest) =>
+        _api.CallAsync<SaveMailResultDto>("saveMail", new { enabled, personaDigest });
+
+    /// <summary>
     /// 邮件总开关（<c>saveMail</c>，运行时热切）。失败**把开关拨回去**并把原因写出来；
     /// 旧服务端（未知 action = 404）额外说明"不支持运行时开关"，同时禁用开关。
     /// </summary>
@@ -454,7 +461,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
         try
         {
-            var result = await _api.CallAsync<SaveMailResultDto>("saveMail", new { enabled })
+            var result = await SaveMailAsync(enabled: enabled, personaDigest: null)
                 .ConfigureAwait(true);
 
             // 以服务端回的真值为准（skipped = 本来就是这值，不算错）。
@@ -503,7 +510,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
 
         try
         {
-            var result = await _api.CallAsync<SaveMailResultDto>("saveMail", new { personaDigest = enabled })
+            var result = await SaveMailAsync(enabled: null, personaDigest: enabled)
                 .ConfigureAwait(true);
 
             MailPersonaDigest = result?.PersonaDigest ?? enabled;
