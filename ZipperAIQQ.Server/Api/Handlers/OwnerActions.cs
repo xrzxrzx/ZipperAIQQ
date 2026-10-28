@@ -14,20 +14,16 @@ namespace ZipperAIQQ.Server.Api.Handlers;
 public sealed class GetOwnerAction : IApiAction
 {
     private readonly IRuntimeSettingsStore _settings;
-    private readonly IRoleResolver _roles;
     private readonly IContactDirectoryRegistry _directories;
 
     public GetOwnerAction(
         IRuntimeSettingsStore settings,
-        IRoleResolver roles,
         IContactDirectoryRegistry directories)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        ArgumentNullException.ThrowIfNull(roles);
         ArgumentNullException.ThrowIfNull(directories);
 
         _settings = settings;
-        _roles = roles;
         _directories = directories;
     }
 

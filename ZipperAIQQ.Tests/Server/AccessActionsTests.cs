@@ -210,7 +210,7 @@ public sealed class AccessActionsTests : IAsyncLifetime
 
     private SetAccessAction NewSetAccess() => new(_settings, _roles, _filter, _configs);
 
-    private GetOwnerAction NewGetOwner() => new(_settings, _roles, _directories);
+    private GetOwnerAction NewGetOwner() => new(_settings, _directories);
 
     private SetOwnerAction NewSetOwner() => new(_settings, _roles, new FakeOwnerScope(), _configs);
 

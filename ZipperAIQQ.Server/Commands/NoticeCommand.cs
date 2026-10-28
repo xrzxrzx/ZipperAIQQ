@@ -11,8 +11,6 @@ namespace ZipperAIQQ.Server.Commands;
 /// </remarks>
 public sealed class NoticeCommand : ICommand
 {
-    private const string KeyPrefix = "notice.reply:";
-
     private static readonly NoticeType[] Replyable =
     [
         NoticeType.Poke,

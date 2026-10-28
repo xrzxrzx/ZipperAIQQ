@@ -253,10 +253,4 @@ public sealed class DouyinOptionsService
 
     private static int ParseInt(string? raw, int fallback) =>
         int.TryParse(raw, out var value) && value > 0 ? value : fallback;
-
-    /// <summary>逗号分隔的列表（与其它配置节同口径）。</summary>
-    private static IReadOnlyList<string> SplitList(string raw) =>
-        raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
 }

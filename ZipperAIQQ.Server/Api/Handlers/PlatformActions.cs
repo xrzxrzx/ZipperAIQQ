@@ -27,7 +27,6 @@ public sealed class GetPlatformsAction : IApiAction
     private readonly DouyinChannel _douyin;
     private readonly DouyinOptionsService _douyinOptions;
     private readonly IMailRepository _mailRepository;
-    private readonly MailOptions _mailOptions;
     private readonly MailOptionsService _mailSwitch;
 
     public GetPlatformsAction(
@@ -35,21 +34,18 @@ public sealed class GetPlatformsAction : IApiAction
         DouyinChannel douyin,
         DouyinOptionsService douyinOptions,
         IMailRepository mailRepository,
-        MailOptions mailOptions,
         MailOptionsService mailSwitch)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(douyin);
         ArgumentNullException.ThrowIfNull(douyinOptions);
         ArgumentNullException.ThrowIfNull(mailRepository);
-        ArgumentNullException.ThrowIfNull(mailOptions);
         ArgumentNullException.ThrowIfNull(mailSwitch);
 
         _channel = channel;
         _douyin = douyin;
         _douyinOptions = douyinOptions;
         _mailRepository = mailRepository;
-        _mailOptions = mailOptions;
         _mailSwitch = mailSwitch;
     }
 
