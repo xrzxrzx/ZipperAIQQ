@@ -23,7 +23,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -36,6 +36,16 @@ const PROTOCOL_VERSION = "1";
 const PLATFORM = "douyin";
 
 /** 能力集（设计 §3.3 hello 帧）。 */
+/** 登录相关事件名（douyin-im 1.1.0 的 system.login.* / system.online）。 */
+const LOGIN_EVENTS = [
+  "system.login.qrcode",
+  "system.login.sms",
+  "system.login.voice",
+  "system.login.verification",
+  "system.login.error",
+  "system.online",
+] as const;
+
 const CAPABILITIES = ["text", "image", "mention", "reply"] as const;
 
 const DEFAULT_SERVER_URL = "ws://127.0.0.1:5180/ws/channel";
@@ -772,7 +782,7 @@ export class DouyinImAdapter {
     this.bindEvents(this.client);
     this.selfId = await this.resolveSelfId(this.client);
 
-    const starter = firstFunction(this.client, ["start", "login", "connect", "init"]);
+    const starter = firstFunction(this.client, ["login", "start", "connect", "init"]);
     if (!starter) {
       this.log.warn("douyin-im 客户端没有 start()/login()，跳过自动登录（请按实际 API 调整 firstFunction 的候选名）");
       return;
@@ -942,8 +952,93 @@ export class DouyinImAdapter {
       (onEvent as AnyFn).call(client, (payload: unknown) => this.handleRawEvent("onEvent", payload));
     }
 
+    // ── 登录事件（douyin-im 1.1.0 的正式流程，2026-10-28 补）──
+    // 关键：**必须先订阅 system.login.qrcode 并调 account.continueLogin()**。
+    // 不订阅的话 `client.login()` 拿不到"人等用户扫完"的开关 —— 实测表现是
+    // 进程启动后立刻退出（exit=0），日志停在「正在启动 douyin-im」，服务器上踩到过一次。
+    if (on) {
+      for (const eventName of LOGIN_EVENTS) {
+        try {
+          (on as AnyFn).call(client, eventName, (payload: unknown) =>
+            this.handleLoginEvent(eventName, payload),
+          );
+        } catch (err) {
+          this.log.debug(`订阅登录事件「${eventName}」失败（忽略）：${describeError(err)}`);
+        }
+      }
+    }
+
     if (!on && !onEvent) {
       this.log.warn("douyin-im 客户端没有 on()/onEvent()，收不到任何消息（需按实际 fork 适配 bindEvents）");
+    }
+  }
+
+  /**
+   * 登录事件：能自动推进的推进，需要人做的用日志说清楚。
+   */
+  private handleLoginEvent(eventName: string, payload: unknown): void {
+    const data = (payload ?? {}) as Record<string, any>;
+    const account = data.account;
+
+    try {
+      switch (eventName) {
+        case "system.login.qrcode": {
+          const base64 = str(data.qrcodeBase64) ?? str(data.qrCodeBase64) ?? str(data.qrcode);
+          if (base64) {
+            const file = path.join(this.dataDir, "login-qr.png");
+            try {
+              mkdirSync(path.dirname(file), { recursive: true });
+              writeFileSync(file, Buffer.from(base64, "base64"), { mode: 0o600 });
+              this.log.info(`登录二维码已保存：${file}（用抖音 App 扫码，并在手机上确认）`);
+            } catch (err) {
+              this.log.warn(`写二维码文件失败：${describeError(err)}（仍可继续等待扫码）`);
+            }
+          } else {
+            this.log.info("收到扫码登录事件（没有二维码数据），请在抖音 App 内确认登录");
+          }
+
+          // 这一步不能省：continueLogin() 才是"等用户扫完"的开关
+          if (typeof account?.continueLogin === "function") {
+            void Promise.resolve(account.continueLogin()).catch((err: unknown) => {
+              this.log.warn(`continueLogin 失败：${describeError(err)}`);
+            });
+          }
+          return;
+        }
+
+        case "system.login.sms":
+        case "system.login.voice": {
+          this.log.warn("抖音登录需要短信/语音验证码 —— 服务器上没有交互终端，无法自动输入");
+          return;
+        }
+
+        case "system.login.verification": {
+          const methods = Array.isArray(data.verification?.methods)
+            ? data.verification.methods.join(", ")
+            : "未知";
+          this.log.warn(`抖音要求安全验证（可用方式：${methods}）—— 需要在能打开浏览器的环境完成`);
+          return;
+        }
+
+        case "system.online": {
+          const nickname = str(data.account?.nickname) ?? "未知";
+          this.log.info(
+            `抖音已上线：${nickname}（selfId=${str(data.account?.uid) ?? this.selfId ?? "未知"}）`,
+          );
+          return;
+        }
+
+        case "system.login.error": {
+          this.log.error(`抖音登录失败：${str(data.error) ?? "未知原因"}`);
+          return;
+        }
+
+        default:
+          this.log.debug(`未处理的登录事件：${eventName}`);
+      }
+    } catch (err) {
+      // 登录事件处理失败也不能让进程崩：崩了连接就没了，人还得重来
+      this.log.warn(`处理登录事件「${eventName}」失败：${describeError(err)}`);
     }
   }
 
@@ -1548,16 +1643,27 @@ async function main(): Promise<void> {
     log,
     onInbound: (event) => {
       // 入站：归一化事件 → 设计 §3.3 的 inbound 帧（stranger 在翻译层就被丢掉）
+      //
+      // 这里先把 chatType 收窄一次：toInboundFrame 内部虽然也挡 stranger，
+      // 但那是**函数内部**的判断，TS 不会替我们收窄外层的 event.chatType；
+      // 不收窄就会在下面 sessionIdFor(...) 处报 "stranger" 不能赋给 "private" | "group"。
+      if (event.chatType === "stranger") {
+        log.debug(`陌生人消息已丢弃（设计 §4.1）：threadId=${event.threadId}`);
+        return;
+      }
+
+      const chatType: "private" | "group" = event.chatType;
+
       const frame = toInboundFrame(event, (message) => log.warn(`入站翻译告警：${message}`));
       if (!frame) {
-        log.debug(`陌生人消息已丢弃（设计 §4.1）：threadId=${event.threadId}`);
+        log.debug(`入站帧翻译失败，已丢弃：threadId=${event.threadId}`);
         return;
       }
 
       try {
         linkRef?.send(frame);
         log.info(
-          `入站已转发：session=${sessionIdFor(event.chatType, event.threadId)} ` +
+          `入站已转发：session=${sessionIdFor(chatType, event.threadId)} ` +
             `messageId=${event.messageId ?? "(无)"}`,
         );
       } catch (err) {

@@ -15,7 +15,7 @@
     "typecheck": "tsc src/bridge.ts --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node"
   },
   "dependencies": {
-    "douyin-im": "github:USER/douyin-im#COMMIT"
+    "douyin-im": "1.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
