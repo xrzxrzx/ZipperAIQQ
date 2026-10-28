@@ -377,12 +377,25 @@ export function normalizeInbound(raw: unknown): NormalizedInbound | null {
     return null;
   }
 
-  const threadId =
+  const senderRecord0 = asRecord(body.sender);
+  const senderUid0 =
+    str(body.senderUid) ?? str(body.sender_uid) ?? str(body.uid) ??
+    str(senderRecord0?.userId) ?? str(senderRecord0?.uid);
+
+  // 私聊的 threadId 常常是 conversationId（形如 0:1:xxx:yyy），那样会话标题会变成一串数字
+  // （2026-10-28 实测：douyin:p0:1:88892527967:4106032998778416）。私聊优先用**对方 uid**。
+  const rawThreadId =
     str(body.threadId) ??
     str(body.thread_id) ??
-    str(body.conversationId) ??
     str(body.groupId) ??
+    str(body.conversationId) ??
     str(body.conversationShortId);
+
+  const isGroupChat =
+    (str(body.type) ?? "").toLowerCase().includes("group") ||
+    (str(body.chatType) ?? "").toLowerCase() === "group";
+
+  const threadId = !isGroupChat && senderUid0 ? senderUid0 : rawThreadId;
   if (!threadId) {
     return null;
   }
@@ -390,7 +403,17 @@ export function normalizeInbound(raw: unknown): NormalizedInbound | null {
   const content = asRecord(body.content);
   const contentKind = (str(content?.kind) ?? str(body.kind) ?? str(body.contentType) ?? "").toLowerCase();
 
-  const text = str(body.text) ?? str(content?.text);
+  // 卡片/分享类消息（tips / template / awemeType）没有正常正文：
+  // 直接把原始 JSON 塞进库会让会话内容变成一堆 {"tips":...}（2026-10-28 实测）。
+  // 这里降级成一句人话；真要看卡片内容，等 douyin-im 的卡片解析验收后再做。
+  const rawText = str(body.text) ?? str(content?.text);
+  const looksLikeCard =
+    body.tips !== undefined || body.template !== undefined || body.awemeType !== undefined;
+  const text = rawText && rawText.trim().length > 0
+    ? rawText
+    : looksLikeCard
+      ? "[分享卡片]（对方发来的是作品/卡片消息，当前只记录占位）"
+      : rawText;
 
   const imageUrls: string[] = [];
   const contentUrl = str(content?.url) ?? str(content?.uri) ?? str(content?.imageUrl);

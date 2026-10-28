@@ -134,7 +134,13 @@ public sealed partial class AccessViewModel : ObservableObject
     private async Task SwitchPlatformAsync(string label)
     {
         var previous = _lastGoodPlatform;
-        var code = _platformLabelToCode.GetValueOrDefault(label, DefaultPlatform);
+        // 三级兜底：① 标签→代码映射 ② 标签本身就是代码（qq / douyin）③ 默认平台
+        // 之前只查映射，映射没建好时切"抖音"会静默退回 qq —— 表现就是"抖音页显示 QQ 好友"。
+        var code =
+            _platformLabelToCode.GetValueOrDefault(label)
+            ?? (label.Equals("qq", StringComparison.OrdinalIgnoreCase) ? "qq"
+                : label.Equals("douyin", StringComparison.OrdinalIgnoreCase) ? "douyin"
+                : DefaultPlatform);
 
         PlatformStatus = $"正在切到 {label}…";
         var error = await LoadForPlatformAsync(code).ConfigureAwait(true);
@@ -221,7 +227,8 @@ public sealed partial class AccessViewModel : ObservableObject
         ListCandidates.Clear();
         foreach (var candidate in data.Candidates)
         {
-            var sessionId = $"qq:p{candidate.UserId}";
+            // ⚠️ 这里以前写死 "qq"：切到抖音后白名单条目会变成 qqp…（2026-10-28 实测）
+            var sessionId = $"{requestedPlatform}:p{candidate.UserId}";
             var display = $"私聊 · {candidate.Nickname}（{sessionId}）";
             _sessionDisplayToId[display] = sessionId;
             ListCandidates.Add(display);
