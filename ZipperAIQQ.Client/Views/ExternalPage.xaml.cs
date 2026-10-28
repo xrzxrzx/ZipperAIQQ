@@ -59,7 +59,18 @@ public sealed partial class ExternalPage : Page
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
         };
         var url = new TextBox { Header = "WS 地址", Text = item.Url, PlaceholderText = "ws://host:port" };
-        var token = new TextBox { Header = "Token", Text = item.Token, PlaceholderText = "留空 = 不鉴权" };
+        var token = new TextBox
+        {
+            Header = "Token",
+            Text = string.Empty,
+            PlaceholderText = item.HasToken ? "已配置 · 留空不修改" : "未配置 · 留空 = 不鉴权",
+        };
+        var clearToken = new CheckBox
+        {
+            Content = "清除已保存的 Token",
+            IsChecked = false,
+            Visibility = item.HasToken ? Visibility.Visible : Visibility.Collapsed,
+        };
         var error = new TextBlock
         {
             Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.OrangeRed),
@@ -88,6 +99,7 @@ public sealed partial class ExternalPage : Page
         }
 
         panel.Children.Add(token);
+        panel.Children.Add(clearToken);
         panel.Children.Add(error);
 
         var dialog = new ContentDialog
@@ -137,7 +149,10 @@ public sealed partial class ExternalPage : Page
             item.Host = hostText;
             item.Port = port.Value;
             item.Url = urlText;
-            item.Token = token.Text.Trim();
+
+            // token 不回显：留空 = 不修改；勾选"清除" = 明确清除；输入 = 更新
+            item.ClearToken = clearToken.IsChecked == true;
+            item.TokenInput = item.ClearToken ? string.Empty : token.Text.Trim();
         };
 
         await dialog.ShowAsync();

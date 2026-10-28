@@ -15,8 +15,8 @@ public sealed class ReverseServerDto
     [JsonPropertyName("port")]
     public int Port { get; set; }
 
-    [JsonPropertyName("token")]
-    public string Token { get; set; } = string.Empty;
+    [JsonPropertyName("tokenConfigured")]
+    public bool TokenConfigured { get; set; }
 
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; } = true;
@@ -31,8 +31,8 @@ public sealed class ForwardServerDto
     [JsonPropertyName("url")]
     public string Url { get; set; } = string.Empty;
 
-    [JsonPropertyName("token")]
-    public string Token { get; set; } = string.Empty;
+    [JsonPropertyName("tokenConfigured")]
+    public bool TokenConfigured { get; set; }
 
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; } = true;

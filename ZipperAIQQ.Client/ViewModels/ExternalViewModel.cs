@@ -17,7 +17,7 @@ public sealed partial class ExternalServerItem : ObservableObject
 
     public string EndpointText => IsReverse ? $"{Host}:{Port:0}" : Url;
 
-    public string TokenText => string.IsNullOrWhiteSpace(Token) ? "未设置 Token" : "已设置 Token";
+    public string TokenText => HasToken ? "已设置 Token" : "未设置 Token";
 
     [ObservableProperty]
     public partial string Name { get; set; } = string.Empty;
@@ -34,8 +34,17 @@ public sealed partial class ExternalServerItem : ObservableObject
     [ObservableProperty]
     public partial string Url { get; set; } = string.Empty;
 
+    /// <summary>服务端是否已保存 token（**不回显明文**）。</summary>
     [ObservableProperty]
-    public partial string Token { get; set; } = string.Empty;
+    public partial bool HasToken { get; set; }
+
+    /// <summary>编辑框里新输入的 token；留空 = 不修改。</summary>
+    [ObservableProperty]
+    public partial string TokenInput { get; set; } = string.Empty;
+
+    /// <summary>显式清除已保存的 token。</summary>
+    [ObservableProperty]
+    public partial bool ClearToken { get; set; }
 
     partial void OnHostChanged(string value) => OnPropertyChanged(nameof(EndpointText));
 
@@ -43,7 +52,7 @@ public sealed partial class ExternalServerItem : ObservableObject
 
     partial void OnUrlChanged(string value) => OnPropertyChanged(nameof(EndpointText));
 
-    partial void OnTokenChanged(string value) => OnPropertyChanged(nameof(TokenText));
+    partial void OnHasTokenChanged(bool value) => OnPropertyChanged(nameof(TokenText));
 }
 
 /// <summary>外部接口（WS）配置页（问题记录 03 #5）。</summary>
@@ -96,7 +105,7 @@ public sealed partial class ExternalViewModel : ObservableObject
                     Enabled = item.Enabled,
                     Host = item.Host,
                     Port = item.Port,
-                    Token = item.Token,
+                    HasToken = item.TokenConfigured,
                 };
 
                 AllServers.Add(server);
@@ -111,7 +120,7 @@ public sealed partial class ExternalViewModel : ObservableObject
                     Name = string.IsNullOrWhiteSpace(item.Name) ? "正向连接" : item.Name,
                     Enabled = item.Enabled,
                     Url = item.Url,
-                    Token = item.Token,
+                    HasToken = item.TokenConfigured,
                 };
 
                 AllServers.Add(server);
@@ -172,24 +181,32 @@ public sealed partial class ExternalViewModel : ObservableObject
 
             var reverse = AllServers
                 .Where(s => s.IsReverse)
-                .Select(s => new
+                .Select(s =>
                 {
-                    name = s.Name.Trim(),
-                    host = s.Host.Trim(),
-                    port = (int)s.Port,
-                    token = s.Token.Trim(),
-                    enabled = s.Enabled,
+                    var item = new Dictionary<string, object?>
+                    {
+                        ["name"] = s.Name.Trim(),
+                        ["host"] = s.Host.Trim(),
+                        ["port"] = (int)s.Port,
+                        ["enabled"] = s.Enabled,
+                    };
+                    ApplyToken(item, s);
+                    return item;
                 })
                 .ToList();
 
             var forward = AllServers
                 .Where(s => !s.IsReverse)
-                .Select(s => new
+                .Select(s =>
                 {
-                    name = s.Name.Trim(),
-                    url = s.Url.Trim(),
-                    token = s.Token.Trim(),
-                    enabled = s.Enabled,
+                    var item = new Dictionary<string, object?>
+                    {
+                        ["name"] = s.Name.Trim(),
+                        ["url"] = s.Url.Trim(),
+                        ["enabled"] = s.Enabled,
+                    };
+                    ApplyToken(item, s);
+                    return item;
                 })
                 .ToList();
 
@@ -201,11 +218,39 @@ public sealed partial class ExternalViewModel : ObservableObject
                 forwardServers = forward,
             }).ConfigureAwait(true);
 
+            foreach (var server in AllServers)
+            {
+                if (server.ClearToken)
+                {
+                    server.HasToken = false;
+                }
+                else if (!string.IsNullOrWhiteSpace(server.TokenInput))
+                {
+                    server.HasToken = true;
+                }
+
+                server.TokenInput = string.Empty;
+                server.ClearToken = false;
+            }
+
             Status = "已保存（反向端口改动需重启生效；正向会立即重连）";
         }
         catch (Exception ex)
         {
             Status = $"保存失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>token 三态：留空 = 不传（保持原值）；勾选清除 = 传空串；输入 = 更新。</summary>
+    private static void ApplyToken(Dictionary<string, object?> target, ExternalServerItem server)
+    {
+        if (server.ClearToken)
+        {
+            target["token"] = string.Empty;
+        }
+        else if (!string.IsNullOrWhiteSpace(server.TokenInput))
+        {
+            target["token"] = server.TokenInput.Trim();
         }
     }
 }
