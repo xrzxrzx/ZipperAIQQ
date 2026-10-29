@@ -71,17 +71,35 @@ public sealed class ChatFilterTests
     }
 
     [Fact]
-    public void AlwaysAllow_bypasses_blacklist()
+    public void Blacklist_wins_over_AlwaysAllow()
     {
-        // 主人所在的群即使被写进黑名单，也仍然放行（#22：主人不该被自己的名单挡掉）
+        // 显式拉黑优先于主人自动放行（D75：拉黑群仍收到回复的真实 bug）
         var filter = new ChatFilter(new ChatFilterOptions
         {
             Blacklist = ["qq:g10", "qq:p10001"],
             AlwaysAllow = ["qq:g10", "qq:p10001"],
         });
 
-        Assert.True(filter.IsAllowed(Group("10")));
-        Assert.True(filter.IsAllowed(Private("10001")));
+        Assert.False(filter.IsAllowed(Group("10")));
+        Assert.False(filter.IsAllowed(Private("10001")));
+    }
+
+    [Fact]
+    public void AlwaysAllow_is_sanitized_against_blacklist()
+    {
+        // 被拉黑的会话不能继续出现在「主人放行」里（D75：UI 与实际判定一致）
+        var filter = new ChatFilter(new ChatFilterOptions
+        {
+            Blacklist = ["qq:g10"],
+            AlwaysAllow = ["qq:g10", "qq:g11"],
+        });
+
+        Assert.DoesNotContain("qq:g10", filter.AlwaysAllow("qq"));
+        Assert.Contains("qq:g11", filter.AlwaysAllow("qq"));
+
+        filter.UpdateAlwaysAllow("qq", ["qq:g10", "qq:g12"]);
+        Assert.DoesNotContain("qq:g10", filter.AlwaysAllow("qq"));
+        Assert.Contains("qq:g12", filter.AlwaysAllow("qq"));
     }
 
     [Fact]
@@ -147,17 +165,17 @@ public sealed class ChatFilterTests
     }
 
     [Fact]
-    public void AlwaysAllow_prefix_wildcard_bypasses_blacklist()
+    public void Blacklist_prefix_wildcard_wins_over_AlwaysAllow()
     {
         var filter = new ChatFilter(new ChatFilterOptions
         {
-            Blacklist = ["qq:g*"],
+            Blacklist = ["qq:g1*"],
             AlwaysAllow = ["qq:g1*"],
         });
 
-        // 主人所在的群（qq:g1xxx）即使被黑名单通配覆盖，也放行
-        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "1234" }));
-        Assert.False(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "2345" }));
+        // 主人所在的群只要命中黑名单通配就拒绝；没被拉黑的群不受影响
+        Assert.False(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "1234" }));
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "2345" }));
     }
 
     [Fact]
@@ -224,9 +242,9 @@ public sealed class ChatFilterTests
     {
         var filter = new ChatFilter(new ChatFilterOptions { Blacklist = ["qq:g10"] });
 
-        filter.UpdateAlwaysAllow("qq", ["qq:g10"]);
+        filter.UpdateAlwaysAllow("qq", ["qq:g11"]);
 
-        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "10" }));
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "11" }));
         Assert.Empty(filter.AlwaysAllow("douyin"));
     }
 

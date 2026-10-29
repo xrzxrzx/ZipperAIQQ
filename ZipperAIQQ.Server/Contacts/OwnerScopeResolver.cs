@@ -109,7 +109,16 @@ public sealed class OwnerScopeResolver : BackgroundService, IOwnerScope
             var platformAllow = new List<string>();
             if (!string.IsNullOrWhiteSpace(owner))
             {
-                platformAllow.Add($"{platform}:p{owner}");
+                // 黑名单优先：被显式拉黑的会话不再进「主人放行」，免得 UI 显示"已放行"但实际被拦
+                var blacklist = _filter.Blacklist(platform);
+                bool IsBlacklisted(string sessionId) =>
+                    blacklist.Any(pattern => ChatFilter.IsMatch(pattern, sessionId));
+
+                var ownerPrivate = $"{platform}:p{owner}";
+                if (!IsBlacklisted(ownerPrivate))
+                {
+                    platformAllow.Add(ownerPrivate);
+                }
 
                 try
                 {
@@ -125,10 +134,16 @@ public sealed class OwnerScopeResolver : BackgroundService, IOwnerScope
                     {
                         ct.ThrowIfCancellationRequested();
 
+                        var groupSession = $"{platform}:g{group.GroupId}";
+                        if (IsBlacklisted(groupSession))
+                        {
+                            continue;
+                        }
+
                         var members = await directory.GetGroupMembersAsync(group.GroupId, ct).ConfigureAwait(false);
                         if (members.Any(m => string.Equals(m.UserId, owner, StringComparison.Ordinal)))
                         {
-                            platformAllow.Add($"{platform}:g{group.GroupId}");
+                            platformAllow.Add(groupSession);
                         }
                     }
                 }
