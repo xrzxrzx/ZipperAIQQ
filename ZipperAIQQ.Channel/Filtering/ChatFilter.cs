@@ -22,7 +22,7 @@ public enum ChatListMode
 /// <remarks>
 /// <para>
 /// 黑白两份名单**可以同时存在**，但同一条目不能同时出现在两边（互斥）。
-/// 判定顺序见 <see cref="ChatFilter.IsAllowed"/>：主人放行 → 黑名单拒绝 → 白名单要求。
+/// 判定顺序见 <see cref="ChatFilter.IsAllowed"/>：黑名单拒绝 → 主人放行 → 白名单要求。
 /// </para>
 /// <para>
 /// 空名单语义：**两份都空 = 全放行**（与旧的「黑名单 + 空」等价）。
@@ -94,13 +94,17 @@ public interface IChatFilter
 /// <see cref="IChatFilter"/> 的默认实现：精确匹配 <see cref="ChatRef.SessionId"/>，**按平台分桶**。
 /// </summary>
 /// <remarks>
-/// <para>判定顺序（问题记录 #20 / #22 定稿）：</para>
+/// <para>判定顺序（问题记录 #20 / #22 定稿；2026-10-29 修正）：</para>
 /// <list type="number">
-///   <item>在 <c>AlwaysAllow</c> 里 → **放行**</item>
-///   <item>在黑名单里 → **拒绝**（黑名单优先于白名单）</item>
+///   <item>在黑名单里 → **拒绝**（**黑名单优先于一切自动放行**）</item>
+///   <item>在 <c>AlwaysAllow</c> 里 → **放行**（主人私聊 / 主人所在群，只用于绕过白名单）</item>
 ///   <item>白名单非空且不在白名单 → **拒绝**</item>
 ///   <item>其余 → **放行**</item>
 /// </list>
+/// <para>
+/// ⚠️ 为什么黑名单在前：用户显式拉黑的群，不能因为「主人也在群里」被自动放行悄悄捞回来
+/// （实际 bug：拉黑群仍能收到回复，见 D75）。主人放行只负责「不被白名单误伤」，不是免责金牌。
+/// </para>
 /// <para>
 /// ⚠️ 不提供「空 = 不过滤」这种模式 —— 那会让「我配了名单」和「我没配」表现一样，
 /// 而用户永远分不清自己到底配没配。两份都空是唯一放行全体的情形。
@@ -135,7 +139,7 @@ public sealed class ChatFilter : IChatFilter
         ArgumentException.ThrowIfNullOrWhiteSpace(platform);
 
         Validate(options);
-        _buckets[platform] = Bucket.From(options);
+        _buckets[platform] = Bucket.From(Sanitize(options));
     }
 
     public int WhitelistCount(string platform) => For(platform).Whitelist.Count;
@@ -155,14 +159,15 @@ public sealed class ChatFilter : IChatFilter
         var id = chat.SessionId;
         var bucket = For(chat.Platform);
 
-        if (Matches(bucket.AlwaysAllow, id))
-        {
-            return true;
-        }
-
+        // 黑名单优先于一切自动放行：显式拉黑不能被「主人所在群」捞回来
         if (Matches(bucket.Blacklist, id))
         {
             return false;
+        }
+
+        if (Matches(bucket.AlwaysAllow, id))
+        {
+            return true;
         }
 
         // 白名单非空 = 只收名单内；白名单为空 = 不限定（黑名单仍生效）
@@ -214,7 +219,7 @@ public sealed class ChatFilter : IChatFilter
         ArgumentException.ThrowIfNullOrWhiteSpace(platform);
         Validate(options);
 
-        var bucket = Bucket.From(options);
+        var bucket = Bucket.From(Sanitize(options));
         lock (_gate)
         {
             _buckets[platform.Trim()] = bucket;
@@ -231,9 +236,24 @@ public sealed class ChatFilter : IChatFilter
         {
             var key = platform.Trim();
             var current = _buckets.TryGetValue(key, out var existing) ? existing : Bucket.Empty;
-            _buckets[key] = current with { AlwaysAllow = alwaysAllow };
+
+            // 黑名单优先：写入前就把被拉黑的条目剔掉，UI 的「主人放行」才不会显示假放行
+            var filtered = alwaysAllow
+                .Where(entry => !current.Blacklist.Any(blocked => IsMatch(blocked, entry)))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            _buckets[key] = current with { AlwaysAllow = filtered };
         }
     }
+
+    /// <summary>把「主人自动放行」里已被黑名单覆盖的条目剔掉（黑名单优先，D75）。</summary>
+    private static ChatFilterOptions Sanitize(ChatFilterOptions options) =>
+        options with
+        {
+            AlwaysAllow = options.AlwaysAllow
+                .Where(entry => !options.Blacklist.Any(blocked => IsMatch(blocked, entry)))
+                .ToList(),
+        };
 
     /// <summary>
     /// 互斥校验（#20）：同一条目不能同时出现在白名单与黑名单。

@@ -71,7 +71,7 @@
                     <controls:MultiSelectList ItemsSource="{x:Bind Vm.ListCandidates}"
                                               SelectedValues="{x:Bind Vm.BlacklistSelected, Mode=OneWay}" />
 
-                    <TextBlock Text="主人放行（自动，不受名单影响）" FontWeight="SemiBold" />
+                    <TextBlock Text="主人放行（自动；黑名单优先）" FontWeight="SemiBold" />
                     <TextBlock Text="{x:Bind Vm.AlwaysAllowText, Mode=OneWay}"
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
