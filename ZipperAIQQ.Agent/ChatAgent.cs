@@ -5,10 +5,12 @@ using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Memory;
+using ZipperAIQQ.Agent.Reply;
 using ZipperAIQQ.Agent.Search;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Channel.Models;
 using System.Text;
 using ZipperAIQQ.Core.Events;
@@ -225,6 +227,15 @@ public sealed class ChatAgent : IChatAgent
     private int _compressing;
 
     /// <summary>
+    /// 本轮最后一次发送失败的原因（<c>send_message</c> 工具回填）。
+    /// </summary>
+    /// <remarks>
+    /// 只用来回答一个问题：**这次「一条都没发出去」是不是通道的错**。
+    /// 是的话就不该再调模型重试 —— 通道坏了，模型说什么都发不出去（11-05 每次循环白烧一次调用）。
+    /// </remarks>
+    private FailureKind? _lastSendFailure;
+
+    /// <summary>
     /// 后台尝试压缩摘要。
     /// </summary>
     /// <remarks>
@@ -390,6 +401,7 @@ public sealed class ChatAgent : IChatAgent
 
         // send_message 绑定当前会话（模型无法指定发给谁）
         var sent = 0;
+        _lastSendFailure = null;
         var tool = SendMessageTool.Create(
             _channel,
             _store,
@@ -399,7 +411,8 @@ public sealed class ChatAgent : IChatAgent
             ct => _sendThrottle.WaitAsync(_options.MinSendIntervalMs, ct),
             _faces,
             _metrics,
-            n => sent += n);
+            n => sent += n,
+            kind => _lastSendFailure = kind);
 
         var chatOptions = new ChatOptions
         {
@@ -412,9 +425,15 @@ public sealed class ChatAgent : IChatAgent
         {
             response = await CallLlmAsync(messages, chatOptions, "llm.call", ct).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 取消是调用方的决定，不算失败 —— 否则会污染失败计数
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.Error(ex, "调用模型失败（会话 {SessionId}）", SessionId);
+            await RecordLlmFailureAsync(ex).ConfigureAwait(false);
             return new AgentRunResult(null, 0);
         }
 
@@ -426,7 +445,10 @@ public sealed class ChatAgent : IChatAgent
         // 硬规矩：**只在没有副作用时才重试**。sent == 0 说明本轮什么都没发出去，
         // 重跑整条链是安全的；一旦本轮已经发过消息，重跑就可能把同样的话再发一遍 ——
         // 宁可这一轮答得不好，也不能让消息重复。
-        if (sent == 0 && !string.IsNullOrWhiteSpace(finalText))
+        // 通道坏了：不再重试（模型说什么都发不出去），也别浪费一次调用
+        var channelDown = _lastSendFailure is { } lastKind && SendFailureClassifier.IsChannelDown(lastKind);
+
+        if (DriftRetryPolicy.ShouldRetry(sent, finalText, _lastSendFailure))
         {
             activity?.SetTag("drift.detected", "no_tool_call");
             PublishEvent(new DriftDetectedEvent(SessionId, BeijingTime.Now, "instruction", "no_tool_call"));
@@ -451,10 +473,19 @@ public sealed class ChatAgent : IChatAgent
             }
         }
 
+        else if (channelDown)
+        {
+            // 通道坏了：这次不重试。日志留痕，便于对照「少烧了多少次调用」。
+            activity?.SetTag("drift.skipped", "channel_down");
+            _logger.Warning(
+                "通道不可用（{Kind}），跳过漂移重试（会话 {SessionId}）",
+                _lastSendFailure, SessionId);
+        }
+
         // ══════ §8.3 降级：连续 2 次都没调工具 → 由我们代发 ══════
         // 兜底不是"随便发发"：表情照样解析、按空行分条，与 send_message 工具**同一套解析**。
         // （上一版这里直接拼 TextSegment，结果表情变字面量、几句话挤成一条 —— 实测抓到的 bug。）
-        if (sent == 0 && !string.IsNullOrWhiteSpace(finalText))
+        if (sent == 0 && !string.IsNullOrWhiteSpace(finalText) && !channelDown)
         {
             var parts = MessageContentParser.SplitByBlankLine(finalText, _options.MaxMessagesPerCall);
 
@@ -861,6 +892,31 @@ public sealed class ChatAgent : IChatAgent
             response.Usage?.CachedInputTokenCount), ct).ConfigureAwait(false);
 
         return response;
+    }
+
+    /// <summary>
+    /// 记一次「模型调用失败」。
+    /// </summary>
+    /// <remarks>
+    /// 旧实现只写日志、不落指标 —— 于是「失败了多少次」在数据页永远看不见，
+    /// 事故复盘只能翻日志。分类结果（<see cref="FailureKind"/>）也一并写日志，
+    /// 方便区分「模型 5xx」和「报文被拒」。
+    /// </remarks>
+    private async Task RecordLlmFailureAsync(Exception exception)
+    {
+        var kind = SendFailureClassifier.Classify(exception);
+        _logger.Warning("模型调用失败归类：{Kind}（会话 {SessionId}）", kind, SessionId);
+
+        try
+        {
+            await _metrics
+                .RecordAsync(new MetricEntry(SessionId, "llm.fail", 0), CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "记录模型失败指标失败（会话 {SessionId}）", SessionId);
+        }
     }
 
     /// <summary>

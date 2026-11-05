@@ -7,6 +7,9 @@ public static class MetricKinds
 {
     public const string LlmCall = "llm.call";
     public const string LlmRetry = "llm.retry";
+
+    /// <summary>模型调用失败（含分类原因写日志；指标只记次数）。</summary>
+    public const string LlmFail = "llm.fail";
     public const string Retrieval = "retrieval";
     public const string RetrievalHit = "retrieval.hit";
     public const string JevJudge = "jev.judge";

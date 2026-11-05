@@ -19,6 +19,7 @@ public static class MetricKindCatalog
     {
         ["llm.call"] = "LLM 调用",
         ["llm.retry"] = "LLM 重试（漂移纠正）",
+        ["llm.fail"] = "LLM 调用失败",
         ["retrieval"] = "记忆检索",
         ["retrieval.hit"] = "检索命中",
         ["jev.judge"] = "JEV 判断",

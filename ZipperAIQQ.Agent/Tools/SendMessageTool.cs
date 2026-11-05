@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Core.Time;
@@ -30,7 +31,8 @@ public static class SendMessageTool
         Func<CancellationToken, Task> waitInterval,
         FaceCatalog faces,
         IMetricsStore metrics,
-        Action<int> onSent)
+        Action<int> onSent,
+        Action<FailureKind>? onFailure = null)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
@@ -94,6 +96,8 @@ public static class SendMessageTool
                     }
                     catch (Exception ex)
                     {
+                        // 把「为什么失败」报给上层：Agent 靠它决定要不要再问模型（问题记录 04 #7）。
+                        onFailure?.Invoke(SendFailureClassifier.Classify(ex));
                         failures.Add(ex.Message);
                     }
                 }
