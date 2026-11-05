@@ -85,6 +85,17 @@ public sealed class SqliteBalanceStore : IBalanceStore
         }, ct);
     }
 
+    public Task<int> PurgeBeforeAsync(DateTimeOffset before, CancellationToken ct = default)
+    {
+        return _db.WriteAsync(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM BalanceSamples WHERE SampledAtMs < @beforeMs;";
+            cmd.Parameters.AddWithValue("@beforeMs", before.ToUnixTimeMilliseconds());
+            return await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        }, ct);
+    }
+
     private static BalanceSample Read(Microsoft.Data.Sqlite.SqliteDataReader reader) => new(
         reader.GetString(0),
         reader.GetString(1),

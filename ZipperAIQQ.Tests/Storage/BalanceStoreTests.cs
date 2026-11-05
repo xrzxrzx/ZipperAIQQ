@@ -54,6 +54,18 @@ public sealed class BalanceStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Purge_removes_only_old_samples()
+    {
+        await _store.AppendAsync(Sample(100, 0));
+        await _store.AppendAsync(Sample(99, 10));
+
+        var removed = await _store.PurgeBeforeAsync(Start.AddMinutes(5));
+
+        Assert.Equal(1, removed);
+        Assert.Single(await _store.ListSinceAsync("deepseek", Start.AddMinutes(-1)));
+    }
+
+    [Fact]
     public async Task Since_filter_excludes_old_samples()
     {
         await _store.AppendAsync(Sample(100, 0));

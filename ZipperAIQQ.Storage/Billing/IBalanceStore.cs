@@ -11,4 +11,7 @@ public interface IBalanceStore
 
     /// <summary>最近一次采样；没有则 null。</summary>
     Task<BalanceSample?> LatestAsync(string provider, CancellationToken ct = default);
+
+    /// <summary>删掉早于 <paramref name="before"/> 的采样；返回删除条数。</summary>
+    Task<int> PurgeBeforeAsync(DateTimeOffset before, CancellationToken ct = default);
 }

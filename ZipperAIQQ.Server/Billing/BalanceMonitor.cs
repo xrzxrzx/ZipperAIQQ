@@ -121,6 +121,9 @@ public sealed class BalanceMonitor : BackgroundService
             .ConfigureAwait(false);
 
         await _balance.AppendAsync(sample, ct).ConfigureAwait(false);
+
+        // 保留期：90 天。余额曲线是排障用的，不是账本 —— 留太久只会让库变大。
+        await _balance.PurgeBeforeAsync(BeijingTime.Now.AddDays(-90), ct).ConfigureAwait(false);
         _logger.Debug("余额采样：{Total} {Currency}（available={Available}）",
             sample.Total, sample.Currency, sample.IsAvailable);
 

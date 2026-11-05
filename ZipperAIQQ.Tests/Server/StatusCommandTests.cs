@@ -155,6 +155,9 @@ public sealed class StatusCommandTests
 
         public Task<BalanceSample?> LatestAsync(string provider, CancellationToken ct = default) =>
             Task.FromResult(samples.LastOrDefault());
+
+        public Task<int> PurgeBeforeAsync(DateTimeOffset before, CancellationToken ct = default) =>
+            Task.FromResult(0);
     }
 
     private static StatusCommand Command(

@@ -216,6 +216,58 @@
                 </StackPanel>
             </Border>
 
+            <!-- 额度看板（E-8）：本窗口用量 / 余额 / 开关与阈值（保存即生效） -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <TextBlock Text="额度闸门" Style="{StaticResource SectionHeaderStyle}" />
+                        <ToggleSwitch IsOn="{x:Bind Stats.QuotaEnabled, Mode=TwoWay}"
+                                      OnContent="开" OffContent="关" />
+                    </StackPanel>
+
+                    <ProgressBar Value="{x:Bind Stats.QuotaProgressPercent, Mode=OneWay}"
+                                 Maximum="100" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="本窗口已用 / 上限" Style="{StaticResource CaptionStyle}" />
+                            <TextBlock Text="{x:Bind Stats.QuotaSpentText, Mode=OneWay}"
+                                       Style="{StaticResource BodyStyle}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock Text="余额" Style="{StaticResource CaptionStyle}" />
+                            <TextBlock Text="{x:Bind Stats.QuotaRemainingText, Mode=OneWay}"
+                                       Style="{StaticResource BodyStyle}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ComboBox Width="96" Header="窗口"
+                                  SelectedValue="{x:Bind Stats.QuotaWindow, Mode=TwoWay}"
+                                  SelectedValuePath="Tag">
+                            <ComboBoxItem Content="小时" Tag="hour" />
+                            <ComboBoxItem Content="日" Tag="day" />
+                            <ComboBoxItem Content="月" Tag="month" />
+                        </ComboBox>
+                        <TextBox Header="上限（元）" Width="110"
+                                 Text="{x:Bind Stats.QuotaLimitText, Mode=TwoWay}" />
+                        <TextBox Header="预警比例" Width="110"
+                                 Text="{x:Bind Stats.QuotaWarnText, Mode=TwoWay}" />
+                        <Button Content="保存额度"
+                                Command="{x:Bind Stats.SaveQuotaCommand}"
+                                Style="{StaticResource JpButtonStyle}"
+                                VerticalAlignment="Bottom" />
+                    </StackPanel>
+
+                    <TextBlock Text="{x:Bind Stats.QuotaStatusLine, Mode=OneWay}"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
             <!-- 最近告警（D-6）：出过什么事、送没送到，一眼能看到 -->
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="8">
