@@ -122,6 +122,7 @@ public static partial class ServiceRegistration
                 Schedules = sp.GetRequiredService<IScheduleStore>(),
                 // 平台专用工具（抖音）靠它按平台取联系人目录
                 PlatformContacts = sp.GetRequiredService<IPlatformContacts>(),
+                ChannelHealth = sp.GetRequiredService<ZipperAIQQ.Agent.IChannelHealthLookup>(),
                 Options = BuildAgentOptions(options),
                 Logger = sp.GetRequiredService<ILogger>(),
             };

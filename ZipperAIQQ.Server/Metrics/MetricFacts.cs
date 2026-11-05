@@ -10,6 +10,9 @@ public static class MetricKinds
 
     /// <summary>模型调用失败（含分类原因写日志；指标只记次数）。</summary>
     public const string LlmFail = "llm.fail";
+
+    /// <summary>通道熔断导致整轮被跳过（F-3）：记一次，便于看「省了多少」。</summary>
+    public const string AgentShortCircuit = "agent.shortcircuit";
     public const string Retrieval = "retrieval";
     public const string RetrievalHit = "retrieval.hit";
     public const string JevJudge = "jev.judge";

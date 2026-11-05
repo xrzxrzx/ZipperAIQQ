@@ -57,6 +57,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
+    private readonly IChannelHealthLookup? _channelHealth;
 
     /// <summary>按平台查主人（Server 用 AccessSettings 实现）；不传时退回旧键逻辑。</summary>
     private readonly IOwnerLookup? _ownerLookup;
@@ -107,6 +108,7 @@ public sealed class ChatAgent : IChatAgent
         _configs = configs;
         _settings = settings;
         _roles = deps.Roles;
+        _channelHealth = deps.ChannelHealth;
         _ownerLookup = deps.OwnerLookup;
         _workspace = deps.Workspace;
         _platformContacts = deps.PlatformContacts;
@@ -279,6 +281,30 @@ public sealed class ChatAgent : IChatAgent
         using var activity = AgentTelemetry.Source.StartActivity("agent.run");
         activity?.SetTag("session.id", SessionId);
         activity?.SetTag("chat.type", request.Chat.Type.ToString());
+
+        // 通道熔断 + 非关键轮次：别再叫模型（发了也发不出去）
+        if (TurnShortCircuit.ShouldSkip(
+                _channelHealth?.IsChannelDown(request.Chat.Platform) == true,
+                CallPurposeScope.Current))
+        {
+            activity?.SetTag("agent.shortcircuit", CallPurposeScope.Current.ToString());
+            _logger.Warning(
+                "通道 {Platform} 熔断中，跳过本轮（用途 {Purpose}，会话 {SessionId}）",
+                request.Chat.Platform, CallPurposeScope.Current, SessionId);
+
+            try
+            {
+                await _metrics
+                    .RecordAsync(new MetricEntry(SessionId, "agent.shortcircuit", 0), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug(ex, "记录短路指标失败");
+            }
+
+            return new AgentRunResult(null, 0);
+        }
 
         // 会话从库恢复（M1-C 遗留的补做）：实例存活期内只做一次。
         // 放在打 hot.window 标签之前，否则标签永远显示 0。

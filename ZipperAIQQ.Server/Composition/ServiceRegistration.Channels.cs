@@ -113,6 +113,7 @@ public static partial class ServiceRegistration
         services.AddHttpClient(nameof(Billing.BalanceMonitor));
         services.AddSingleton<Api.IApiAction, Api.Handlers.GetAlertsAction>();
         services.AddSingleton<IRecoverableChannel>(sp => sp.GetRequiredService<NapCatChannel>());
+        services.AddSingleton<ZipperAIQQ.Agent.IChannelHealthLookup, ChannelHealthLookup>();
         services.AddHostedService<ChannelSupervisor>();
 
         // ── 抖音通道（S3-E / 决策二）：sidecar 连入后由 /ws/channel 调 AttachAsync ──
