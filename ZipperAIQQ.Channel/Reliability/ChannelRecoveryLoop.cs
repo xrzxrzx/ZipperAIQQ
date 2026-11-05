@@ -45,6 +45,9 @@ public sealed class ChannelRecoveryLoop
     /// <summary>时钟（测试可替换）。</summary>
     public Func<DateTimeOffset> Clock { get; init; } = () => DateTimeOffset.UtcNow;
 
+    /// <summary>通道状态变化回调（熔断 / 恢复）—— 告警层从这里接。</summary>
+    public Action<ChannelAlert>? OnAlert { get; init; }
+
     /// <summary>等待（测试可替换成"立即返回"）。</summary>
     public Func<TimeSpan, CancellationToken, Task> Delay { get; init; } = Task.Delay;
 
@@ -67,6 +70,7 @@ public sealed class ChannelRecoveryLoop
                         // 断开时长是「事后核对」的关键证据（验收口径要求日志里能看到）
                         var downtime = Clock() - since;
                         _monitor.RecordRecovered(downtime);
+                        OnAlert?.Invoke(new ChannelAlert(_channel.Platform, Opened: false, 0, downtime));
                         _logger.Information(
                             "{Platform} 通道已恢复：断开 {Seconds:F0} 秒",
                             _channel.Platform, downtime.TotalSeconds);
@@ -109,9 +113,11 @@ public sealed class ChannelRecoveryLoop
 
                 if (recovered)
                 {
-                    if (disconnectedAt is { } since)
+                    var downtime = disconnectedAt is { } since ? Clock() - since : TimeSpan.Zero;
+                    if (disconnectedAt is not null)
                     {
-                        _monitor.RecordRecovered(Clock() - since);
+                        _monitor.RecordRecovered(downtime);
+                        OnAlert?.Invoke(new ChannelAlert(_channel.Platform, Opened: false, 0, downtime));
                     }
 
                     disconnectedAt = null;
@@ -125,6 +131,8 @@ public sealed class ChannelRecoveryLoop
                 var openedNow = _monitor.RecordFailure(FailureKind.ChannelUnavailable, Clock());
                 if (openedNow)
                 {
+                    OnAlert?.Invoke(new ChannelAlert(
+                        _channel.Platform, Opened: true, _monitor.ConsecutiveFailures, null));
                     _logger.Warning(
                         "{Platform} 通道连续失败达阈值，熔断 {Cooldown}（不再重试）",
                         _channel.Platform,

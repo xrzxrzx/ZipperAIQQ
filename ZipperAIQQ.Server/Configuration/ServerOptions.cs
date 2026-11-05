@@ -168,6 +168,9 @@ public sealed record ServerOptions
     /// </remarks>
     public Mail.MailOptions Mail { get; init; } = new();
 
+    /// <summary>告警策略（<c>alerts</c> 配置节）：抑制窗口。</summary>
+    public Alerts.AlertOptions Alerts { get; init; } = new();
+
     /// <summary>通道可靠性参数（<c>channel</c> 配置节）：巡检 / 退避 / 熔断阈值。</summary>
     public ChannelReliabilityOptions ChannelReliability { get; init; } = new();
 

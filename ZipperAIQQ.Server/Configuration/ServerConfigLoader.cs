@@ -123,6 +123,12 @@ public static class ServerConfigLoader
                 QueryTimeoutMs = s.Int("douyin", "queryTimeoutMs", o.Douyin.QueryTimeoutMs),
             },
 
+            // ── alerts（告警抑制窗口）──
+            Alerts = o.Alerts with
+            {
+                SuppressMinutes = s.Int("alerts", "suppressMinutes", o.Alerts.SuppressMinutes),
+            },
+
             // ── channel（通道可靠性：巡检 / 退避 / 熔断）──
             ChannelReliability = o.ChannelReliability with
             {

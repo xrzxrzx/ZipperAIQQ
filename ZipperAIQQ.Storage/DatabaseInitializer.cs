@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 13;
+    public const int CurrentSchemaVersion = 14;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -57,6 +57,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, RuntimeSettingsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, NoticesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, MailTables, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, AlertTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -323,6 +324,35 @@ public sealed class DatabaseInitializer
     /// <c>NextRunAtMs</c> 存 **UTC Unix 毫秒**；显示与解析一律北京时间（FR-15.3）。
     /// </para>
     /// </remarks>
+    /// <summary>告警投递记录 + 主人跨平台账号镜像（D 批）。</summary>
+    private const string AlertTables = """
+        CREATE TABLE IF NOT EXISTS Alerts (
+            Id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            Kind        TEXT    NOT NULL,
+            Platform    TEXT,
+            Target      TEXT,
+            Ok          INTEGER NOT NULL,
+            Error       TEXT,
+            CreatedAtMs INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_Alerts_Kind_Platform
+            ON Alerts (Kind, Platform, CreatedAtMs);
+
+        CREATE TABLE IF NOT EXISTS OwnerIdentities (
+            Id          INTEGER PRIMARY KEY,
+            DisplayName TEXT,
+            CreatedAtMs INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS OwnerAccounts (
+            IdentityId INTEGER NOT NULL,
+            Platform   TEXT    NOT NULL,
+            UserId     TEXT    NOT NULL,
+            PRIMARY KEY (IdentityId, Platform, UserId)
+        );
+        """;
+
     private const string ScheduleTasksTable = """
         CREATE TABLE IF NOT EXISTS ScheduleTasks (
             Id              INTEGER PRIMARY KEY AUTOINCREMENT,

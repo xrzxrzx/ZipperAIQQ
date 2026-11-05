@@ -91,6 +91,12 @@ public static partial class ServiceRegistration
 
         // 通道健康与看门狗：平台只实现 IRecoverableChannel，循环/退避/熔断共用一份
         services.AddSingleton<ChannelHealthRegistry>();
+
+        // 告警：投递记录 + 主人跨平台账号镜像 + 投递服务（D 批）
+        services.AddSingleton<Storage.Alerts.IAlertStore, Storage.Alerts.SqliteAlertStore>();
+        services.AddSingleton<Storage.Owners.IOwnerAccountStore, Storage.Owners.SqliteOwnerAccountStore>();
+        services.AddSingleton<Alerts.OwnerAlertService>();
+        services.AddSingleton<Api.IApiAction, Api.Handlers.GetAlertsAction>();
         services.AddSingleton<IRecoverableChannel>(sp => sp.GetRequiredService<NapCatChannel>());
         services.AddHostedService<ChannelSupervisor>();
 

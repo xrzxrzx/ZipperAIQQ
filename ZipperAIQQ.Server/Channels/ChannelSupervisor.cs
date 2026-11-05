@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using ZipperAIQQ.Channel.Reliability;
+using ZipperAIQQ.Core.Time;
+using ZipperAIQQ.Server.Alerts;
 using ZipperAIQQ.Server.Configuration;
 
 namespace ZipperAIQQ.Server.Channels;
@@ -25,21 +27,25 @@ public sealed class ChannelSupervisor : BackgroundService
     private readonly ILogger _logger;
 
     private readonly ChannelReliabilityOptions _options;
+    private readonly OwnerAlertService _alerts;
 
     public ChannelSupervisor(
         IEnumerable<IRecoverableChannel> channels,
         ChannelHealthRegistry health,
         ChannelReliabilityOptions options,
+        OwnerAlertService alerts,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channels);
         ArgumentNullException.ThrowIfNull(health);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(alerts);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channels = channels.ToList();
         _health = health;
         _options = options;
+        _alerts = alerts;
         _logger = logger;
     }
 
@@ -65,6 +71,29 @@ public sealed class ChannelSupervisor : BackgroundService
                     _logger)
                 {
                     PollInterval = TimeSpan.FromSeconds(_options.PollSeconds),
+                    OnAlert = alert =>
+                    {
+                        // 告警投递是 IO，不能拖住恢复循环
+                        _ = Task.Run(async () =>
+                        {
+                            try
+                            {
+                                var text = alert.Opened
+                                    ? $"⚠️ 通道 {alert.Platform} 已熔断（连续失败 {alert.Failures} 次），正在退避重试。"
+                                    : $"✅ 通道 {alert.Platform} 已恢复（断开 {alert.Downtime?.TotalSeconds ?? 0:F0} 秒）。";
+
+                                await _alerts.RaiseAsync(new AlertMessage(
+                                    alert.Opened ? AlertKind.ChannelDown : AlertKind.ChannelRecovered,
+                                    alert.Platform,
+                                    text,
+                                    BeijingTime.Now), CancellationToken.None).ConfigureAwait(false);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.Warning(ex, "通道告警投递失败（{Platform}）", alert.Platform);
+                            }
+                        });
+                    },
                 };
 
                 return loop.RunAsync(stoppingToken);
