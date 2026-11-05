@@ -24,6 +24,8 @@ public sealed class ChannelHealthMonitor
     private CircuitState _state = CircuitState.Closed;
     private int _consecutiveFailures;
     private DateTimeOffset? _openedAt;
+    private long _disconnectCount;
+    private TimeSpan? _lastDowntime;
 
     public ChannelHealthMonitor(
         string platform,
@@ -70,6 +72,42 @@ public sealed class ChannelHealthMonitor
             {
                 return _openedAt;
             }
+        }
+    }
+
+    /// <summary>观察到的断开次数（恢复过一次算一次）。</summary>
+    public long DisconnectCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _disconnectCount;
+            }
+        }
+    }
+
+    /// <summary>最近一次从断到通的时长；从没断过则为 <c>null</c>。</summary>
+    public TimeSpan? LastDowntime
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastDowntime;
+            }
+        }
+    }
+
+    /// <summary>记录一次「断开 → 恢复」：次数 +1，时长留档（C-6 的可观测部分）。</summary>
+    public void RecordRecovered(TimeSpan downtime)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(downtime, TimeSpan.Zero);
+
+        lock (_gate)
+        {
+            _disconnectCount++;
+            _lastDowntime = downtime;
         }
     }
 

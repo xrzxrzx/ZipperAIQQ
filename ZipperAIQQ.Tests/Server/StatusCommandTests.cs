@@ -2,7 +2,10 @@ using Microsoft.Extensions.AI;
 using ZipperAIQQ.Agent;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Security;
+using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Channel.Reliability;
+using ZipperAIQQ.Server.Channels;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Storage.Messages;
@@ -114,21 +117,32 @@ public sealed class StatusCommandTests
 
     // ── 构造 ──
 
+    private sealed class FakeRecoverable(string platform, bool connected) : IRecoverableChannel
+    {
+        public string Platform => platform;
+        public bool IsConnected => connected;
+        public Task<bool> TryRecoverAsync(CancellationToken ct) => Task.FromResult(IsConnected);
+    }
+
+    private static ServerOptions Options => new()
+    {
+        NapCatWebSocketUrl = "ws://127.0.0.1:1",
+        LlmApiKey = "test",
+        LlmBaseUrl = "https://api.example",
+        LlmModel = "deepseek-chat",
+    };
+
     private static StatusCommand Command(
         IReplyModeDecider modes,
         params MetricSummary[] rows) =>
-        new(
-            new FakeMetrics(rows),
-            new FakeMessages(),
-            new ServerOptions
-            {
-                NapCatWebSocketUrl = "ws://127.0.0.1:1",
-                LlmApiKey = "test",
-                LlmBaseUrl = "https://api.example",
-                LlmModel = "deepseek-chat",
-            },
-            new FakeClients(),
-            modes);
+        Command(modes, new ChannelHealthRegistry(new ChannelReliabilityOptions()), [new FakeRecoverable("qq", true)], rows);
+
+    private static StatusCommand Command(
+        IReplyModeDecider modes,
+        ChannelHealthRegistry health,
+        IReadOnlyList<IRecoverableChannel> channels,
+        params MetricSummary[] rows) =>
+        new(new FakeMetrics(rows), new FakeMessages(), Options, new FakeClients(), modes, health, channels);
 
     private static CommandContext Context() => new(
         new ChatRef { Platform = "qq", Type = ChatType.Private, Id = "1" },
@@ -239,6 +253,31 @@ public sealed class StatusCommandTests
 
         Assert.Contains("缓存命中率：60%", text);
         Assert.Contains("缓存 600", text);
+    }
+
+    [Fact]
+    public async Task Channel_row_shows_circuit_state()
+    {
+        var health = new ChannelHealthRegistry(new ChannelReliabilityOptions());
+        var monitor = health.Get("qq");
+        for (var i = 0; i < 3; i++)
+        {
+            monitor.RecordFailure(FailureKind.ChannelUnavailable, DateTimeOffset.UtcNow);
+        }
+
+        var text = await Command(FakeReplyModes.Of(ReplyMode.Every), health, [new FakeRecoverable("qq", false)])
+            .ExecuteAsync(Context(), string.Empty);
+
+        Assert.Contains("通道 qq：熔断（连续失败 3 次）", text);
+    }
+
+    [Fact]
+    public async Task Channel_row_says_disconnected_when_not_connected()
+    {
+        var text = await Command(FakeReplyModes.Of(ReplyMode.Every), new ChannelHealthRegistry(new ChannelReliabilityOptions()), [new FakeRecoverable("qq", false)])
+            .ExecuteAsync(Context(), string.Empty);
+
+        Assert.Contains("通道 qq：断开中", text);
     }
 
     /// <summary>与产品常量分开写：测试要能发现「改了一个名字却忘了改另一处」。</summary>

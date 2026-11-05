@@ -54,6 +54,7 @@ public sealed class ChannelRecoveryLoop
     public async Task RunAsync(CancellationToken ct)
     {
         var attempt = 0;
+        DateTimeOffset? disconnectedAt = null;
 
         while (!ct.IsCancellationRequested)
         {
@@ -61,15 +62,28 @@ public sealed class ChannelRecoveryLoop
             {
                 if (_channel.IsConnected)
                 {
+                    if (disconnectedAt is { } since)
+                    {
+                        // 断开时长是「事后核对」的关键证据（验收口径要求日志里能看到）
+                        var downtime = Clock() - since;
+                        _monitor.RecordRecovered(downtime);
+                        _logger.Information(
+                            "{Platform} 通道已恢复：断开 {Seconds:F0} 秒",
+                            _channel.Platform, downtime.TotalSeconds);
+                    }
+
                     if (_monitor.RecordSuccess())
                     {
                         _logger.Information("{Platform} 通道已恢复（连续失败计数清零）", _channel.Platform);
                     }
 
+                    disconnectedAt = null;
                     attempt = 0;
                     await Delay(PollInterval, ct).ConfigureAwait(false);
                     continue;
                 }
+
+                disconnectedAt ??= Clock();
 
                 // 熔断冷却期内不试，等冷却结束再放一次半开探测
                 if (_monitor.State == CircuitState.Open && !_monitor.TryHalfOpen(Clock()))
@@ -95,6 +109,12 @@ public sealed class ChannelRecoveryLoop
 
                 if (recovered)
                 {
+                    if (disconnectedAt is { } since)
+                    {
+                        _monitor.RecordRecovered(Clock() - since);
+                    }
+
+                    disconnectedAt = null;
                     _monitor.RecordSuccess();
                     attempt = 0;
                     _logger.Information("{Platform} 通道重连成功", _channel.Platform);

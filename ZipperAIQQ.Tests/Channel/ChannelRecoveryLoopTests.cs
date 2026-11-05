@@ -92,6 +92,20 @@ public sealed class ChannelRecoveryLoopTests
     }
 
     [Fact]
+    public async Task Recovery_records_downtime_and_count()
+    {
+        var harness = new Harness();
+        harness.Channel.Recover = attempt => attempt >= 2;
+        harness.CancelAfterDelays = 3;
+
+        await harness.Loop.RunAsync(harness.Cts.Token);
+
+        Assert.Equal(1, harness.Monitor.DisconnectCount);
+        Assert.NotNull(harness.Monitor.LastDowntime);
+        Assert.True(harness.Monitor.LastDowntime > TimeSpan.Zero);
+    }
+
+    [Fact]
     public async Task Repeated_failures_back_off_then_open_the_circuit()
     {
         var harness = new Harness();

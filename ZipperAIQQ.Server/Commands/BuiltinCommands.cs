@@ -7,8 +7,10 @@ using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Server.Api.Handlers;
+using ZipperAIQQ.Server.Channels;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Metrics;
+using ZipperAIQQ.Channel.Reliability;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Metrics;
@@ -113,25 +115,51 @@ public sealed class StatusCommand : ICommand, IImageCommand
     private readonly ServerOptions _options;
     private readonly IChatClientProvider _clients;
     private readonly IReplyModeDecider _replyModes;
+    private readonly ChannelHealthRegistry _health;
+    private readonly IReadOnlyList<IRecoverableChannel> _channels;
 
     public StatusCommand(
         IMetricsStore metrics,
         IMessageStore messages,
         ServerOptions options,
         IChatClientProvider clients,
-        IReplyModeDecider replyModes)
+        IReplyModeDecider replyModes,
+        ChannelHealthRegistry health,
+        IEnumerable<IRecoverableChannel> channels)
     {
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(clients);
         ArgumentNullException.ThrowIfNull(replyModes);
+        ArgumentNullException.ThrowIfNull(health);
+        ArgumentNullException.ThrowIfNull(channels);
 
         _metrics = metrics;
         _messages = messages;
         _options = options;
         _clients = clients;
         _replyModes = replyModes;
+        _health = health;
+        _channels = channels.ToList();
+    }
+
+    /// <summary>把通道健康压缩成一行（C-5：`/status` 要能看出「哪个通道断了」）。</summary>
+    private void AppendChannelRows(List<string[]> rows)
+    {
+        foreach (var channel in _channels)
+        {
+            var monitor = _health.Get(channel.Platform);
+            var state = monitor.IsChannelDown
+                ? $"熔断（连续失败 {monitor.ConsecutiveFailures} 次）"
+                : channel.IsConnected ? "正常" : "断开中";
+
+            var extra = monitor.LastDowntime is { } downtime
+                ? $"，上次断开 {downtime.TotalSeconds:F0}s（共 {monitor.DisconnectCount} 次）"
+                : string.Empty;
+
+            rows.Add([$"通道 · {channel.Platform}", state + extra]);
+        }
     }
 
     public string Name => "status";
@@ -176,6 +204,8 @@ public sealed class StatusCommand : ICommand, IImageCommand
             summaryRows.Add(["缓存命中率", cacheText]);
             summaryRows.Add(["检索命中率", hitRate]);
 
+            AppendChannelRows(summaryRows);
+
             // 「启用与否」看**配置**，调用次数单独陈述 —— 两件事合成一句会误导排障
             // （问题记录 04 #2：24h 内 0 次调用 ≠ 未启用）。
             summaryRows.Add(["JEV 判断", jev.ImageText]);
@@ -189,6 +219,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
         else
         {
             summaryRows.Add(["近 24 小时", "无调用记录"]);
+            AppendChannelRows(summaryRows);
             // 没有调用记录时也要能看出「配置里到底开没开」。
             summaryRows.Add(["JEV 判断", jev.ImageText]);
         }
@@ -237,6 +268,18 @@ public sealed class StatusCommand : ICommand, IImageCommand
         var sb = new StringBuilder();
         sb.AppendLine($"**状态** · 模型 `{_clients.CurrentModel ?? _options.LlmModel}` · 本会话 {count} 条消息");
         sb.AppendLine();
+
+        foreach (var channel in _channels)
+        {
+            var monitor = _health.Get(channel.Platform);
+            var state = monitor.IsChannelDown
+                ? $"熔断（连续失败 {monitor.ConsecutiveFailures} 次）"
+                : channel.IsConnected ? "正常" : "断开中";
+            var extra = monitor.LastDowntime is { } downtime
+                ? $"，上次断开 {downtime.TotalSeconds:F0}s（共 {monitor.DisconnectCount} 次）"
+                : string.Empty;
+            sb.AppendLine($"· 通道 {channel.Platform}：{state}{extra}");
+        }
 
         if (facts is null)
         {
