@@ -76,6 +76,10 @@ public sealed class ScheduleAgentExecutorTests
             return Task.CompletedTask;
         }
 
+        public Task<IReadOnlyList<ScheduleExecution>> ListRecentAsync(
+            int limit = 20, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScheduleExecution>>(Rows);
+
         public Task<IReadOnlyList<ScheduleExecution>> ListByTaskAsync(
             long taskId, int limit = 20, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ScheduleExecution>>(Rows);
