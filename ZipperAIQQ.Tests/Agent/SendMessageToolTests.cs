@@ -109,6 +109,9 @@ public sealed class SendMessageToolTests
 
         Assert.Equal([FailureKind.ChannelUnavailable], kinds);
         Assert.Contains("1 条失败", result);
+        // 回给模型的不只是原因，还要有「下一步怎么办」——否则它只会换个说法重发
+        Assert.Contains("通道不可用", result);
+        Assert.Contains("换说法重发也没用", result);
     }
 
     [Fact]
@@ -118,5 +121,6 @@ public sealed class SendMessageToolTests
 
         Assert.Equal([FailureKind.Unknown], kinds);
         Assert.Contains("1 条失败", result);
+        Assert.Contains("不要原样无限重试", result);
     }
 }

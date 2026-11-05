@@ -57,7 +57,7 @@ public static class SendMessageTool
                 }
 
                 var sent = 0;
-                var failures = new List<string>();
+                var failures = new List<(FailureKind Kind, string Message)>();
 
                 using var toolActivity = AgentTelemetry.Source.StartActivity("tool.send_message");
                 toolActivity?.SetTag("message.count", toSend.Length);
@@ -97,8 +97,9 @@ public static class SendMessageTool
                     catch (Exception ex)
                     {
                         // 把「为什么失败」报给上层：Agent 靠它决定要不要再问模型（问题记录 04 #7）。
-                        onFailure?.Invoke(SendFailureClassifier.Classify(ex));
-                        failures.Add(ex.Message);
+                        var kind = SendFailureClassifier.Classify(ex);
+                        onFailure?.Invoke(kind);
+                        failures.Add((kind, ex.Message));
                     }
                 }
 
@@ -110,9 +111,18 @@ public static class SendMessageTool
                     onSent(sent);
                 }
 
-                return failures.Count == 0
-                    ? $"已发送 {sent} 条消息。"
-                    : $"已发送 {sent} 条；{failures.Count} 条失败：{string.Join("；", failures)}";
+                if (failures.Count == 0)
+                {
+                    return $"已发送 {sent} 条消息。";
+                }
+
+                // 回给模型的不只是原因，还有「下一步该怎么办」—— 否则它只会换个说法重发。
+                var details = string.Join("；", failures.Select(f => f.Message));
+                var guidance = string.Join(
+                    " ",
+                    failures.Select(f => f.Kind).Distinct().Select(FailureGuidance.Describe));
+
+                return $"已发送 {sent} 条；{failures.Count} 条失败：{details}。{guidance}";
             },
             name: ToolName,
             description:
