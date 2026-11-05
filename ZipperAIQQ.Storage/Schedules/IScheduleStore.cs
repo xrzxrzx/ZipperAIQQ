@@ -72,4 +72,27 @@ public interface IScheduleStore
 
     /// <summary>待执行任务总数（供状态查询展示）。</summary>
     Task<int> CountPendingAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// 找「同一会话、到期时间落在 <paramref name="nextRunAt"/> ± <paramref name="tolerance"/> 内、
+    /// 且重复方式相同」的**待执行**任务（创建幂等用，问题记录 04 #6）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 只比**时间窗口 + 重复方式**，**不比正文** —— 实测证据（2026-11-05）：
+    /// 库里成对的重复任务文案各不相同（#10「昨天说的那个事」/ #11「先查内核版本」），
+    /// 但到期时间一模一样；#7/#8 只差 1 分钟。按 content 全等去重**拦不住**。
+    /// </para>
+    /// <para>
+    /// 调用方仍需保留「用户确实要在同一时刻做两件不同的事」的出口（见 `schedule_create` 的
+    /// <c>allowDuplicate</c>），否则「8 点吃药 + 8 点开会」会被误拦。
+    /// </para>
+    /// </remarks>
+    Task<ScheduledTask?> FindSimilarAsync(
+        string sessionId,
+        DateTimeOffset nextRunAt,
+        ScheduleRepeat repeat,
+        int intervalMinutes,
+        TimeSpan tolerance,
+        CancellationToken ct = default);
 }

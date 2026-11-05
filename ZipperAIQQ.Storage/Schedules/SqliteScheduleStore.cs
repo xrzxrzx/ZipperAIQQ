@@ -171,6 +171,49 @@ public sealed class SqliteScheduleStore : IScheduleStore
         }, ct);
     }
 
+    public Task<ScheduledTask?> FindSimilarAsync(
+        string sessionId,
+        DateTimeOffset nextRunAt,
+        ScheduleRepeat repeat,
+        int intervalMinutes,
+        TimeSpan tolerance,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentOutOfRangeException.ThrowIfLessThan(tolerance, TimeSpan.Zero);
+
+        var targetMs = nextRunAt.ToUnixTimeMilliseconds();
+        var windowMs = (long)tolerance.TotalMilliseconds;
+
+        return _db.ReadAsync<ScheduledTask?>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            // 只比时间窗 + 重复方式：文案不可靠（模型每次措辞都不同，见 2026-11-05 实查）。
+            cmd.CommandText = """
+                SELECT Id, Platform, ChatType, ChatId, Content, MentionUserId,
+                       RepeatKind, IntervalMinutes, NextRunAtMs, CreatedAtMs, CreatedBy, Status
+                FROM ScheduleTasks
+                WHERE SessionId = @sessionId
+                  AND Status = 0
+                  AND RepeatKind = @repeatKind
+                  AND IntervalMinutes = @intervalMinutes
+                  AND NextRunAtMs BETWEEN @fromMs AND @toMs
+                ORDER BY ABS(NextRunAtMs - @targetMs)
+                LIMIT 1;
+                """;
+
+            cmd.Parameters.AddWithValue("@sessionId", sessionId);
+            cmd.Parameters.AddWithValue("@repeatKind", (int)repeat);
+            cmd.Parameters.AddWithValue("@intervalMinutes", intervalMinutes);
+            cmd.Parameters.AddWithValue("@fromMs", targetMs - windowMs);
+            cmd.Parameters.AddWithValue("@toMs", targetMs + windowMs);
+            cmd.Parameters.AddWithValue("@targetMs", targetMs);
+
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            return await reader.ReadAsync(token).ConfigureAwait(false) ? ReadRow(reader) : null;
+        }, ct);
+    }
+
     private static ScheduledTask ReadRow(SqliteDataReader reader)
     {
         var chat = new ChatRef
