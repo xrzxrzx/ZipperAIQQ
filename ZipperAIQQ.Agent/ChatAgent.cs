@@ -181,14 +181,44 @@ public sealed class ChatAgent : IChatAgent
         ArgumentNullException.ThrowIfNull(request);
 
         await _lock.WaitAsync(ct).ConfigureAwait(false);
+        var turn = Stopwatch.StartNew();
         try
         {
             return await RunCoreAsync(request, ct).ConfigureAwait(false);
         }
         finally
         {
+            turn.Stop();
             _lock.Release();
+            await RecordTurnAsync(turn.Elapsed).ConfigureAwait(false);
             TriggerCompressionInBackground();
+        }
+    }
+
+    /// <summary>
+    /// 记一次**整轮**耗时（含工具循环、漂移重试）。
+    /// </summary>
+    /// <remarks>
+    /// 与 <c>llm.call</c> 分表记：那条是单次 HTTP 往返，这条是「用户实际等了多久」。
+    /// 11-05 的「平均上万毫秒」争议正来自两者被混成一个平均值（问题记录 04 #3）。
+    /// <para>
+    /// 用 <see cref="CancellationToken.None"/>：请求被取消时这一笔仍要落库，
+    /// 否则「超时/取消」的轮次会从统计里凭空消失。
+    /// </para>
+    /// </remarks>
+    private async Task RecordTurnAsync(TimeSpan elapsed)
+    {
+        try
+        {
+            await _metrics
+                .RecordAsync(
+                    new MetricEntry(SessionId, "turn.total", elapsed.TotalMilliseconds),
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "记录整轮耗时失败（会话 {SessionId}）", SessionId);
         }
     }
 

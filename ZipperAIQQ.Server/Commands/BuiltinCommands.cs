@@ -157,7 +157,12 @@ public sealed class StatusCommand : ICommand, IImageCommand
                 : "—";
 
             summaryRows.Add(["LLM 调用", $"{facts.LlmCalls} 次"]);
-            summaryRows.Add(["平均耗时", $"{facts.LlmAvgMs:F0} ms"]);
+            // 平均值 + p95：只有平均值会把长尾抹平，也看不出「偶尔很慢」还是「一半都慢」
+            summaryRows.Add(["单次耗时", $"{facts.LlmAvgMs:F0} ms（p95 {facts.LlmP95Ms:F0} ms）"]);
+            if (facts.TurnCalls > 0)
+            {
+                summaryRows.Add(["整轮耗时", $"{facts.TurnAvgMs:F0} ms（p95 {facts.TurnP95Ms:F0} ms）"]);
+            }
             summaryRows.Add(["Token 输入", $"{facts.InputTokens:N0}"]);
             summaryRows.Add(["Token 输出", $"{facts.OutputTokens:N0}"]);
             summaryRows.Add(["检索命中率", hitRate]);
@@ -188,9 +193,9 @@ public sealed class StatusCommand : ICommand, IImageCommand
         {
             tables.Add(new StatusImageRenderer.Table(
                 "调用类别",
-                ["类别", "次数", "平均耗时"],
+                ["类别", "次数", "平均", "p95"],
                 metrics
-                    .Select(m => new[] { m.Kind, m.Count.ToString(), $"{m.AvgMs:F0} ms" })
+                    .Select(m => new[] { m.Kind, m.Count.ToString(), $"{m.AvgMs:F0} ms", $"{m.P95Ms:F0} ms" })
                     .ToArray()));
         }
 
@@ -232,7 +237,11 @@ public sealed class StatusCommand : ICommand, IImageCommand
             : "—";
 
         sb.AppendLine("【近 24 小时】");
-        sb.AppendLine($"· LLM 调用：{facts.LlmCalls} 次（平均 {facts.LlmAvgMs:F0}ms）");
+        sb.AppendLine($"· LLM 调用：{facts.LlmCalls} 次（单次平均 {facts.LlmAvgMs:F0}ms · p95 {facts.LlmP95Ms:F0}ms）");
+        if (facts.TurnCalls > 0)
+        {
+            sb.AppendLine($"· 整轮耗时：{facts.TurnCalls} 轮（平均 {facts.TurnAvgMs:F0}ms · p95 {facts.TurnP95Ms:F0}ms）");
+        }
         sb.AppendLine($"· Token：输入 {facts.InputTokens:N0} / 输出 {facts.OutputTokens:N0}");
         sb.AppendLine($"· 检索命中率：{hitRate}");
         sb.AppendLine($"· JEV 判断：{jev.TextText}");
@@ -241,7 +250,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
         sb.AppendLine("【调用类别 · 次数 / 平均耗时】");
         foreach (var m in metrics)
         {
-            sb.AppendLine($"· {m.Kind}：{m.Count} 次 / {m.AvgMs:F0} ms");
+            sb.AppendLine($"· {m.Kind}：{m.Count} 次 / 平均 {m.AvgMs:F0} ms / p95 {m.P95Ms:F0} ms");
         }
 
         return sb.ToString().TrimEnd();

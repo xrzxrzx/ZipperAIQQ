@@ -14,6 +14,15 @@ public static class MetricKinds
     public const string Summary = "summary";
     public const string SendMessage = "tool.send_message";
     public const string EmbeddingBackfill = "embedding.backfill";
+
+    /// <summary>
+    /// 一次**完整轮次**的耗时（含工具循环与漂移重试），与 <see cref="LlmCall"/> 的单次往返区分开。
+    /// </summary>
+    /// <remarks>
+    /// 用户看到的等待时间更像这一条；而「模型算得快不快」要看 <see cref="LlmCall"/>。
+    /// 两者混在一列里，就会出现「平均上万毫秒，但这其实是含排队的整轮」这种误读。
+    /// </remarks>
+    public const string TurnTotal = "turn.total";
 }
 
 /// <summary>从 <see cref="MetricSummary"/> 行算出的一批展示/判断口径。</summary>
@@ -37,7 +46,11 @@ public sealed record MetricFacts(
     long JevDegrade,
     long SummaryCount,
     long SendMessage,
-    long EmbeddingBackfill)
+    long EmbeddingBackfill,
+    double LlmP95Ms = 0,
+    long TurnCalls = 0,
+    double TurnAvgMs = 0,
+    double TurnP95Ms = 0)
 {
     public static MetricFacts From(IReadOnlyList<MetricSummary> rows)
     {
@@ -52,6 +65,7 @@ public sealed record MetricFacts(
         var summary = Find(rows, MetricKinds.Summary);
         var sendMessage = Find(rows, MetricKinds.SendMessage);
         var embedding = Find(rows, MetricKinds.EmbeddingBackfill);
+        var turn = Find(rows, MetricKinds.TurnTotal);
 
         var retrievalCount = retrieval?.Count ?? 0;
         var hitMessages = hit?.TotalInputTokens ?? 0;
@@ -77,7 +91,11 @@ public sealed record MetricFacts(
             JevDegrade: degrade?.Count ?? 0,
             SummaryCount: summary?.Count ?? 0,
             SendMessage: sendMessage?.Count ?? 0,
-            EmbeddingBackfill: embedding?.Count ?? 0);
+            EmbeddingBackfill: embedding?.Count ?? 0,
+            LlmP95Ms: llm?.P95Ms ?? 0,
+            TurnCalls: turn?.Count ?? 0,
+            TurnAvgMs: turn?.AvgMs ?? 0,
+            TurnP95Ms: turn?.P95Ms ?? 0);
     }
 
     private static MetricSummary? Find(IReadOnlyList<MetricSummary> rows, string kind) =>

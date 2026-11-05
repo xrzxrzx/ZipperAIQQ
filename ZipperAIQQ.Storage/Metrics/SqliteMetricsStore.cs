@@ -53,21 +53,34 @@ public sealed class SqliteMetricsStore : IMetricsStore
         return _db.ReadAsync<IReadOnlyList<MetricSummary>>(async (conn, token) =>
         {
             await using var cmd = conn.CreateCommand();
-            // 按平均耗时降序 —— 客户端要的「排序」在这里就定好
+            // 分位数用窗口函数算（最近秩法）：
+            //   p = 排序后第 ceil(n·q) 条 —— 等价于 rn = CAST(n*q AS INTEGER) + 1（整数乘法定点）。
+            // SQLite 3.25+ 支持窗口函数，本仓捆绑的 e_sqlite3 满足。
+            //
+            // 排序改成「次数降序、平均降序」：旧版只按 AVG 倒序，会让偶尔跑一次的长尾
+            // 固定占住表头（问题记录 04 #3）。长尾交给 p95 表达。
             cmd.CommandText = """
+                WITH ranked AS (
+                    SELECT Kind, ElapsedMs, InputTokens, OutputTokens, CachedInputTokens,
+                           ROW_NUMBER() OVER (PARTITION BY Kind ORDER BY ElapsedMs) AS rn,
+                           COUNT(*) OVER (PARTITION BY Kind) AS cnt
+                    FROM CallMetrics
+                    WHERE (@since = 0 OR CreatedAtMs >= @since)
+                      AND (@sid IS NULL OR SessionId = @sid)
+                )
                 SELECT Kind,
-                       COUNT(*),
+                       COUNT(*) AS Cnt,
                        AVG(ElapsedMs),
                        MIN(ElapsedMs),
                        MAX(ElapsedMs),
                        COALESCE(SUM(InputTokens), 0),
                        COALESCE(SUM(OutputTokens), 0),
-                       COALESCE(SUM(CachedInputTokens), 0)
-                FROM CallMetrics
-                WHERE (@since = 0 OR CreatedAtMs >= @since)
-                  AND (@sid IS NULL OR SessionId = @sid)
+                       COALESCE(SUM(CachedInputTokens), 0),
+                       COALESCE(MAX(CASE WHEN rn = CAST(cnt * 0.50 AS INTEGER) + 1 THEN ElapsedMs END), 0),
+                       COALESCE(MAX(CASE WHEN rn = CAST(cnt * 0.95 AS INTEGER) + 1 THEN ElapsedMs END), 0)
+                FROM ranked
                 GROUP BY Kind
-                ORDER BY AVG(ElapsedMs) DESC;
+                ORDER BY COUNT(*) DESC, AVG(ElapsedMs) DESC;
                 """;
             cmd.Parameters.AddWithValue("@since", since);
             cmd.Parameters.AddWithValue("@sid", hasSession ? sessionId! : DBNull.Value);
@@ -84,7 +97,9 @@ public sealed class SqliteMetricsStore : IMetricsStore
                     reader.GetDouble(4),
                     reader.GetInt64(5),
                     reader.GetInt64(6),
-                    reader.GetInt64(7)));
+                    reader.GetInt64(7),
+                    reader.GetDouble(8),
+                    reader.GetDouble(9)));
             }
 
             return (IReadOnlyList<MetricSummary>)list;

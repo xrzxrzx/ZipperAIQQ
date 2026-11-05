@@ -166,14 +166,16 @@
                     <Grid ColumnSpacing="12" Padding="0,0,0,4">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="180" />
+                            <ColumnDefinition Width="70" />
                             <ColumnDefinition Width="80" />
-                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="80" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="类别" Style="{StaticResource CaptionStyle}" />
                         <TextBlock Grid.Column="1" Text="次数" Style="{StaticResource CaptionStyle}" />
                         <TextBlock Grid.Column="2" Text="平均耗时" Style="{StaticResource CaptionStyle}" />
-                        <TextBlock Grid.Column="3" Text="Token（入 / 出）" Style="{StaticResource CaptionStyle}" />
+                        <TextBlock Grid.Column="3" Text="p95" Style="{StaticResource CaptionStyle}" />
+                        <TextBlock Grid.Column="4" Text="Token（入 / 出）" Style="{StaticResource CaptionStyle}" />
                     </Grid>
 
                     <ItemsControl ItemsSource="{x:Bind Stats.KindRows}">
@@ -182,8 +184,9 @@
                                 <Grid ColumnSpacing="12" Padding="0,5">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="180" />
+                                        <ColumnDefinition Width="70" />
                                         <ColumnDefinition Width="80" />
-                                        <ColumnDefinition Width="90" />
+                                        <ColumnDefinition Width="80" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
@@ -196,7 +199,9 @@
                                                Style="{StaticResource BodyStyle}" />
                                     <TextBlock Grid.Column="2" Text="{x:Bind AvgMsText}"
                                                Style="{StaticResource BodyStyle}" />
-                                    <TextBlock Grid.Column="3" Text="{x:Bind TokenText}"
+                                    <TextBlock Grid.Column="3" Text="{x:Bind P95MsText}"
+                                               Style="{StaticResource BodyStyle}" />
+                                    <TextBlock Grid.Column="4" Text="{x:Bind TokenText}"
                                                Style="{StaticResource BodyStyle}" />
                                 </Grid>
                             </DataTemplate>

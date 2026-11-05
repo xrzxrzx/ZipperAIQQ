@@ -163,6 +163,10 @@ public sealed class KindStatsDto
     [JsonPropertyName("avgMs")]
     public double AvgMs { get; set; }
 
+    /// <summary>95 分位耗时（旧服务端没有该字段时为 0）。</summary>
+    [JsonPropertyName("p95Ms")]
+    public double P95Ms { get; set; }
+
     [JsonPropertyName("minMs")]
     public double MinMs { get; set; }
 
@@ -199,6 +203,7 @@ public sealed class KindStatsDto
         ["summary"] = "上下文压缩",
         ["tool.send_message"] = "发送消息",
         ["embedding.backfill"] = "向量回填",
+        ["turn.total"] = "整轮耗时",
         ["tool.web_search"] = "网页搜索",
         ["tool.fetch_url"] = "网页抓取",
     };
@@ -208,6 +213,10 @@ public sealed class KindStatsDto
 
     [JsonIgnore]
     public string AvgMsText => $"{AvgMs:F0} ms";
+
+    /// <summary>p95 可能为 0（旧服务端 / 单条样本），空着会让人以为是「没有数据」。</summary>
+    [JsonIgnore]
+    public string P95MsText => P95Ms > 0 ? $"{P95Ms:F0} ms" : "—";
 
     [JsonIgnore]
     public string TokenText => InputTokens == 0 && OutputTokens == 0

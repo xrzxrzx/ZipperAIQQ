@@ -190,6 +190,29 @@ public sealed class StatusCommandTests
         Assert.Contains("0 次（已启用 · jev）", text);
     }
 
+    [Fact]
+    public async Task Elapsed_shows_p95_next_to_average()
+    {
+        var text = await Command(
+                FakeReplyModes.Of(ReplyMode.Every),
+                new MetricSummary("llm.call", 4, 120, 100, 300, 1000, 200, 0, 110, 290))
+            .ExecuteAsync(Context(), string.Empty);
+
+        Assert.Contains("单次平均 120ms · p95 290ms", text);
+    }
+
+    [Fact]
+    public async Task Turn_total_row_appears_when_recorded()
+    {
+        // 整轮（含工具循环）与单次往返分开展示，问题记录 04 #3 的口径争议就落在这。
+        var text = await Command(
+                FakeReplyModes.Of(ReplyMode.Every),
+                new MetricSummary("turn.total", 2, 8000, 7000, 9000, 0, 0, 0, 7500, 8900))
+            .ExecuteAsync(Context(), string.Empty);
+
+        Assert.Contains("整轮耗时：2 轮（平均 8000ms · p95 8900ms）", text);
+    }
+
     /// <summary>与产品常量分开写：测试要能发现「改了一个名字却忘了改另一处」。</summary>
     private static class MetricKindsForTest
     {
