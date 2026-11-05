@@ -33,8 +33,7 @@ public sealed class SchedulePoller : BackgroundService
     private const int BatchSize = 50;
 
     private readonly IScheduleStore _store;
-    private readonly IMessageChannel _channel;
-    private readonly IMessageStore _messages;
+    private readonly IScheduleExecutor _executor;
     private readonly ILogger _logger;
     private readonly IAlertSink? _alerts;
 
@@ -45,19 +44,16 @@ public sealed class SchedulePoller : BackgroundService
 
     public SchedulePoller(
         IScheduleStore store,
-        IMessageChannel channel,
-        IMessageStore messages,
+        IScheduleExecutor executor,
         ILogger logger,
         IAlertSink? alerts = null)
     {
         ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(channel);
-        ArgumentNullException.ThrowIfNull(messages);
+        ArgumentNullException.ThrowIfNull(executor);
         ArgumentNullException.ThrowIfNull(logger);
 
         _store = store;
-        _channel = channel;
-        _messages = messages;
+        _executor = executor;
         _logger = logger;
         _alerts = alerts;
     }
@@ -106,27 +102,13 @@ public sealed class SchedulePoller : BackgroundService
 
     private async Task RunAsync(ScheduledTask task, DateTimeOffset now, CancellationToken ct)
     {
-        var outgoing = new OutgoingMessage
-        {
-            Chat = task.Chat,
-            Segments = BuildSegments(task),
-        };
-
         try
         {
-            await _channel.SendAsync(outgoing, ct).ConfigureAwait(false);
-
-            try
-            {
-                await _messages
-                    .AppendOutgoingAsync(outgoing, ChatAgent.BotUserId, now, ct)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                // 已发出，落库失败不改变事实
-                _logger.Warning(ex, "定时任务 #{Id} 落库失败", task.Id);
-            }
+            // G-2：到点不再直发，投给目标会话的 Agent 决定（D-08）
+            var result = await _executor.ExecuteAsync(task, ct).ConfigureAwait(false);
+            _logger.Information(
+                "定时任务 #{Id} 执行完成：{Outcome}（会话 {SessionId}）",
+                task.Id, result.Outcome, task.Chat.SessionId);
         }
         catch (Exception ex)
         {
@@ -182,18 +164,4 @@ public sealed class SchedulePoller : BackgroundService
 
     private static string NextRunText(DateTimeOffset now, int minutes) =>
         Core.Time.BeijingTime.Format(now.AddMinutes(minutes));
-
-    private static List<MessageSegment> BuildSegments(ScheduledTask task)
-    {
-        var segments = new List<MessageSegment>();
-
-        if (!string.IsNullOrWhiteSpace(task.MentionUserId))
-        {
-            segments.Add(new MentionSegment(task.MentionUserId));
-            segments.Add(new TextSegment(" "));
-        }
-
-        segments.Add(new TextSegment(task.Content));
-        return segments;
-    }
 }

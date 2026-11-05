@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 15;
+    public const int CurrentSchemaVersion = 16;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -59,6 +59,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, MailTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, AlertTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, BillingTables, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, ScheduleExecutionTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -325,6 +326,20 @@ public sealed class DatabaseInitializer
     /// <c>NextRunAtMs</c> 存 **UTC Unix 毫秒**；显示与解析一律北京时间（FR-15.3）。
     /// </para>
     /// </remarks>
+    /// <summary>定时任务执行审计（G 批）：谁决定发/不发/失败。</summary>
+    private const string ScheduleExecutionTable = """
+        CREATE TABLE IF NOT EXISTS ScheduleExecutions (
+            Id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            TaskId      INTEGER NOT NULL,
+            Outcome     TEXT    NOT NULL,
+            Detail      TEXT,
+            CreatedAtMs INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_ScheduleExecutions_Task
+            ON ScheduleExecutions (TaskId, Id);
+        """;
+
     /// <summary>余额采样（E 批）：供应商不提供历史，只能自己留曲线。</summary>
     private const string BillingTables = """
         CREATE TABLE IF NOT EXISTS BalanceSamples (

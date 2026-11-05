@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Serilog;
+using ZipperAIQQ.Agent.Cost;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel.Models;
@@ -132,6 +133,18 @@ public sealed class ScheduleToolsTests : IAsyncLifetime
 
         Assert.Contains("已创建定时任务 #", second);
         Assert.Equal(2, await _store.CountPendingAsync());
+    }
+
+    [Fact]
+    public async Task Creating_while_executing_a_task_is_blocked()
+    {
+        // G-4：执行中的定时任务不能再创建新任务（防无限套娃）
+        using var scope = ScheduleExecutionScope.Begin();
+
+        var result = await CreateAsync(When(BeijingTime.Now.AddHours(7)), "套娃提醒");
+
+        Assert.Contains("正在执行定时任务", result);
+        Assert.Equal(0, await _store.CountPendingAsync());
     }
 
     [Fact]

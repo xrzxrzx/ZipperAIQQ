@@ -133,6 +133,9 @@ public static partial class ServiceRegistration
         });
 
         // ── 定时任务轮询（FR-14：数据库即队列，1 分钟精度，启动时补执行）──
+        // G 批：到点投 Agent + 执行审计（谁决定发/不发/失败）
+        services.AddSingleton<IScheduleExecutionStore, SqliteScheduleExecutionStore>();
+        services.AddSingleton<IScheduleExecutor, ScheduleAgentExecutor>();
         services.AddHostedService<SchedulePoller>();
 
         // ── 消息路由 ──

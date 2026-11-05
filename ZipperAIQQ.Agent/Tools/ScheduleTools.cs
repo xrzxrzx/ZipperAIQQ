@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.Extensions.AI;
+using ZipperAIQQ.Agent.Cost;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Schedules;
@@ -67,6 +68,12 @@ public static class ScheduleTools
                 if (Deny(gate, context) is { } denied)
                 {
                     return denied;
+                }
+
+                // 防自我繁殖：正在执行定时任务时不许再创建（否则可能无限套娃）
+                if (ScheduleExecutionScope.IsActive)
+                {
+                    return "正在执行定时任务，不能在这里再创建新的定时任务。";
                 }
 
                 if (string.IsNullOrWhiteSpace(content))
