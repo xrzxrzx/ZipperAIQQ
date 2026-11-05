@@ -96,6 +96,7 @@ public static partial class ServiceRegistration
         services.AddSingleton<Storage.Alerts.IAlertStore, Storage.Alerts.SqliteAlertStore>();
         services.AddSingleton<Storage.Owners.IOwnerAccountStore, Storage.Owners.SqliteOwnerAccountStore>();
         services.AddSingleton<Alerts.OwnerAlertService>();
+        services.AddSingleton<Alerts.IAlertSink>(sp => sp.GetRequiredService<Alerts.OwnerAlertService>());
         services.AddSingleton<Api.IApiAction, Api.Handlers.GetAlertsAction>();
         services.AddSingleton<IRecoverableChannel>(sp => sp.GetRequiredService<NapCatChannel>());
         services.AddHostedService<ChannelSupervisor>();

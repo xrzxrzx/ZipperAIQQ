@@ -23,7 +23,7 @@ namespace ZipperAIQQ.Server.Alerts;
 /// 全挂时留档但不算「已报过」，恢复后还能再报一次（D-04）。
 /// </para>
 /// </remarks>
-public sealed class OwnerAlertService
+public sealed class OwnerAlertService : IAlertSink
 {
     private readonly IAlertStore _alerts;
     private readonly IOwnerAccountStore _owners;

@@ -23,4 +23,7 @@ public enum AlertKind
 
     /// <summary>邮件转发卡住（多轮失败）。</summary>
     MailForwardStuck = 6,
+
+    /// <summary>主人反馈（业务通知抄送）投递失败。</summary>
+    OwnerFeedbackFailed = 7,
 }
