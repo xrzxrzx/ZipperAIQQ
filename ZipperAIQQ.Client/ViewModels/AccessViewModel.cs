@@ -228,23 +228,23 @@ public sealed partial class AccessViewModel : ObservableObject
             .FirstOrDefault(kv => kv.Value == data.OwnerId).Key ?? string.Empty;
 
         // 管理员：好友候选 + 已有值（可能不在候选里）
-        AdminsSelected.Clear();
-        foreach (var admin in data.Admins)
-        {
-            AddDisplay(AdminCandidates, _adminDisplayToId, AdminsSelected, admin, $"账号 {admin}");
-        }
+        SyncSelection(
+            AdminsSelected,
+            data.Admins
+                .Select(admin => ResolveDisplay(AdminCandidates, _adminDisplayToId, admin, $"账号 {admin}"))
+                .ToList());
 
-        WhitelistSelected.Clear();
-        foreach (var entry in data.Whitelist)
-        {
-            AddDisplay(ListCandidates, _sessionDisplayToId, WhitelistSelected, entry, entry);
-        }
+        SyncSelection(
+            WhitelistSelected,
+            data.Whitelist
+                .Select(entry => ResolveDisplay(ListCandidates, _sessionDisplayToId, entry, entry))
+                .ToList());
 
-        BlacklistSelected.Clear();
-        foreach (var entry in data.Blacklist)
-        {
-            AddDisplay(ListCandidates, _sessionDisplayToId, BlacklistSelected, entry, entry);
-        }
+        SyncSelection(
+            BlacklistSelected,
+            data.Blacklist
+                .Select(entry => ResolveDisplay(ListCandidates, _sessionDisplayToId, entry, entry))
+                .ToList());
 
         AlwaysAllowText = data.AlwaysAllow.Count == 0
             ? "（服务端未返回 —— 可能是旧版本；本地新服务端会显示主人私聊与所在群）"
@@ -315,24 +315,42 @@ public sealed partial class AccessViewModel : ObservableObject
     private static string PlatformLabel(string code) => PlatformCatalog.LabelOf(code);
 
     /// <summary>把 ID 转成显示名；候选里没有就补一条「原值」。</summary>
-    private static void AddDisplay(
+    private static string ResolveDisplay(
         ObservableCollection<string> candidates,
         Dictionary<string, string> map,
-        ObservableCollection<string> selected,
         string value,
         string fallbackLabel)
     {
         var display = map.FirstOrDefault(kv => kv.Value == value).Key;
-        if (string.IsNullOrEmpty(display))
+        if (!string.IsNullOrEmpty(display))
         {
-            display = fallbackLabel;
-            map[display] = value;
-            candidates.Add(display);
+            return display;
         }
 
-        if (!selected.Contains(display))
+        display = fallbackLabel;
+        map[display] = value;
+        candidates.Add(display);
+        return display;
+    }
+
+    /// <summary>
+    /// 内容一样就不动集合。
+    /// </summary>
+    /// <remarks>
+    /// 每次 <c>Clear + Add</c> 都会让 <c>MultiSelectList</c> 重建选中项，
+    /// 选中项一重建就 <c>ScrollIntoView</c> —— 表现就是「点一下就跳/保存就回顶」（问题记录 05 #2）。
+    /// </remarks>
+    private static void SyncSelection(ObservableCollection<string> target, IReadOnlyList<string> desired)
+    {
+        if (target.SequenceEqual(desired, StringComparer.Ordinal))
         {
-            selected.Add(display);
+            return;
+        }
+
+        target.Clear();
+        foreach (var item in desired)
+        {
+            target.Add(item);
         }
     }
 
