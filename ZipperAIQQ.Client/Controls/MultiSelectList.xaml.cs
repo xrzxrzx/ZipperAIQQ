@@ -95,6 +95,14 @@ public sealed partial class MultiSelectList : UserControl
             ? _all
             : _all.Where(x => x.Contains(keyword, StringComparison.OrdinalIgnoreCase)).ToList();
 
+        // 内容没变就**不要**重设 ItemsSource：每换一次 ListView 都会滚回顶部，
+        // 保存名单后「点一条 → 跳回最上面」就是这么来的（问题记录 05 #2）。
+        if (List.ItemsSource is IEnumerable<string> current &&
+            current.SequenceEqual(view, StringComparer.Ordinal))
+        {
+            return;
+        }
+
         _syncing = true;
         try
         {

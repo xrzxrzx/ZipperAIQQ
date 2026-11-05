@@ -158,7 +158,7 @@ public sealed partial class AccessViewModel : ObservableObject
     /// 失败时旧的主人 / 名单 / 候选原样留着，由调用方决定怎么提示。
     /// </summary>
     /// <returns><c>null</c> = 成功；否则是可显示的错误原因。</returns>
-    private async Task<string?> LoadForPlatformAsync(string platformCode)
+    private async Task<string?> LoadForPlatformAsync(string platformCode, bool keepCandidates = false)
     {
         try
         {
@@ -171,7 +171,7 @@ public sealed partial class AccessViewModel : ObservableObject
                 return "服务端没有返回数据。";
             }
 
-            Apply(data, platformCode);
+            Apply(data, platformCode, keepCandidates);
             return null;
         }
         catch (Exception ex)
@@ -181,53 +181,57 @@ public sealed partial class AccessViewModel : ObservableObject
     }
 
     /// <summary>把一次 <c>getAccess</c> 的结果铺到界面上：平台 / 主人 / 管理员 / 名单 / 候选。</summary>
-    private void Apply(AccessDto data, string requestedPlatform)
+    /// <param name="keepCandidates">
+    /// <c>true</c> = **不动候选集合**，只刷新选中项（保存名单 / 管理员之后用）。
+    /// </param>
+    /// <remarks>
+    /// 保存不改变「候选有哪些人」，却会把候选集合整个 Clear + Add —— 那会让
+    /// <c>MultiSelectList</c> 重建 <c>ItemsSource</c>，ListView 立刻滚回顶部，
+    /// 长列表下根本没法接着操作（问题记录 05 #2）。
+    /// </remarks>
+    private void Apply(AccessDto data, string requestedPlatform, bool keepCandidates = false)
     {
         SyncPlatforms(data, requestedPlatform);
 
-        // 主人候选
-        _ownerDisplayToId.Clear();
-        OwnerOptions.Clear();
-        foreach (var candidate in data.Candidates)
+        if (!keepCandidates)
         {
-            _ownerDisplayToId[candidate.Display] = candidate.UserId;
-            OwnerOptions.Add(candidate.Display);
+            _ownerDisplayToId.Clear();
+            OwnerOptions.Clear();
+            _adminDisplayToId.Clear();
+            AdminCandidates.Clear();
+            _sessionDisplayToId.Clear();
+            ListCandidates.Clear();
+
+            foreach (var candidate in data.Candidates)
+            {
+                _ownerDisplayToId[candidate.Display] = candidate.UserId;
+                OwnerOptions.Add(candidate.Display);
+
+                _adminDisplayToId[candidate.Display] = candidate.UserId;
+                AdminCandidates.Add(candidate.Display);
+
+                // ⚠️ 这里以前写死 "qq"：切到抖音后白名单条目会变成 qqp…（2026-10-28 实测）
+                var sessionId = $"{requestedPlatform}:p{candidate.UserId}";
+                var display = $"私聊 · {candidate.Nickname}（{sessionId}）";
+                _sessionDisplayToId[display] = sessionId;
+                ListCandidates.Add(display);
+            }
+
+            foreach (var group in data.GroupCandidates)
+            {
+                _sessionDisplayToId[group.Display] = group.SessionId;
+                ListCandidates.Add(group.Display);
+            }
         }
 
         SelectedOwnerDisplay = _ownerDisplayToId
             .FirstOrDefault(kv => kv.Value == data.OwnerId).Key ?? string.Empty;
 
         // 管理员：好友候选 + 已有值（可能不在候选里）
-        _adminDisplayToId.Clear();
-        AdminCandidates.Clear();
-        foreach (var candidate in data.Candidates)
-        {
-            _adminDisplayToId[candidate.Display] = candidate.UserId;
-            AdminCandidates.Add(candidate.Display);
-        }
-
         AdminsSelected.Clear();
         foreach (var admin in data.Admins)
         {
             AddDisplay(AdminCandidates, _adminDisplayToId, AdminsSelected, admin, $"账号 {admin}");
-        }
-
-        // 名单：私聊会话 + 群会话
-        _sessionDisplayToId.Clear();
-        ListCandidates.Clear();
-        foreach (var candidate in data.Candidates)
-        {
-            // ⚠️ 这里以前写死 "qq"：切到抖音后白名单条目会变成 qqp…（2026-10-28 实测）
-            var sessionId = $"{requestedPlatform}:p{candidate.UserId}";
-            var display = $"私聊 · {candidate.Nickname}（{sessionId}）";
-            _sessionDisplayToId[display] = sessionId;
-            ListCandidates.Add(display);
-        }
-
-        foreach (var group in data.GroupCandidates)
-        {
-            _sessionDisplayToId[group.Display] = group.SessionId;
-            ListCandidates.Add(group.Display);
         }
 
         WhitelistSelected.Clear();
@@ -403,7 +407,14 @@ public sealed partial class AccessViewModel : ObservableObject
 
             NeedsAdminConfirm = false;
             ListStatus = result?.Skipped == true ? "无变化" : "名单已保存";
-            await LoadAsync().ConfigureAwait(true);
+
+            // 只刷新选中项，**不重建候选**：重建会让列表滚回顶部（问题记录 05 #2）。
+            var error = await LoadForPlatformAsync(CurrentPlatform, keepCandidates: true).ConfigureAwait(true);
+            if (error is not null)
+            {
+                ListStatus = $"已保存，但刷新选择失败：{error}";
+            }
+
             return true;
         }
         catch (ApiCallException ex) when (ex.Code == 409)
