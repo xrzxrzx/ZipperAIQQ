@@ -394,8 +394,29 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
         }
     }
 
-    /// <summary>建立连接并开始接收。</summary>
+    /// <summary>建连闸：StartAsync 必须幂等（Program 与看门狗可能同时叫它）。</summary>
+    private readonly SemaphoreSlim _startGate = new(1, 1);
+
+    /// <summary>建立连接并开始接收；已连接时直接返回。</summary>
     public async Task StartAsync(CancellationToken ct = default)
+    {
+        await _startGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_transport.IsConnected)
+            {
+                return;
+            }
+
+            await StartCoreAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _startGate.Release();
+        }
+    }
+
+    private async Task StartCoreAsync(CancellationToken ct)
     {
         _transport.EventHandler = OnTransportFrame;
 
