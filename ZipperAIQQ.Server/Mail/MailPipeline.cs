@@ -59,6 +59,16 @@ public sealed class MailPipeline : BackgroundService
         new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
 
     private DateTimeOffset _lastFlushAt = DateTimeOffset.MinValue;
+    /// <summary>
+    /// 连续失败次数与冷却截止时间（F-1）。
+    /// </summary>
+    /// <remarks>
+    /// 旧实现失败后**不推进时间戳**，等于每 30 秒把同一批邮件重跑一遍；
+    /// 11-05 就是这样把一整天的额度烧掉的（问题记录 04 #7）。
+    /// 现在失败后指数退避（30s → 60s → … 封顶 10 分钟），冷却期内**连人格 agent 都不跑**。
+    /// </remarks>
+    private int _flushFailures;
+    private DateTimeOffset _flushCooldownUntil;
     private DateOnly? _lastDailyFlushDate;
 
     public MailPipeline(
@@ -359,6 +369,12 @@ public sealed class MailPipeline : BackgroundService
     /// <summary>当前是否该汇总转发（按 <see cref="MailOptions.DigestMode"/>）。</summary>
     private bool ShouldFlushDigest(DateTimeOffset now)
     {
+        // 冷却期：直接不 flush —— 也就不会触发人格 agent 的模型调用
+        if (now < _flushCooldownUntil)
+        {
+            return false;
+        }
+
         return _options.DigestMode switch
         {
             // 单封即转：每轮都尝试（没有待转的邮件时 FlushAsync 自己会空转返回）
@@ -386,6 +402,8 @@ public sealed class MailPipeline : BackgroundService
                 _lastDailyFlushDate = DateOnly.FromDateTime(_lastFlushAt.DateTime);
             }
 
+            _flushFailures = 0;
+            _flushCooldownUntil = default;
             _logger.Information("邮件汇总已转发：{Count} 封 → 主人", result.MailCount);
             return;
         }
@@ -393,7 +411,13 @@ public sealed class MailPipeline : BackgroundService
         // 没转出去（没主人 / 发送失败）**不推进时间戳**：下一轮继续试，不能静默丢。
         if (result.MailCount > 0)
         {
-            _logger.Warning("邮件汇总未转发：{Count} 封，原因={Error}", result.MailCount, result.Error);
+            _flushFailures++;
+            var cooldown = TimeSpan.FromSeconds(Math.Min(30 * Math.Pow(2, _flushFailures - 1), 600));
+            _flushCooldownUntil = BeijingTime.Now + cooldown;
+
+            _logger.Warning(
+                "邮件汇总未转发：{Count} 封，原因={Error}；第 {Attempts} 次失败，{Cooldown} 内不再重试",
+                result.MailCount, result.Error, _flushFailures, cooldown);
         }
     }
 

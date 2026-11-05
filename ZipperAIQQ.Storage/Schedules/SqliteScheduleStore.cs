@@ -148,6 +148,17 @@ public sealed class SqliteScheduleStore : IScheduleStore
         }, ct);
     }
 
+    public Task MarkFailedAsync(long id, CancellationToken ct = default)
+    {
+        return _db.WriteAsync(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "UPDATE ScheduleTasks SET Status = 3 WHERE Id = @id AND Status = 0;";
+            cmd.Parameters.AddWithValue("@id", id);
+            await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        }, ct);
+    }
+
     public Task RescheduleAsync(long id, DateTimeOffset nextRunAt, CancellationToken ct = default)
     {
         return _db.WriteAsync(async (conn, token) =>

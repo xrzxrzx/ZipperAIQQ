@@ -126,6 +126,20 @@ public sealed class ScheduleStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Failed_task_leaves_the_due_queue()
+    {
+        var id = await AddAsync(Base.AddMinutes(-5));
+
+        await _store.MarkFailedAsync(id);
+
+        Assert.Empty(await _store.GetDueAsync(Base, 10));
+        Assert.Equal(0, await _store.CountPendingAsync());
+
+        var listed = await _store.ListAsync("qq:p10001");
+        Assert.Equal(ScheduleStatus.Failed, Assert.Single(listed).Status);
+    }
+
+    [Fact]
     public async Task Other_session_is_ignored()
     {
         await AddAsync(Base, sessionId: "qq:p20002");

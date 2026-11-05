@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
 using Serilog;
+using ZipperAIQQ.Core.Time;
+using ZipperAIQQ.Server.Alerts;
 using ZipperAIQQ.Agent;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
@@ -33,12 +36,19 @@ public sealed class SchedulePoller : BackgroundService
     private readonly IMessageChannel _channel;
     private readonly IMessageStore _messages;
     private readonly ILogger _logger;
+    private readonly IAlertSink? _alerts;
+
+    /// <summary>每个任务的失败次数与下次可重试时间（内存态，重启即清）。</summary>
+    private readonly ConcurrentDictionary<long, RetryState> _retry = new();
+
+    private readonly record struct RetryState(int Attempts, DateTimeOffset NextAt);
 
     public SchedulePoller(
         IScheduleStore store,
         IMessageChannel channel,
         IMessageStore messages,
-        ILogger logger)
+        ILogger logger,
+        IAlertSink? alerts = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(channel);
@@ -49,6 +59,7 @@ public sealed class SchedulePoller : BackgroundService
         _channel = channel;
         _messages = messages;
         _logger = logger;
+        _alerts = alerts;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -73,6 +84,12 @@ public sealed class SchedulePoller : BackgroundService
             var due = await _store.GetDueAsync(now, BatchSize, ct).ConfigureAwait(false);
             foreach (var task in due)
             {
+                // 退避中：跳过，别每分钟再撞一次
+                if (_retry.TryGetValue(task.Id, out var state) && state.NextAt > now)
+                {
+                    continue;
+                }
+
                 await RunAsync(task, now, ct).ConfigureAwait(false);
             }
         }
@@ -113,10 +130,38 @@ public sealed class SchedulePoller : BackgroundService
         }
         catch (Exception ex)
         {
-            // 发送失败：**不推进时间**，下一轮会重试
-            _logger.Error(ex, "定时任务 #{Id} 发送失败（会话 {SessionId}），下一轮重试", task.Id, task.Chat.SessionId);
+            var attempts = _retry.TryGetValue(task.Id, out var previous) ? previous.Attempts + 1 : 1;
+
+            if (attempts >= ScheduleRetryPolicy.MaxAttempts)
+            {
+                _retry.TryRemove(task.Id, out _);
+                await _store.MarkFailedAsync(task.Id, ct).ConfigureAwait(false);
+                _logger.Error(
+                    ex, "定时任务 #{Id} 连续失败 {Attempts} 次，已停用（需人工处理）",
+                    task.Id, attempts);
+
+                if (_alerts is not null)
+                {
+                    await _alerts.RaiseAsync(new AlertMessage(
+                        AlertKind.ScheduleFailBurst,
+                        task.Chat.Platform,
+                        $"⛔ 定时任务 #{task.Id} 连续失败 {attempts} 次，已停止重试"
+                        + $"（会话 {task.Chat.SessionId}）：{ex.Message}",
+                        BeijingTime.Now), ct).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            var delay = ScheduleRetryPolicy.DelayFor(attempts);
+            _retry[task.Id] = new RetryState(attempts, now + delay);
+            _logger.Error(
+                ex, "定时任务 #{Id} 发送失败（{SessionId}），第 {Attempts} 次；{Delay} 后重试",
+                task.Id, task.Chat.SessionId, attempts, delay);
             return;
         }
+
+        _retry.TryRemove(task.Id, out _);
 
         if (task.Repeat == ScheduleRepeat.Interval)
         {

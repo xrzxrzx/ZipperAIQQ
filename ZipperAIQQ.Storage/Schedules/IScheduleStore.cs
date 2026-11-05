@@ -18,6 +18,9 @@ public enum ScheduleStatus
     Pending = 0,
     Done = 1,
     Cancelled = 2,
+
+    /// <summary>连续失败到上限，已停用（不再重试，等人工处理）。</summary>
+    Failed = 3,
 }
 
 /// <summary>
@@ -66,6 +69,9 @@ public interface IScheduleStore
 
     /// <summary>标记一次性任务已完成。</summary>
     Task MarkDoneAsync(long id, CancellationToken ct = default);
+
+    /// <summary>连续失败到上限：标记为 Failed，不再参与轮询。</summary>
+    Task MarkFailedAsync(long id, CancellationToken ct = default);
 
     /// <summary>把周期任务推到下一次执行时间。</summary>
     Task RescheduleAsync(long id, DateTimeOffset nextRunAt, CancellationToken ct = default);
