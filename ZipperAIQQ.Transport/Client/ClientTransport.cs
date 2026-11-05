@@ -22,6 +22,9 @@ public sealed class ClientTransport : WebSocketDuplexBase, IClientTransport
     /// <summary>收到消息时的回调。由上层（通道实现）注册。</summary>
     public Func<JsonNode, ValueTask>? EventHandler { get; set; }
 
+    /// <summary>串行化建连：并发 Connect 会造出两条接收循环，互相把帧读坏。</summary>
+    private readonly SemaphoreSlim _connectGate = new(1, 1);
+
     public ClientTransport(ILogger logger) : base(logger)
     {
     }
@@ -29,6 +32,20 @@ public sealed class ClientTransport : WebSocketDuplexBase, IClientTransport
     public async Task ConnectAsync(Uri uri, string? accessToken = null, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(uri);
+
+        await _connectGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await ConnectCoreAsync(uri, accessToken, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _connectGate.Release();
+        }
+    }
+
+    private async Task ConnectCoreAsync(Uri uri, string? accessToken, CancellationToken ct)
+    {
         ObjectDisposedException.ThrowIf(_isDisposed, this);
 
         if (uri.Scheme is not ("ws" or "wss"))

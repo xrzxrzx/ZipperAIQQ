@@ -49,6 +49,9 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
         });
 
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonObject>> _pending = new();
+
+    /// <summary>恢复串行化：看门狗和手工重连撞在一起时，只能有一个真的去重拨。</summary>
+    private readonly SemaphoreSlim _recoverGate = new(1, 1);
     private long _selfId;
 
     public NapCatChannel(
@@ -364,13 +367,31 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
     /// </remarks>
     public async Task<bool> TryRecoverAsync(CancellationToken ct)
     {
-        if (_transport is IResettableTransport resettable)
+        if (IsConnected)
         {
-            await resettable.ResetAsync(ct).ConfigureAwait(false);
+            return true;
         }
 
-        await StartAsync(ct).ConfigureAwait(false);
-        return _transport.IsConnected;
+        // 已有恢复在进行就交给它，避免两条 Connect 同时建连
+        if (!await _recoverGate.WaitAsync(0, ct).ConfigureAwait(false))
+        {
+            return IsConnected;
+        }
+
+        try
+        {
+            if (_transport is IResettableTransport resettable)
+            {
+                await resettable.ResetAsync(ct).ConfigureAwait(false);
+            }
+
+            await StartAsync(ct).ConfigureAwait(false);
+            return _transport.IsConnected;
+        }
+        finally
+        {
+            _recoverGate.Release();
+        }
     }
 
     /// <summary>建立连接并开始接收。</summary>

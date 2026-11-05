@@ -71,7 +71,14 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport, IResettableTran
 
     private async Task ReceiveLoopAsync()
     {
-        if (_socket == null)
+        // ⚠️ 必须**捕获**本次连接的 socket / 取消源 / 完成信号。
+        // 读字段的话，重连时 ResetAsync 换掉 _ct 之后，旧循环会拿着新 token 继续读同一个 socket，
+        // 于是两条循环并发读 → 大帧被撕成两半 → 下游 JSON 解析失败（实测把 /status 都吞了）。
+        var socket = _socket;
+        var token = _ct;
+        var completion = _cs;
+
+        if (socket == null)
         {
             _logger.Error("WebSocket为空");
             return;
@@ -79,9 +86,9 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport, IResettableTran
 
         try
         {
-            while (_socket.State == WebSocketState.Open && !_ct.IsCancellationRequested)
+            while (socket.State == WebSocketState.Open && !token.IsCancellationRequested)
             {
-                var message = await ReceiveFullMessage(_socket);
+                var message = await ReceiveFullMessage(socket, token);
                 if (message == null)
                 {
                     _logger.Warning("接收消息为空，断开连接");
@@ -116,11 +123,11 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport, IResettableTran
         }
         finally
         {
-            _cs.TrySetResult();
+            completion.TrySetResult();
         }
     }
 
-    private async Task<string?> ReceiveFullMessage(WebSocket socket)
+    private async Task<string?> ReceiveFullMessage(WebSocket socket, CancellationToken token)
     {
         byte[] buffer = new byte[1024 * 4];
         using var ms = new MemoryStream();
@@ -128,7 +135,7 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport, IResettableTran
 
         do
         {
-            result = await socket.ReceiveAsync(buffer, _ct);
+            result = await socket.ReceiveAsync(buffer, token);
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
