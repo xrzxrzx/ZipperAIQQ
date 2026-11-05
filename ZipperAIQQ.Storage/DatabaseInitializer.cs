@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 14;
+    public const int CurrentSchemaVersion = 15;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -58,6 +58,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, NoticesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, MailTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, AlertTables, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, BillingTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -324,6 +325,23 @@ public sealed class DatabaseInitializer
     /// <c>NextRunAtMs</c> 存 **UTC Unix 毫秒**；显示与解析一律北京时间（FR-15.3）。
     /// </para>
     /// </remarks>
+    /// <summary>余额采样（E 批）：供应商不提供历史，只能自己留曲线。</summary>
+    private const string BillingTables = """
+        CREATE TABLE IF NOT EXISTS BalanceSamples (
+            Id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            Provider    TEXT    NOT NULL,
+            Currency    TEXT    NOT NULL,
+            Total       REAL    NOT NULL,
+            Granted     REAL    NOT NULL,
+            ToppedUp    REAL    NOT NULL,
+            IsAvailable INTEGER NOT NULL,
+            SampledAtMs INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_BalanceSamples_Provider_At
+            ON BalanceSamples (Provider, SampledAtMs);
+        """;
+
     /// <summary>告警投递记录 + 主人跨平台账号镜像（D 批）。</summary>
     private const string AlertTables = """
         CREATE TABLE IF NOT EXISTS Alerts (

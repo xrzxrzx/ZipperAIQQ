@@ -9,6 +9,7 @@ using ZipperAIQQ.Server.Channels;
 using ZipperAIQQ.Server.Commands;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Storage.Messages;
+using ZipperAIQQ.Storage.Billing;
 using ZipperAIQQ.Storage.Metrics;
 
 namespace ZipperAIQQ.Tests.Server;
@@ -137,12 +138,31 @@ public sealed class StatusCommandTests
         params MetricSummary[] rows) =>
         Command(modes, new ChannelHealthRegistry(new ChannelReliabilityOptions()), [new FakeRecoverable("qq", true)], rows);
 
+    private static StatusCommand CommandWithBalance(
+        IReplyModeDecider modes,
+        IBalanceStore balance,
+        params MetricSummary[] rows) =>
+        new(new FakeMetrics(rows), new FakeMessages(), Options, new FakeClients(), modes,
+            new ChannelHealthRegistry(new ChannelReliabilityOptions()), [new FakeRecoverable("qq", true)], balance);
+
+    private sealed class FakeBalance(params BalanceSample[] samples) : IBalanceStore
+    {
+        public Task AppendAsync(BalanceSample sample, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<BalanceSample>> ListSinceAsync(
+            string provider, DateTimeOffset since, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<BalanceSample>>(samples);
+
+        public Task<BalanceSample?> LatestAsync(string provider, CancellationToken ct = default) =>
+            Task.FromResult(samples.LastOrDefault());
+    }
+
     private static StatusCommand Command(
         IReplyModeDecider modes,
         ChannelHealthRegistry health,
         IReadOnlyList<IRecoverableChannel> channels,
         params MetricSummary[] rows) =>
-        new(new FakeMetrics(rows), new FakeMessages(), Options, new FakeClients(), modes, health, channels);
+        new(new FakeMetrics(rows), new FakeMessages(), Options, new FakeClients(), modes, health, channels, new FakeBalance());
 
     private static CommandContext Context() => new(
         new ChatRef { Platform = "qq", Type = ChatType.Private, Id = "1" },
@@ -278,6 +298,25 @@ public sealed class StatusCommandTests
             .ExecuteAsync(Context(), string.Empty);
 
         Assert.Contains("通道 qq：断开中", text);
+    }
+
+    [Fact]
+    public async Task Spend_rows_show_estimate_and_balance()
+    {
+        var now = DateTimeOffset.Now;
+        var balance = new FakeBalance(
+            new BalanceSample("deepseek", "CNY", 100m, 0m, 100m, true, now.AddHours(-1)),
+            new BalanceSample("deepseek", "CNY", 97m, 0m, 100m, true, now));
+
+        var text = await CommandWithBalance(
+                FakeReplyModes.Of(ReplyMode.Every),
+                balance,
+                new MetricSummary("llm.call", 1, 100, 100, 100, 1_000_000, 100_000, 400_000))
+            .ExecuteAsync(Context(), string.Empty);
+
+        Assert.Contains("花费估算（24h）：¥2.20", text);
+        Assert.Contains("余额：97.00 CNY", text);
+        Assert.Contains("今日花费（余额差）：¥3.00", text);
     }
 
     /// <summary>与产品常量分开写：测试要能发现「改了一个名字却忘了改另一处」。</summary>

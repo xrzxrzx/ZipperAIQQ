@@ -9,7 +9,9 @@ using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Channels;
 using ZipperAIQQ.Server.Configuration;
+using ZipperAIQQ.Server.Billing;
 using ZipperAIQQ.Server.Metrics;
+using ZipperAIQQ.Storage.Billing;
 using ZipperAIQQ.Channel.Reliability;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
@@ -117,6 +119,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
     private readonly IReplyModeDecider _replyModes;
     private readonly ChannelHealthRegistry _health;
     private readonly IReadOnlyList<IRecoverableChannel> _channels;
+    private readonly IBalanceStore _balance;
 
     public StatusCommand(
         IMetricsStore metrics,
@@ -125,7 +128,8 @@ public sealed class StatusCommand : ICommand, IImageCommand
         IChatClientProvider clients,
         IReplyModeDecider replyModes,
         ChannelHealthRegistry health,
-        IEnumerable<IRecoverableChannel> channels)
+        IEnumerable<IRecoverableChannel> channels,
+        IBalanceStore balance)
     {
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(messages);
@@ -134,6 +138,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
         ArgumentNullException.ThrowIfNull(replyModes);
         ArgumentNullException.ThrowIfNull(health);
         ArgumentNullException.ThrowIfNull(channels);
+        ArgumentNullException.ThrowIfNull(balance);
 
         _metrics = metrics;
         _messages = messages;
@@ -142,6 +147,40 @@ public sealed class StatusCommand : ICommand, IImageCommand
         _replyModes = replyModes;
         _health = health;
         _channels = channels.ToList();
+        _balance = balance;
+    }
+
+    /// <summary>
+    /// 花费三行：24h 估算（token × 价目表）、当前余额、今日余额差。
+    /// </summary>
+    /// <remarks>
+    /// 「余额差」才是账实口径；token 估算是**保底**（余额接口不可用时仍能给个量级）。
+    /// 采样不足 2 条时明确写「采样不足」，不拿 0 冒充「没花钱」。
+    /// </remarks>
+    private async Task<List<string[]>> BuildSpendRowsAsync(MetricFacts facts, CancellationToken ct)
+    {
+        var rows = new List<string[]>();
+        var estimate = ModelPricing.DeepSeekChat.Estimate(
+            facts.InputTokens, facts.OutputTokens, facts.CachedInputTokens);
+        rows.Add(["花费估算（24h）", $"¥{estimate:F2}"]);
+
+        var latest = await _balance.LatestAsync(DeepSeekBalanceClient.Provider, ct).ConfigureAwait(false);
+        if (latest is not null)
+        {
+            rows.Add(["余额", $"{latest.Total:F2} {latest.Currency}{(latest.IsAvailable ? string.Empty : "（不足）")}"]);
+        }
+
+        var now = BeijingTime.Now;
+        var todayStart = new DateTimeOffset(now.Year, now.Month, now.Day, 0, 0, 0, now.Offset);
+        var samples = await _balance
+            .ListSinceAsync(DeepSeekBalanceClient.Provider, todayStart, ct)
+            .ConfigureAwait(false);
+
+        rows.Add(["今日花费（余额差）", SpendCalculator.HasEnoughSamples(samples)
+            ? $"¥{SpendCalculator.Window(samples):F2}"
+            : "采样不足"]);
+
+        return rows;
     }
 
     /// <summary>把通道健康压缩成一行（C-5：`/status` 要能看出「哪个通道断了」）。</summary>
@@ -202,6 +241,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
             summaryRows.Add(["Token 输入", $"{facts.InputTokens:N0}"]);
             summaryRows.Add(["Token 输出", $"{facts.OutputTokens:N0}"]);
             summaryRows.Add(["缓存命中率", cacheText]);
+            summaryRows.AddRange(await BuildSpendRowsAsync(facts, ct).ConfigureAwait(false));
             summaryRows.Add(["检索命中率", hitRate]);
 
             AppendChannelRows(summaryRows);
@@ -306,6 +346,12 @@ public sealed class StatusCommand : ICommand, IImageCommand
             ? $"{(double)facts.CachedInputTokens * 100 / facts.InputTokens:F0}%（缓存 {facts.CachedInputTokens:N0} / 输入 {facts.InputTokens:N0}）"
             : "—";
         sb.AppendLine($"· 缓存命中率：{cacheRate}");
+
+        foreach (var row in await BuildSpendRowsAsync(facts, ct).ConfigureAwait(false))
+        {
+            sb.AppendLine($"· {row[0]}：{row[1]}");
+        }
+
         sb.AppendLine($"· 检索命中率：{hitRate}");
         sb.AppendLine($"· JEV 判断：{jev.TextText}");
         sb.AppendLine($"· 上下文压缩：{facts.SummaryCount} 次");
