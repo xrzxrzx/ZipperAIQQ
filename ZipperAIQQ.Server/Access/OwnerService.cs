@@ -80,10 +80,9 @@ public sealed class OwnerService
                     .UpsertAsync([new OwnerAccount(platform, ownerId)], ct)
                     .ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 // 镜像写失败不阻塞设置主人（下次告警/启动会再补）
-                // 忽略：镜像只是加速读取，失败不影响本次设置
             }
         }
 
