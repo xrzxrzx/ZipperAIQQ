@@ -213,6 +213,34 @@ public sealed class StatusCommandTests
         Assert.Contains("整轮耗时：2 轮（平均 8000ms · p95 8900ms）", text);
     }
 
+    [Fact]
+    public async Task Category_rows_use_chinese_labels()
+    {
+        var text = await Command(
+                FakeReplyModes.Of(ReplyMode.Every),
+                new MetricSummary("llm.call", 2, 100, 90, 120, 10, 5),
+                new MetricSummary("tool.send_message", 3, 20, 10, 30, 0, 0))
+            .ExecuteAsync(Context(), string.Empty);
+
+        Assert.Contains("· LLM 调用：2 次", text);
+        Assert.Contains("· 发送消息：3 次", text);
+        Assert.DoesNotContain("llm.call", text);
+        Assert.DoesNotContain("tool.send_message", text);
+    }
+
+    [Fact]
+    public async Task Cache_hit_rate_is_reported()
+    {
+        // 缓存命中 = 命中缓存的输入 token / 输入 token 总数（影响费用与首字延迟）
+        var text = await Command(
+                FakeReplyModes.Of(ReplyMode.Every),
+                new MetricSummary("llm.call", 2, 100, 90, 120, 1000, 200, 600))
+            .ExecuteAsync(Context(), string.Empty);
+
+        Assert.Contains("缓存命中率：60%", text);
+        Assert.Contains("缓存 600", text);
+    }
+
     /// <summary>与产品常量分开写：测试要能发现「改了一个名字却忘了改另一处」。</summary>
     private static class MetricKindsForTest
     {

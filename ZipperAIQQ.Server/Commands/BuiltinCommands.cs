@@ -6,6 +6,7 @@ using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Core.Time;
+using ZipperAIQQ.Server.Api.Handlers;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Metrics;
 using ZipperAIQQ.Storage.Embeddings;
@@ -156,6 +157,13 @@ public sealed class StatusCommand : ICommand, IImageCommand
                 ? $"{(double)facts.RetrievalHits * 100 / facts.RetrievalCount:F0}%"
                 : "—";
 
+            // 缓存命中率 = 命中缓存的输入 token / 输入 token 总数。
+            // 它既影响**费用**（缓存命中便宜一个量级）也影响**首字延迟**，所以单独一行。
+            var cacheText = facts.InputTokens > 0
+                ? $"{(double)facts.CachedInputTokens * 100 / facts.InputTokens:F0}%"
+                  + $"（缓存 {facts.CachedInputTokens:N0} / 输入 {facts.InputTokens:N0}）"
+                : "—";
+
             summaryRows.Add(["LLM 调用", $"{facts.LlmCalls} 次"]);
             // 平均值 + p95：只有平均值会把长尾抹平，也看不出「偶尔很慢」还是「一半都慢」
             summaryRows.Add(["单次耗时", $"{facts.LlmAvgMs:F0} ms（p95 {facts.LlmP95Ms:F0} ms）"]);
@@ -165,6 +173,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
             }
             summaryRows.Add(["Token 输入", $"{facts.InputTokens:N0}"]);
             summaryRows.Add(["Token 输出", $"{facts.OutputTokens:N0}"]);
+            summaryRows.Add(["缓存命中率", cacheText]);
             summaryRows.Add(["检索命中率", hitRate]);
 
             // 「启用与否」看**配置**，调用次数单独陈述 —— 两件事合成一句会误导排障
@@ -195,7 +204,13 @@ public sealed class StatusCommand : ICommand, IImageCommand
                 "调用类别",
                 ["类别", "次数", "平均", "p95"],
                 metrics
-                    .Select(m => new[] { m.Kind, m.Count.ToString(), $"{m.AvgMs:F0} ms", $"{m.P95Ms:F0} ms" })
+                    .Select(m => new[]
+                    {
+                        MetricKindCatalog.Label(m.Kind),
+                        m.Count.ToString(),
+                        $"{m.AvgMs:F0} ms",
+                        $"{m.P95Ms:F0} ms",
+                    })
                     .ToArray()));
         }
 
@@ -243,6 +258,11 @@ public sealed class StatusCommand : ICommand, IImageCommand
             sb.AppendLine($"· 整轮耗时：{facts.TurnCalls} 轮（平均 {facts.TurnAvgMs:F0}ms · p95 {facts.TurnP95Ms:F0}ms）");
         }
         sb.AppendLine($"· Token：输入 {facts.InputTokens:N0} / 输出 {facts.OutputTokens:N0}");
+
+        var cacheRate = facts.InputTokens > 0
+            ? $"{(double)facts.CachedInputTokens * 100 / facts.InputTokens:F0}%（缓存 {facts.CachedInputTokens:N0} / 输入 {facts.InputTokens:N0}）"
+            : "—";
+        sb.AppendLine($"· 缓存命中率：{cacheRate}");
         sb.AppendLine($"· 检索命中率：{hitRate}");
         sb.AppendLine($"· JEV 判断：{jev.TextText}");
         sb.AppendLine($"· 上下文压缩：{facts.SummaryCount} 次");
@@ -250,7 +270,7 @@ public sealed class StatusCommand : ICommand, IImageCommand
         sb.AppendLine("【调用类别 · 次数 / 平均耗时】");
         foreach (var m in metrics)
         {
-            sb.AppendLine($"· {m.Kind}：{m.Count} 次 / 平均 {m.AvgMs:F0} ms / p95 {m.P95Ms:F0} ms");
+            sb.AppendLine($"· {MetricKindCatalog.Label(m.Kind)}：{m.Count} 次 / 平均 {m.AvgMs:F0} ms / p95 {m.P95Ms:F0} ms");
         }
 
         return sb.ToString().TrimEnd();
