@@ -22,9 +22,9 @@ public sealed class SpendReader : ISpendReader
 {
     private readonly IBalanceStore _balance;
     private readonly IMetricsStore _metrics;
-    private readonly QuotaOptions _options;
+    private readonly IQuotaOptionsProvider _options;
 
-    public SpendReader(IBalanceStore balance, IMetricsStore metrics, QuotaOptions options)
+    public SpendReader(IBalanceStore balance, IMetricsStore metrics, IQuotaOptionsProvider options)
     {
         ArgumentNullException.ThrowIfNull(balance);
         ArgumentNullException.ThrowIfNull(metrics);
@@ -37,8 +37,11 @@ public sealed class SpendReader : ISpendReader
 
     public async Task<SpendSnapshot> ReadAsync(CancellationToken ct = default)
     {
+        // 窗口以**运行时快照**为准：客户端改窗口后，下一次闸门检查就该按新窗口算
+        await _options.EnsureLoadedAsync(ct).ConfigureAwait(false);
+
         var now = BeijingTime.Now;
-        var since = WindowStart(now, _options.Window);
+        var since = WindowStart(now, _options.Current.Window);
         var hours = Math.Max(1, (int)Math.Ceiling((now - since).TotalHours));
 
         var samples = await _balance
