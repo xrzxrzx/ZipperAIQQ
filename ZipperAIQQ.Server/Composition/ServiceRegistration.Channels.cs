@@ -97,6 +97,14 @@ public static partial class ServiceRegistration
         services.AddSingleton<Storage.Owners.IOwnerAccountStore, Storage.Owners.SqliteOwnerAccountStore>();
         services.AddSingleton<Alerts.OwnerAlertService>();
         services.AddSingleton<Alerts.IAlertSink>(sp => sp.GetRequiredService<Alerts.OwnerAlertService>());
+
+        // 余额采样 + 额度闸门（E 批）
+        services.AddSingleton<Storage.Billing.IBalanceStore, Storage.Billing.SqliteBalanceStore>();
+        services.AddSingleton(sp => sp.GetRequiredService<Configuration.ServerOptions>().Quota);
+        services.AddSingleton(sp => sp.GetRequiredService<Configuration.ServerOptions>().Billing);
+        services.AddSingleton<Billing.ISpendReader, Billing.SpendReader>();
+        services.AddHostedService<Billing.BalanceMonitor>();
+        services.AddHttpClient(nameof(Billing.BalanceMonitor));
         services.AddSingleton<Api.IApiAction, Api.Handlers.GetAlertsAction>();
         services.AddSingleton<IRecoverableChannel>(sp => sp.GetRequiredService<NapCatChannel>());
         services.AddHostedService<ChannelSupervisor>();
