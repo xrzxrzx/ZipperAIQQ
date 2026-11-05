@@ -3,6 +3,7 @@ using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Channel.Reliability;
+using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Channels;
 
 namespace ZipperAIQQ.Tests.Server;
@@ -46,7 +47,7 @@ public sealed class HealthTrackingMessageChannelTests
 
     private static (HealthTrackingMessageChannel Channel, FakeChannel Inner, ChannelHealthMonitor Monitor) Create()
     {
-        var registry = new ChannelHealthRegistry();
+        var registry = new ChannelHealthRegistry(new ChannelReliabilityOptions());
         var inner = new FakeChannel();
         var channel = new HealthTrackingMessageChannel(
             inner,
@@ -103,6 +104,20 @@ public sealed class HealthTrackingMessageChannelTests
 
         Assert.False(monitor.IsChannelDown);
         Assert.Equal(0, monitor.ConsecutiveFailures);
+    }
+
+    [Fact]
+    public void Registry_honors_configured_threshold()
+    {
+        // 阈值从配置来（channel: openAfterFailures），不是写死 3
+        var registry = new ChannelHealthRegistry(new ChannelReliabilityOptions { OpenAfterFailures = 2 });
+        var monitor = registry.Get("qq");
+
+        monitor.RecordFailure(FailureKind.ChannelUnavailable, DateTimeOffset.UtcNow);
+        Assert.False(monitor.IsChannelDown);
+
+        Assert.True(monitor.RecordFailure(FailureKind.ChannelUnavailable, DateTimeOffset.UtcNow));
+        Assert.True(monitor.IsChannelDown);
     }
 
     [Fact]

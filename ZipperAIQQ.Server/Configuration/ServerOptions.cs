@@ -168,6 +168,9 @@ public sealed record ServerOptions
     /// </remarks>
     public Mail.MailOptions Mail { get; init; } = new();
 
+    /// <summary>通道可靠性参数（<c>channel</c> 配置节）：巡检 / 退避 / 熔断阈值。</summary>
+    public ChannelReliabilityOptions ChannelReliability { get; init; } = new();
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;

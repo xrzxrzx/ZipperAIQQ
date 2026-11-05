@@ -123,6 +123,16 @@ public static class ServerConfigLoader
                 QueryTimeoutMs = s.Int("douyin", "queryTimeoutMs", o.Douyin.QueryTimeoutMs),
             },
 
+            // ── channel（通道可靠性：巡检 / 退避 / 熔断）──
+            ChannelReliability = o.ChannelReliability with
+            {
+                PollSeconds = s.Int("channel", "pollSeconds", o.ChannelReliability.PollSeconds),
+                BackoffBaseSeconds = s.Int("channel", "backoffBaseSeconds", o.ChannelReliability.BackoffBaseSeconds),
+                BackoffMaxSeconds = s.Int("channel", "backoffMaxSeconds", o.ChannelReliability.BackoffMaxSeconds),
+                OpenAfterFailures = s.Int("channel", "openAfterFailures", o.ChannelReliability.OpenAfterFailures),
+                OpenCooldownSeconds = s.Int("channel", "openCooldownSeconds", o.ChannelReliability.OpenCooldownSeconds),
+            },
+
             // ── llm ──
             LlmApiKey = s.Str("llm", "apiKey", o.LlmApiKey)!,
             LlmBaseUrl = s.Str("llm", "baseUrl", o.LlmBaseUrl)!,

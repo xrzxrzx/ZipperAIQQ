@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ZipperAIQQ.Channel.Reliability;
+using ZipperAIQQ.Server.Configuration;
 
 namespace ZipperAIQQ.Server.Channels;
 
@@ -14,10 +15,21 @@ public sealed class ChannelHealthRegistry
 {
     private readonly ConcurrentDictionary<string, ChannelHealthMonitor> _monitors =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ChannelReliabilityOptions _options;
+
+    public ChannelHealthRegistry(ChannelReliabilityOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        _options = options;
+    }
 
     public ChannelHealthMonitor Get(string platform) =>
-        _monitors.GetOrAdd(platform ?? throw new ArgumentNullException(nameof(platform)),
-            p => new ChannelHealthMonitor(p));
+        _monitors.GetOrAdd(
+            platform ?? throw new ArgumentNullException(nameof(platform)),
+            p => new ChannelHealthMonitor(
+                p,
+                _options.OpenAfterFailures,
+                TimeSpan.FromSeconds(_options.OpenCooldownSeconds)));
 
     public IReadOnlyDictionary<string, ChannelHealthMonitor> All => _monitors;
 }

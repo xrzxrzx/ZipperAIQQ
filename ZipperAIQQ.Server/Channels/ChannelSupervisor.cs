@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using ZipperAIQQ.Channel.Reliability;
+using ZipperAIQQ.Server.Configuration;
 
 namespace ZipperAIQQ.Server.Channels;
 
@@ -23,17 +24,22 @@ public sealed class ChannelSupervisor : BackgroundService
     private readonly ChannelHealthRegistry _health;
     private readonly ILogger _logger;
 
+    private readonly ChannelReliabilityOptions _options;
+
     public ChannelSupervisor(
         IEnumerable<IRecoverableChannel> channels,
         ChannelHealthRegistry health,
+        ChannelReliabilityOptions options,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channels);
         ArgumentNullException.ThrowIfNull(health);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channels = channels.ToList();
         _health = health;
+        _options = options;
         _logger = logger;
     }
 
@@ -53,8 +59,13 @@ public sealed class ChannelSupervisor : BackgroundService
                 var loop = new ChannelRecoveryLoop(
                     channel,
                     _health.Get(channel.Platform),
-                    ReconnectPolicy.Default,
-                    _logger);
+                    new ReconnectPolicy(
+                        TimeSpan.FromSeconds(_options.BackoffBaseSeconds),
+                        TimeSpan.FromSeconds(_options.BackoffMaxSeconds)),
+                    _logger)
+                {
+                    PollInterval = TimeSpan.FromSeconds(_options.PollSeconds),
+                };
 
                 return loop.RunAsync(stoppingToken);
             })
