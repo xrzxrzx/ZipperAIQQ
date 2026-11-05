@@ -111,22 +111,26 @@ public sealed class StatusCommand : ICommand, IImageCommand
     private readonly IMessageStore _messages;
     private readonly ServerOptions _options;
     private readonly IChatClientProvider _clients;
+    private readonly IReplyModeDecider _replyModes;
 
     public StatusCommand(
         IMetricsStore metrics,
         IMessageStore messages,
         ServerOptions options,
-        IChatClientProvider clients)
+        IChatClientProvider clients,
+        IReplyModeDecider replyModes)
     {
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(clients);
+        ArgumentNullException.ThrowIfNull(replyModes);
 
         _metrics = metrics;
         _messages = messages;
         _options = options;
         _clients = clients;
+        _replyModes = replyModes;
     }
 
     public string Name => "status";
@@ -142,26 +146,25 @@ public sealed class StatusCommand : ICommand, IImageCommand
     {
         var count = await _messages.CountAsync(context.Chat.SessionId, ct).ConfigureAwait(false);
         var metrics = await _metrics.GetSummaryAsync(24, ct: ct).ConfigureAwait(false);
+        var facts = metrics.Count > 0 ? MetricFacts.From(metrics) : null;
+        var jev = await ReadJevAsync(context.Chat.SessionId, facts, ct).ConfigureAwait(false);
 
         var summaryRows = new List<string[]>();
-        if (metrics.Count > 0)
+        if (facts is not null)
         {
-            var facts = MetricFacts.From(metrics);
-
             var hitRate = facts.RetrievalCount > 0
                 ? $"{(double)facts.RetrievalHits * 100 / facts.RetrievalCount:F0}%"
                 : "—";
-
-            var jevText = facts.JevCount > 0
-                ? $"{facts.JevCount} 次（回 {facts.JevReplies} / 不回 {facts.JevCount - facts.JevReplies}）"
-                : "未启用";
 
             summaryRows.Add(["LLM 调用", $"{facts.LlmCalls} 次"]);
             summaryRows.Add(["平均耗时", $"{facts.LlmAvgMs:F0} ms"]);
             summaryRows.Add(["Token 输入", $"{facts.InputTokens:N0}"]);
             summaryRows.Add(["Token 输出", $"{facts.OutputTokens:N0}"]);
             summaryRows.Add(["检索命中率", hitRate]);
-            summaryRows.Add(["JEV 判断", jevText]);
+
+            // 「启用与否」看**配置**，调用次数单独陈述 —— 两件事合成一句会误导排障
+            // （问题记录 04 #2：24h 内 0 次调用 ≠ 未启用）。
+            summaryRows.Add(["JEV 判断", jev.ImageText]);
             if (facts.JevDegrade > 0)
             {
                 summaryRows.Add(["JEV 降级", $"{facts.JevDegrade} 次"]);
@@ -172,6 +175,8 @@ public sealed class StatusCommand : ICommand, IImageCommand
         else
         {
             summaryRows.Add(["近 24 小时", "无调用记录"]);
+            // 没有调用记录时也要能看出「配置里到底开没开」。
+            summaryRows.Add(["JEV 判断", jev.ImageText]);
         }
 
         var tables = new List<StatusImageRenderer.Table>
@@ -206,33 +211,31 @@ public sealed class StatusCommand : ICommand, IImageCommand
     {
         var count = await _messages.CountAsync(context.Chat.SessionId, ct).ConfigureAwait(false);
         var metrics = await _metrics.GetSummaryAsync(24, ct: ct).ConfigureAwait(false);
+        var facts = metrics.Count > 0 ? MetricFacts.From(metrics) : null;
+        var jev = await ReadJevAsync(context.Chat.SessionId, facts, ct).ConfigureAwait(false);
 
         var sb = new StringBuilder();
         sb.AppendLine($"**状态** · 模型 `{_clients.CurrentModel ?? _options.LlmModel}` · 本会话 {count} 条消息");
         sb.AppendLine();
 
-        if (metrics.Count == 0)
+        if (facts is null)
         {
-            sb.Append("近 24 小时：无调用记录");
+            sb.AppendLine("近 24 小时：无调用记录");
+            // 同上：没有调用记录 ≠ 未启用，配置状态必须单独说。
+            sb.Append($"· JEV 判断：{jev.TextText}");
             return sb.ToString();
         }
-
-        var facts = MetricFacts.From(metrics);
 
         // ⚠️ QQ 不渲染 Markdown、框线在比例字体下也对不齐 —— 这里只用「键值行」
         var hitRate = facts.RetrievalCount > 0
             ? $"{(double)facts.RetrievalHits * 100 / facts.RetrievalCount:F0}%（{facts.RetrievalCount} 次检索里命中 {facts.RetrievalHits} 次）"
             : "—";
 
-        var jevText = facts.JevCount > 0
-            ? $"{facts.JevCount} 次 · 回 {facts.JevReplies} · 不回 {facts.JevCount - facts.JevReplies} · 降级 {facts.JevDegrade}"
-            : "未启用";
-
         sb.AppendLine("【近 24 小时】");
         sb.AppendLine($"· LLM 调用：{facts.LlmCalls} 次（平均 {facts.LlmAvgMs:F0}ms）");
         sb.AppendLine($"· Token：输入 {facts.InputTokens:N0} / 输出 {facts.OutputTokens:N0}");
         sb.AppendLine($"· 检索命中率：{hitRate}");
-        sb.AppendLine($"· JEV 判断：{jevText}");
+        sb.AppendLine($"· JEV 判断：{jev.TextText}");
         sb.AppendLine($"· 上下文压缩：{facts.SummaryCount} 次");
         sb.AppendLine();
         sb.AppendLine("【调用类别 · 次数 / 平均耗时】");
@@ -242,6 +245,82 @@ public sealed class StatusCommand : ICommand, IImageCommand
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// JEV 的**配置状态** + 近 24 小时调用次数（两者分开，问题记录 04 #2）。
+    /// </summary>
+    /// <remarks>
+    /// 旧实现把「24 小时有没有调用过」当成「是否启用」，于是配置开着、只是没触发过一次，
+    /// 图上就写「未启用」—— 排障时会往完全错的方向查。这里改成读**当前生效模式**
+    /// （全局默认 + 本会话覆盖，与判定用的是同一个入口 `GetModeAsync`）。
+    /// </remarks>
+    private async Task<JevFacts> ReadJevAsync(
+        string sessionId,
+        MetricFacts? facts,
+        CancellationToken ct)
+    {
+        var count = facts?.JevCount ?? 0;
+        var replies = facts?.JevReplies ?? 0;
+        var degrades = facts?.JevDegrade ?? 0;
+
+        ReplyMode mode;
+        try
+        {
+            mode = await _replyModes.GetModeAsync(sessionId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // 配置读不出来是**第三种状态**：既不是启用也不是未启用，
+            // 混进「未启用」会让人去改一个本来没坏的配置。
+            return new JevFacts(false, true, string.Empty, count, replies, degrades);
+        }
+
+        return new JevFacts(
+            Enabled: mode == ReplyMode.Jev,
+            ReadFailed: false,
+            ModeLabel: ModeLabel(mode),
+            Count: count,
+            Replies: replies,
+            Degrades: degrades);
+    }
+
+    private static string ModeLabel(ReplyMode mode) => mode switch
+    {
+        ReplyMode.Every => "every",
+        ReplyMode.Mention => "mention",
+        ReplyMode.Jev => "jev",
+        _ => mode.ToString().ToLowerInvariant(),
+    };
+
+    /// <summary>JEV 的一行事实：配置状态 + 调用次数，两种排版（图 / 文本）各取一个。</summary>
+    private readonly record struct JevFacts(
+        bool Enabled,
+        bool ReadFailed,
+        string ModeLabel,
+        long Count,
+        long Replies,
+        long Degrades)
+    {
+        public string ImageText => ReadFailed
+            ? "读取失败"
+            : !Enabled
+                ? $"未启用（当前 {ModeLabel}）"
+                : Count > 0
+                    ? $"{Count} 次（回 {Replies} / 不回 {Count - Replies}）"
+                    : "0 次（已启用 · jev）";
+
+        public string TextText => ReadFailed
+            ? "读取失败"
+            : !Enabled
+                ? $"未启用（当前 {ModeLabel}）"
+                : Count > 0
+                    ? $"{Count} 次 · 回 {Replies} · 不回 {Count - Replies} · 降级 {Degrades}"
+                    : "0 次（已启用 · jev）";
     }
 }
 
