@@ -153,6 +153,17 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
             }
         }
 
+        // D4-a：统一身份表优先于按平台键 —— 有身份记录就以它为准（旧安装表为空则继续用 settings）
+        var ownerAccounts = app.Services.GetRequiredService<ZipperAIQQ.Storage.Owners.IOwnerAccountStore>();
+        var resolverForOwners = app.Services.GetRequiredService<ZipperAIQQ.Agent.Security.IRoleResolver>();
+        if (resolverForOwners is ZipperAIQQ.Agent.Security.ConfiguredRoleResolver configuredOwners)
+        {
+            foreach (var account in await ownerAccounts.ListAsync(CancellationToken.None).ConfigureAwait(false))
+            {
+                configuredOwners.SetOwner(account.Platform, account.UserId);
+            }
+        }
+
         // 机器人自身账号：把库里按平台存的值灌进注册表 —— 平台握手前也能判 @
         var selfIds = app.Services.GetRequiredService<ZipperAIQQ.Server.Identity.ISelfIdRegistry>();
         foreach (var platform in directories.Platforms)
