@@ -1,4 +1,5 @@
 using ZipperAIQQ.Agent.Cost;
+using ZipperAIQQ.Channel.Failures;
 using System.Text;
 using Serilog;
 using ZipperAIQQ.Channel;
@@ -299,18 +300,34 @@ public class MailDigestService
             }
             catch (Exception ex)
             {
+                var kind = SendFailureClassifier.Classify(ex);
+
+                // 通道不可用：再等 1/2/4 秒也发不出去。直接交回上层冷却，别再白等（F-2）。
+                if (SendFailureClassifier.IsChannelDown(kind))
+                {
+                    _logger.Error(
+                        ex,
+                        "邮件汇总发送失败：通道不可用（{Kind}），放弃本轮重试，{Count} 封保持待转发",
+                        kind, mailCount);
+
+                    return new MailDigestResult(
+                        mailCount,
+                        false,
+                        $"通道不可用（{kind}）：{ex.Message}（邮件仍待转发）。");
+                }
+
                 if (failureCount >= retries)
                 {
                     // 不标记已转发：邮件留在待转队列里，下一轮继续试
                     _logger.Error(
                         ex,
-                        "邮件汇总发送失败（已重试 {Retries} 次），{Count} 封保持待转发",
-                        failureCount, mailCount);
+                        "邮件汇总发送失败（{Kind}，已重试 {Retries} 次），{Count} 封保持待转发",
+                        kind, failureCount, mailCount);
 
                     return new MailDigestResult(
                         mailCount,
                         false,
-                        $"发送到主人私聊失败：{ex.Message}（已重试 {failureCount} 次，邮件仍待转发）。");
+                        $"发送到主人私聊失败（{kind}）：{ex.Message}（已重试 {failureCount} 次，邮件仍待转发）。");
                 }
 
                 failureCount++;
