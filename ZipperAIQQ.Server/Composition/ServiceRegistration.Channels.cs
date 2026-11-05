@@ -164,11 +164,17 @@ public static partial class ServiceRegistration
                 channels, sp.GetRequiredService<ILogger>());
 
             // 所有出站消息都过这里：全局最短间隔 + 连发冷却，跨会话共享
-            return new ThrottledMessageChannel(
+            var throttled = new ThrottledMessageChannel(
                 composite,
                 options.SendIntervalMs,
                 options.MaxConsecutive,
                 options.CooldownMs);
+
+            // 最外层统计真实发送结果 → 喂给健康状态机（熔断后快速失败）
+            return new Channels.HealthTrackingMessageChannel(
+                throttled,
+                sp.GetRequiredService<ChannelHealthRegistry>(),
+                sp.GetRequiredService<ILogger>());
         });
     }
 }
