@@ -1,3 +1,4 @@
+using ZipperAIQQ.Agent.Cost;
 using System.Text;
 using Serilog;
 using ZipperAIQQ.Channel;
@@ -231,6 +232,8 @@ public class MailDigestService
 
         try
         {
+            // 邮件汇总是**非关键**调用：额度到硬线时该被拦（11-05 事故就是从它循环烧起来的）
+            using var purposeScope = CallPurposeScope.Begin(CallPurpose.MailDigest);
             var result = await _agents
                 .GetOrCreate(target)
                 .RunAsync(

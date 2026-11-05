@@ -22,7 +22,7 @@ public sealed class ChatClientProvider : IChatClientProvider
     private readonly ISecretProtector _protector;
     private readonly ILogger _logger;
     private readonly ISpendReader _spend;
-    private readonly QuotaOptions _quota;
+    private readonly IQuotaOptionsProvider _quota;
     private readonly IAlertSink? _alerts;
 
     private volatile IChatClient? _current;
@@ -33,7 +33,7 @@ public sealed class ChatClientProvider : IChatClientProvider
         ISecretProtector protector,
         ILogger logger,
         ISpendReader spend,
-        QuotaOptions quota,
+        IQuotaOptionsProvider quota,
         IAlertSink? alerts = null)
     {
         ArgumentNullException.ThrowIfNull(store);

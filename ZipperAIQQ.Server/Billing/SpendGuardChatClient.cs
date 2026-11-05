@@ -1,6 +1,7 @@
 using Microsoft.Extensions.AI;
 using Serilog;
 using ZipperAIQQ.Core.Time;
+using ZipperAIQQ.Agent.Cost;
 using ZipperAIQQ.Server.Alerts;
 
 namespace ZipperAIQQ.Server.Billing;
@@ -21,14 +22,14 @@ namespace ZipperAIQQ.Server.Billing;
 public sealed class SpendGuardChatClient : DelegatingChatClient
 {
     private readonly ISpendReader _spend;
-    private readonly QuotaOptions _options;
+    private readonly IQuotaOptionsProvider _options;
     private readonly IAlertSink? _alerts;
     private readonly ILogger _logger;
 
     public SpendGuardChatClient(
         IChatClient inner,
         ISpendReader spend,
-        QuotaOptions options,
+        IQuotaOptionsProvider options,
         ILogger logger,
         IAlertSink? alerts = null)
         : base(inner)
@@ -68,7 +69,10 @@ public sealed class SpendGuardChatClient : DelegatingChatClient
 
     private async Task CheckAsync(CancellationToken ct)
     {
-        if (!_options.Enabled || _options.LimitCny <= 0)
+        await _options.EnsureLoadedAsync(ct).ConfigureAwait(false);
+        var options = _options.Current;
+
+        if (!options.Enabled || options.LimitCny <= 0)
         {
             return;
         }
@@ -80,7 +84,7 @@ public sealed class SpendGuardChatClient : DelegatingChatClient
         }
 
         var purpose = CallPurposeScope.Current;
-        var limit = _options.LimitCny;
+        var limit = options.LimitCny;
 
         if (snapshot.SpentCny >= limit)
         {
@@ -97,7 +101,7 @@ public sealed class SpendGuardChatClient : DelegatingChatClient
                 $"额度已到硬线（¥{limit:F2}，窗口花费 ¥{snapshot.SpentCny:F2}），非关键调用被拦：{purpose}");
         }
 
-        if (snapshot.SpentCny >= limit * _options.WarnRatio)
+        if (snapshot.SpentCny >= limit * options.WarnRatio)
         {
             Raise(AlertKind.QuotaWarn, purpose, snapshot, limit);
         }

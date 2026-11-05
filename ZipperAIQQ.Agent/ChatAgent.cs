@@ -4,6 +4,7 @@ using Serilog;
 using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
+using ZipperAIQQ.Agent.Cost;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Reply;
 using ZipperAIQQ.Agent.Search;
@@ -423,6 +424,7 @@ public sealed class ChatAgent : IChatAgent
         ChatResponse response;
         try
         {
+            using var purposeScope = CallPurposeScope.Begin(CallPurpose.UserReply);
             response = await CallLlmAsync(messages, chatOptions, "llm.call", ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -456,6 +458,7 @@ public sealed class ChatAgent : IChatAgent
             messages.Add(new ChatMessage(ChatRole.User, DriftCorrectionPrompt));
             try
             {
+                using var retryScope = CallPurposeScope.Begin(CallPurpose.DriftRetry);
                 var retry = await CallLlmAsync(messages, chatOptions, "llm.retry", ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(retry.Text))
                 {

@@ -8,6 +8,8 @@ using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Metrics;
 using ZipperAIQQ.Storage.Summaries;
 
+using ZipperAIQQ.Agent.Cost;
+
 namespace ZipperAIQQ.Agent.Memory;
 
 /// <summary>
@@ -154,6 +156,7 @@ public sealed class SummaryService
         var sw = Stopwatch.StartNew();
         try
         {
+            using var purposeScope = CallPurposeScope.Begin(CallPurpose.Compression);
             var response = await _clients.Current.GetResponseAsync(request, cancellationToken: ct).ConfigureAwait(false);
             sw.Stop();
 

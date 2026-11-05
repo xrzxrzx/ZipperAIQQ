@@ -100,7 +100,13 @@ public static partial class ServiceRegistration
 
         // 余额采样 + 额度闸门（E 批）
         services.AddSingleton<Storage.Billing.IBalanceStore, Storage.Billing.SqliteBalanceStore>();
-        services.AddSingleton(sp => sp.GetRequiredService<Configuration.ServerOptions>().Quota);
+        services.AddSingleton<Billing.QuotaOptionsService>(sp => new(
+            sp.GetRequiredService<Storage.Settings.IRuntimeSettingsStore>(),
+            sp.GetRequiredService<Configuration.ServerOptions>().Quota,
+            sp.GetRequiredService<ILogger>()));
+        services.AddSingleton<Billing.IQuotaOptionsProvider>(sp => sp.GetRequiredService<Billing.QuotaOptionsService>());
+        services.AddSingleton<Api.IApiAction, Api.Handlers.GetQuotaAction>();
+        services.AddSingleton<Api.IApiAction, Api.Handlers.SetQuotaAction>();
         services.AddSingleton(sp => sp.GetRequiredService<Configuration.ServerOptions>().Billing);
         services.AddSingleton<Billing.ISpendReader, Billing.SpendReader>();
         services.AddHostedService<Billing.BalanceMonitor>();

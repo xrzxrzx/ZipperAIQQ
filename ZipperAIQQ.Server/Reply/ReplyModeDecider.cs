@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.AI;
 using Serilog;
 using ZipperAIQQ.Agent;
+using ZipperAIQQ.Agent.Cost;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Server.Config;
@@ -188,6 +189,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         {
             var context = await BuildJudgeContextAsync(message, ct).ConfigureAwait(false);
 
+            using var purposeScope = CallPurposeScope.Begin(CallPurpose.Judge);
             var response = await client.GetResponseAsync(
                 [
                     new ChatMessage(ChatRole.System, JudgePrompt),

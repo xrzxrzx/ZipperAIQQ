@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Serilog;
+using ZipperAIQQ.Agent.Cost;
 using ZipperAIQQ.Server.Alerts;
 using ZipperAIQQ.Server.Billing;
 
@@ -39,6 +40,12 @@ public sealed class SpendGuardChatClientTests
         }
     }
 
+    private sealed class FixedQuota(QuotaOptions options) : IQuotaOptionsProvider
+    {
+        public QuotaOptions Current => options;
+        public Task EnsureLoadedAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
     private sealed class FixedSpend(SpendSnapshot snapshot) : ISpendReader
     {
         public Task<SpendSnapshot> ReadAsync(CancellationToken ct = default) => Task.FromResult(snapshot);
@@ -64,7 +71,7 @@ public sealed class SpendGuardChatClientTests
         var guard = new SpendGuardChatClient(
             inner,
             new FixedSpend(snapshot),
-            options,
+            new FixedQuota(options),
             new LoggerConfiguration().CreateLogger(),
             sink);
 
