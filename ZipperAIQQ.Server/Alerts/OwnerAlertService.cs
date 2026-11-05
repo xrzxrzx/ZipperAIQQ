@@ -2,6 +2,7 @@ using Serilog;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Server.Access;
+using ZipperAIQQ.Server.Api;
 using ZipperAIQQ.Server.Channels;
 using ZipperAIQQ.Storage.Alerts;
 using ZipperAIQQ.Storage.Owners;
@@ -31,6 +32,7 @@ public sealed class OwnerAlertService
     private readonly IRuntimeSettingsStore _settings;
     private readonly AlertOptions _options;
     private readonly ILogger _logger;
+    private readonly EventBroadcaster? _events;
 
     private int _migrated;
 
@@ -41,7 +43,8 @@ public sealed class OwnerAlertService
         ChannelHealthRegistry health,
         IRuntimeSettingsStore settings,
         AlertOptions options,
-        ILogger logger)
+        ILogger logger,
+        EventBroadcaster? events = null)
     {
         ArgumentNullException.ThrowIfNull(alerts);
         ArgumentNullException.ThrowIfNull(owners);
@@ -58,6 +61,7 @@ public sealed class OwnerAlertService
         _settings = settings;
         _options = options;
         _logger = logger;
+        _events = events;
     }
 
     /// <summary>
@@ -121,6 +125,16 @@ public sealed class OwnerAlertService
         {
             _logger.Warning("告警所有通道都失败，已留档待补发：{Kind}", alert.Kind);
         }
+
+        // WS 广播（D-6）：客户端连 /events 时能实时看到；没客户端时 Publish 自己会跳过
+        _events?.Publish("alert", new
+        {
+            kind = alert.Kind.ToString(),
+            platform = alert.Platform,
+            ok = anyOk,
+            text = alert.Text,
+            at = alert.At,
+        });
 
         return anyOk;
     }

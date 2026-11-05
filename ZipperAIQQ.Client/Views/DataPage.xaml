@@ -216,6 +216,37 @@
                 </StackPanel>
             </Border>
 
+            <!-- 最近告警（D-6）：出过什么事、送没送到，一眼能看到 -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="最近告警" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="{x:Bind Stats.AlertSummaryText, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <ItemsControl ItemsSource="{x:Bind Stats.Alerts}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="dto:AlertItemDto">
+                                <Grid ColumnSpacing="12" Padding="0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="110" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{x:Bind TimeText}"
+                                               Style="{StaticResource CaptionStyle}" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{x:Bind Summary}" Style="{StaticResource BodyStyle}" />
+                                        <TextBlock Text="{x:Bind DetailText}"
+                                                   Style="{StaticResource CaptionStyle}" FontSize="11" />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
             <TextBlock Text="{x:Bind Stats.StatusLine, Mode=OneWay}"
                        Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
         </StackPanel>

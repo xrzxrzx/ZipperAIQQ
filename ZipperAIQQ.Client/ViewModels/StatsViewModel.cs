@@ -31,6 +31,12 @@ public sealed partial class StatsViewModel : ObservableObject
 
     public StatsDto? Stats { get; private set; }
 
+    /// <summary>最近告警（D-6：数据页直接能看「出过什么事」）。</summary>
+    public ObservableCollection<AlertItemDto> Alerts { get; } = [];
+
+    [ObservableProperty]
+    public partial string AlertSummaryText { get; set; } = "暂无告警";
+
     [ObservableProperty]
     public partial string StatusLine { get; set; } = string.Empty;
 
@@ -124,6 +130,7 @@ public sealed partial class StatsViewModel : ObservableObject
             }
 
             Apply(stats);
+            await LoadAlertsAsync().ConfigureAwait(true);
             StatusLine = SelectedSession == AllSessionsLabel
                 ? "统计已刷新"
                 : $"统计已刷新（{SelectedSession}）";
@@ -151,12 +158,37 @@ public sealed partial class StatsViewModel : ObservableObject
             if (stats is not null)
             {
                 Apply(stats);
+                await LoadAlertsAsync().ConfigureAwait(true);
             }
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"客户端异常：{ex}");
             // 心跳失败不提示（连接断了由状态条体现）
+        }
+    }
+
+    /// <summary>拉最近告警；失败不影响统计页其余内容。</summary>
+    private async Task LoadAlertsAsync()
+    {
+        try
+        {
+            var response = await _api
+                .CallAsync<AlertsResponseDto>("getAlerts", new { limit = 10 })
+                .ConfigureAwait(true);
+
+            Alerts.Clear();
+            foreach (var alert in response?.Alerts ?? [])
+            {
+                Alerts.Add(alert);
+            }
+
+            AlertSummaryText = Alerts.Count == 0 ? "暂无告警" : $"最近 {Alerts.Count} 条";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"读取告警失败：{ex}");
+            AlertSummaryText = "告警读取失败";
         }
     }
 
