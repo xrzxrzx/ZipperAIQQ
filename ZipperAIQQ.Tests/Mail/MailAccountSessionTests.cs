@@ -232,7 +232,8 @@ public sealed class MailAccountSessionTests : IAsyncLifetime
     public async Task SyncOnceAsync_NewMail_EmitsExpectedEventShape()
     {
         // Arrange
-        var sentAt = new DateTimeOffset(2026, 10, 26, 8, 30, 0, TimeSpan.FromHours(8));
+        // 用相对时间：首同步有 InitialDays=7 的窗口，写死日期会随时间流逝变成「过期邮件」→ 空事件。
+        var sentAt = DateTimeOffset.Now.AddDays(-1);
         var message = Message(
             7,
             "<shape@example.com>",
