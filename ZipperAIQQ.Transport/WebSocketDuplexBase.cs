@@ -143,18 +143,42 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport
     }
 
     /// <summary>
-    /// 不确保发送成功
+    /// 发送一帧；**状态不对就抛 <see cref="WebSocketException"/>**。
     /// </summary>
-    /// <param name="message"></param>
-    /// <returns></returns>
+    /// <remarks>
+    /// 旧实现状态不对时静默 return —— 上层以为发成功了，只能等到 echo 超时才失败，
+    /// 而且分不清「根本没发出去」还是「发出去了没回」。11-05 的 <c>Aborted</c> 正是这样
+    /// 被一路错判成「模型没按规矩来」，于是又烧了一次模型调用（问题记录 04 #7 第 1 步）。
+    /// </remarks>
     public async Task SendAsync(JsonNode message)
     {
-        if (_isDisposed || _ct.IsCancellationRequested)
-            return;
+        ArgumentNullException.ThrowIfNull(message);
+
+        if (_isDisposed)
+        {
+            throw new WebSocketException("WebSocket 已被释放，无法发送");
+        }
+
+        var socket = _socket;
+        if (socket is null)
+        {
+            throw new WebSocketException("WebSocket 尚未建立，无法发送");
+        }
+
+        if (socket.State != WebSocketState.Open)
+        {
+            throw new WebSocketException($"WebSocket 状态为 {socket.State}，无法发送");
+        }
+
+        if (_ct.IsCancellationRequested)
+        {
+            // 取消是调用方的决定，交给上层按 ct 判断 —— 不能记成通道故障。
+            throw new OperationCanceledException(_ct);
+        }
 
         var jsonBytes = Encoding.UTF8.GetBytes(message.ToJsonString());
         var buffer = new ArraySegment<byte>(jsonBytes);
-        await _socket!.SendAsync(buffer, WebSocketMessageType.Text, true, _ct);
+        await socket.SendAsync(buffer, WebSocketMessageType.Text, true, _ct);
     }
 
     protected abstract ValueTask OnMessageAsync(JsonNode json);

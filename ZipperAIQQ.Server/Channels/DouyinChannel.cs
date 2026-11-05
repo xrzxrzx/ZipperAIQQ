@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Serilog;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 
@@ -289,7 +290,8 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         var batches = BuildBatches(message.Segments, _options.MaxTextLength);
         if (batches.Count == 0)
         {
-            throw new InvalidOperationException(
+            throw new ContentInvalidException(
+                "douyin",
                 "消息没有可发送的内容片段（引用由 replyTo 承载，不单独成帧）。");
         }
 
@@ -658,7 +660,21 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         _pendingAcks[requestId] = completion;
         try
         {
-            await connection.SendAsync(json, ct).ConfigureAwait(false);
+            try
+            {
+                await connection.SendAsync(json, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is System.Net.WebSockets.WebSocketException
+                                          or ObjectDisposedException
+                                          or System.Net.Sockets.SocketException
+                                          or IOException)
+            {
+                throw new ChannelUnavailableException("douyin", $"抖音连接不可用：{ex.Message}", ex);
+            }
 
             var timeout = TimeSpan.FromMilliseconds(Math.Max(1, _options.SendTimeoutMs));
             DouyinAck ack;
@@ -668,13 +684,15 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
             }
             catch (TimeoutException)
             {
-                throw new TimeoutException(
+                throw new ChannelSendFailedException(
+                    "douyin",
                     $"抖音发送超时：{_options.SendTimeoutMs}ms 内没收到 ack（第 {sequence}/{total} 帧）。");
             }
 
             if (!ack.Ok)
             {
-                throw new InvalidOperationException(
+                throw new ChannelSendFailedException(
+                    "douyin",
                     $"抖音发送失败：{ack.Error ?? "sidecar 未给出原因"}");
             }
         }
@@ -803,7 +821,8 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         }
 
         return _connection
-            ?? throw new InvalidOperationException(
+            ?? throw new ChannelUnavailableException(
+                "douyin",
                 "抖音未连接：sidecar 尚未连入 /ws/channel（或已断开），无法发送。");
     }
 

@@ -9,6 +9,8 @@ using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Transport.Client;
 
+using ZipperAIQQ.Channel.Failures;
+
 namespace ZipperAIQQ.Channel.NapCat;
 
 /// <summary>
@@ -269,7 +271,22 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
                 ["echo"] = echo,
             };
 
-            await _transport.SendAsync(payload).ConfigureAwait(false);
+            try
+            {
+                await _transport.SendAsync(payload).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is System.Net.WebSockets.WebSocketException
+                                          or ObjectDisposedException
+                                          or System.Net.Sockets.SocketException
+                                          or IOException)
+            {
+                // 连接层明确坏了：包成语义异常，让上层**停下**而不是重新叫模型（问题记录 04 #7）。
+                throw new ChannelUnavailableException("qq", $"NapCat 连接不可用：{ex.Message}", ex);
+            }
 
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_options.ApiTimeoutSeconds));
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
@@ -406,7 +423,9 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
             {
-                throw new TimeoutException($"发送消息超时（{_options.ApiTimeoutSeconds} 秒）");
+                // 连接在，但这一条没回来：可退避重试这一条，但会计入失败计数。
+                throw new ChannelSendFailedException(
+                    "qq", $"发送消息超时（{_options.ApiTimeoutSeconds} 秒）");
             }
 
             var status = response["status"]?.GetValue<string>();
@@ -414,7 +433,7 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
             {
                 // 失败要抛出，由上层转成「回填给模型的失败原因」（FR-2.3）
                 var detail = response["message"]?.ToString() ?? response.ToJsonString();
-                throw new InvalidOperationException($"发送失败：{detail}");
+                throw new ChannelSendFailedException("qq", $"发送失败：{detail}");
             }
         }
         finally
