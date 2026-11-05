@@ -788,6 +788,26 @@ public sealed class ChatAgent : IChatAgent
 
         sb.AppendLine().Append($"【当前说话的人】{senderId} —— 在这套配置里是：{roleLabel}");
 
+        // R-08：主人的跨平台账号一次给全 —— 否则模型被问「我那个群」时只会看当前平台。
+        if (_ownerLookup is not null)
+        {
+            try
+            {
+                var accounts = await _ownerLookup.GetAllAsync(ct).ConfigureAwait(false);
+                if (accounts.Count > 1)
+                {
+                    sb.AppendLine().Append("【主人账号（跨平台）】")
+                      .Append(string.Join("；", accounts.Select(a =>
+                          $"{a.Platform}: {a.OwnerName ?? a.OwnerId}（{a.OwnerId}）")))
+                      .Append("。跨平台找人 / 查群时按平台标识区分。");
+                }
+            }
+            catch
+            {
+                // 查不到就当没有：不能因为跨平台联想失败影响本轮回复
+            }
+        }
+
         return sb.ToString().TrimEnd();
     }
 

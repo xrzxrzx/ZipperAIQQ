@@ -1,4 +1,5 @@
 using ZipperAIQQ.Agent;
+using ZipperAIQQ.Channel;
 using ZipperAIQQ.Server.Access;
 using ZipperAIQQ.Storage.Settings;
 
@@ -16,11 +17,13 @@ namespace ZipperAIQQ.Server.Contacts;
 public sealed class AccessOwnerLookup : IOwnerLookup
 {
     private readonly IRuntimeSettingsStore _settings;
+    private readonly IPlatformContacts? _platforms;
 
-    public AccessOwnerLookup(IRuntimeSettingsStore settings)
+    public AccessOwnerLookup(IRuntimeSettingsStore settings, IPlatformContacts? platforms = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         _settings = settings;
+        _platforms = platforms;
     }
 
     public async Task<(string? OwnerId, string? OwnerName)> GetAsync(
@@ -32,5 +35,26 @@ public sealed class AccessOwnerLookup : IOwnerLookup
 
         return (string.IsNullOrWhiteSpace(ownerId) ? null : ownerId.Trim(),
                 string.IsNullOrWhiteSpace(ownerName) ? null : ownerName.Trim());
+    }
+
+    /// <summary>枚举已接入平台，逐个取主人（R-08：跨平台联想）。</summary>
+    public async Task<IReadOnlyList<OwnerAccountRef>> GetAllAsync(CancellationToken ct = default)
+    {
+        if (_platforms is null)
+        {
+            return [];
+        }
+
+        var list = new List<OwnerAccountRef>();
+        foreach (var platform in _platforms.Platforms)
+        {
+            var (ownerId, ownerName) = await GetAsync(platform, ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(ownerId))
+            {
+                list.Add(new OwnerAccountRef(platform, ownerId!, ownerName));
+            }
+        }
+
+        return list;
     }
 }
