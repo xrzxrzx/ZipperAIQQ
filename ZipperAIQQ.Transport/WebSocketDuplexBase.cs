@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 
 namespace ZipperAIQQ.Transport;
 
-public abstract class WebSocketDuplexBase : IWebSocketTransport
+public abstract class WebSocketDuplexBase : IWebSocketTransport, IResettableTransport
 {
     protected ILogger _logger;
 
@@ -179,6 +179,68 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport
         var jsonBytes = Encoding.UTF8.GetBytes(message.ToJsonString());
         var buffer = new ArraySegment<byte>(jsonBytes);
         await socket.SendAsync(buffer, WebSocketMessageType.Text, true, _ct);
+    }
+
+    /// <summary>
+    /// 丢掉旧连接，为下一次 <c>ConnectAsync</c> 让路（可重复调用）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 断线后 socket 会停在 <c>Aborted</c> 且**不会**变回 null；<c>Attach</c> 见到它就直接拒绝，
+    /// 于是「重连」永远连不上。这里把它关掉、置空，并换一条新的取消源与完成信号。
+    /// </para>
+    /// <para>
+    /// 顺序很重要：先取消接收循环 → 再 abort socket（避免关一半时它还在读）→ 最后换新 CTS。
+    /// </para>
+    /// </remarks>
+    public async Task ResetAsync(CancellationToken ct = default)
+    {
+        var socket = _socket;
+        _socket = null;
+
+        try
+        {
+            _cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // 已经释放过：继续往下清
+        }
+
+        if (socket is not null)
+        {
+            try
+            {
+                socket.Abort();
+                socket.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug(ex, "释放旧 WebSocket 时出错（继续复位）");
+            }
+        }
+
+        var recv = _recvTask;
+        if (recv is not null && !recv.IsCompleted)
+        {
+            // 不等它也能继续；但等一小会儿能少一堆"读已释放对象"的噪声日志
+            try
+            {
+                await Task.WhenAny(recv, Task.Delay(TimeSpan.FromSeconds(2), ct)).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 调用方取消：复位本身已经做完了
+            }
+        }
+
+        _recvTask = null;
+        _isDisposed = false;
+        _cts = new CancellationTokenSource();
+        _ct = _cts.Token;
+        _cs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        StateChanged?.Invoke(WebSocketTransportState.Disconnected);
     }
 
     protected abstract ValueTask OnMessageAsync(JsonNode json);

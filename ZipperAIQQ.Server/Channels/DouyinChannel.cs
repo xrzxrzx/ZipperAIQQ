@@ -4,6 +4,7 @@ using System.Threading.Channels;
 using Serilog;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Failures;
+using ZipperAIQQ.Channel.Reliability;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 
@@ -28,7 +29,7 @@ namespace ZipperAIQQ.Server.Channels;
 /// 由上层转成「回填给模型的失败原因」（FR-2.3）。静默吞掉会让模型以为发出去了。
 /// </para>
 /// </remarks>
-public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannelLogin, IAsyncDisposable
+public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannelLogin, IAsyncDisposable, IRecoverableChannel
 {
     /// <summary>平台标识，与 <see cref="ChatRef.Platform"/>、<c>session</c> 前缀一致。</summary>
     public const string PlatformName = "douyin";
@@ -809,6 +810,15 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         Flush();
         return batches;
     }
+
+    /// <summary>当前是否已连上 sidecar（供恢复循环判断）。</summary>
+    bool IRecoverableChannel.IsConnected => IsConnected;
+
+    /// <summary>
+    /// 抖音的「恢复」是**空操作**：服务端没有出站连接，连接由 sidecar 反向连入。
+    /// 这里只把当前状态如实报回去，让共用的恢复循环继续按退避等待。
+    /// </summary>
+    Task<bool> IRecoverableChannel.TryRecoverAsync(CancellationToken ct) => Task.FromResult(IsConnected);
 
     private IDouyinConnection RequireConnection()
     {

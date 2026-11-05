@@ -11,6 +11,7 @@ using ZipperAIQQ.Agent.Media;
 using ZipperAIQQ.Agent.Search;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Reliability;
 using ZipperAIQQ.Channel.Apis;
 using ZipperAIQQ.Channel.Audio;
 using ZipperAIQQ.Channel.Filtering;
@@ -88,6 +89,11 @@ public static partial class ServiceRegistration
 
         services.AddSingleton<IContactDirectory>(sp => sp.GetRequiredService<NapCatChannel>());
 
+        // 通道健康与看门狗：平台只实现 IRecoverableChannel，循环/退避/熔断共用一份
+        services.AddSingleton<ChannelHealthRegistry>();
+        services.AddSingleton<IRecoverableChannel>(sp => sp.GetRequiredService<NapCatChannel>());
+        services.AddHostedService<ChannelSupervisor>();
+
         // ── 抖音通道（S3-E / 决策二）：sidecar 连入后由 /ws/channel 调 AttachAsync ──
         // 关掉时也注册（端点会 404），只是不进复合通道、不进联系人注册表。
         // 配置走 DouyinOptionsService（S3-F）：客户端可改、立即生效；启动值来自 ServerOptions.Douyin。
@@ -105,6 +111,7 @@ public static partial class ServiceRegistration
         // 登录相关 action 只依赖窄接口，不直接注入具体通道（换实现不用改 action）
         services.AddSingleton<Channels.IChannelLogin>(sp =>
             sp.GetRequiredService<Channels.DouyinChannel>());
+        services.AddSingleton<IRecoverableChannel>(sp => sp.GetRequiredService<Channels.DouyinChannel>());
 
         // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围 / 平台专用工具都只认平台名。
         // ⚠️ 抖音**无条件**注册（S3-F 补）：之前按启动配置决定加不加，结果"客户端打开开关"不生效 ——

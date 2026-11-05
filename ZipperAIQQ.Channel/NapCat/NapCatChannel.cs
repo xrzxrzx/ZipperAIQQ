@@ -10,6 +10,8 @@ using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Transport.Client;
 
 using ZipperAIQQ.Channel.Failures;
+using ZipperAIQQ.Channel.Reliability;
+using ZipperAIQQ.Transport;
 
 namespace ZipperAIQQ.Channel.NapCat;
 
@@ -30,7 +32,7 @@ namespace ZipperAIQQ.Channel.NapCat;
 /// 两者**不能用同一条路**：事件是 1:N 广播，API 响应是 1:1 定向。
 /// </para>
 /// </remarks>
-public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechTranscriber
+public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechTranscriber, IRecoverableChannel
 {
     private readonly IClientTransport _transport;
     private readonly IChatFilter _filter;
@@ -349,6 +351,27 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
 
     /// <summary>首次发现 / 变更自身账号。</summary>
     public event Action<string>? SelfIdChanged;
+
+    /// <summary>当前是否已连上 NapCat（供恢复循环判断）。</summary>
+    public bool IsConnected => _transport.IsConnected;
+
+    /// <summary>
+    /// 重连一次：先丢掉 Aborted 的旧 socket，再重拨。
+    /// </summary>
+    /// <remarks>
+    /// 顺序不能反：旧 socket 不置空时 <c>Attach</c> 会直接拒绝新连接，
+    /// 表面看「重连了」，实际一直连着旧的那个死连接。
+    /// </remarks>
+    public async Task<bool> TryRecoverAsync(CancellationToken ct)
+    {
+        if (_transport is IResettableTransport resettable)
+        {
+            await resettable.ResetAsync(ct).ConfigureAwait(false);
+        }
+
+        await StartAsync(ct).ConfigureAwait(false);
+        return _transport.IsConnected;
+    }
 
     /// <summary>建立连接并开始接收。</summary>
     public async Task StartAsync(CancellationToken ct = default)
