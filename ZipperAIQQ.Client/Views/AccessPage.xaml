@@ -60,16 +60,15 @@
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="12">
                     <TextBlock Text="名单" Style="{StaticResource SectionHeaderStyle}" />
-                    <TextBlock Text="白名单：只收名单内的会话；黑名单：排除名单内的会话。同一条目不能两边都加。"
+                    <TextBlock Text="白名单模式：只收名单内的会话，**空名单 = 全不收**；黑名单模式：排除名单内的会话，**空名单 = 全收**。"
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
-                    <TextBlock Text="白名单" FontWeight="SemiBold" />
+                    <ComboBox Width="140" Header="模式"
+                              ItemsSource="{x:Bind Vm.ModeOptions}"
+                              SelectedItem="{x:Bind Vm.SelectedModeDisplay, Mode=TwoWay}" />
+
                     <controls:MultiSelectList ItemsSource="{x:Bind Vm.ListCandidates}"
                                               SelectedValues="{x:Bind Vm.WhitelistSelected, Mode=OneWay}" />
-
-                    <TextBlock Text="黑名单" FontWeight="SemiBold" />
-                    <controls:MultiSelectList ItemsSource="{x:Bind Vm.ListCandidates}"
-                                              SelectedValues="{x:Bind Vm.BlacklistSelected, Mode=OneWay}" />
 
                     <TextBlock Text="主人放行（自动；黑名单优先）" FontWeight="SemiBold" />
                     <TextBlock Text="{x:Bind Vm.AlwaysAllowText, Mode=OneWay}"

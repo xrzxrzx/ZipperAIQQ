@@ -71,8 +71,17 @@ public sealed partial class AccessViewModel : ObservableObject
     /// <summary>已选白名单条目（显示名）。</summary>
     public ObservableCollection<string> WhitelistSelected { get; } = [];
 
-    /// <summary>已选黑名单条目（显示名）。</summary>
+    /// <summary>已选黑名单条目（显示名）。**H-4 起界面不再使用**（保留以兼容旧逻辑）。</summary>
     public ObservableCollection<string> BlacklistSelected { get; } = [];
+
+    /// <summary>模式下拉（H-4：一份名单 + 一个开关）。</summary>
+    public ObservableCollection<string> ModeOptions { get; } = ["白名单模式", "黑名单模式"];
+
+    [ObservableProperty]
+    public partial string SelectedModeDisplay { get; set; } = "黑名单模式";
+
+    /// <summary>界面标签 → 服务端模式名。</summary>
+    private string ModeCode => SelectedModeDisplay == "白名单模式" ? "Whitelist" : "Blacklist";
 
     [ObservableProperty]
     public partial string AlwaysAllowText { get; set; } = "—";
@@ -234,17 +243,23 @@ public sealed partial class AccessViewModel : ObservableObject
                 .Select(admin => ResolveDisplay(AdminCandidates, _adminDisplayToId, admin, $"账号 {admin}"))
                 .ToList());
 
+        // H-4：一份名单 + 显式模式；旧服务端没给 mode/entries 时按双名单折算
+        var mode = string.IsNullOrWhiteSpace(data.Mode)
+            ? (data.Whitelist.Count > 0 ? "Whitelist" : "Blacklist")
+            : data.Mode;
+        SelectedModeDisplay = mode == "Whitelist" ? "白名单模式" : "黑名单模式";
+
+        var entries = data.Entries.Count > 0
+            ? data.Entries
+            : (mode == "Whitelist" ? data.Whitelist : data.Blacklist);
+
         SyncSelection(
             WhitelistSelected,
-            data.Whitelist
+            entries
                 .Select(entry => ResolveDisplay(ListCandidates, _sessionDisplayToId, entry, entry))
                 .ToList());
 
-        SyncSelection(
-            BlacklistSelected,
-            data.Blacklist
-                .Select(entry => ResolveDisplay(ListCandidates, _sessionDisplayToId, entry, entry))
-                .ToList());
+        SyncSelection(BlacklistSelected, []);
 
         AlwaysAllowText = data.AlwaysAllow.Count == 0
             ? "（服务端未返回 —— 可能是旧版本；本地新服务端会显示主人私聊与所在群）"
@@ -405,21 +420,13 @@ public sealed partial class AccessViewModel : ObservableObject
     {
         try
         {
-            var whitelist = Map(_sessionDisplayToId, WhitelistSelected);
-            var blacklist = Map(_sessionDisplayToId, BlacklistSelected);
-
-            var overlap = whitelist.Intersect(blacklist, StringComparer.OrdinalIgnoreCase).ToList();
-            if (overlap.Count > 0)
-            {
-                ListStatus = $"同一条目不能同时在白名单与黑名单：{string.Join("、", overlap)}";
-                return false;
-            }
+            var entries = Map(_sessionDisplayToId, WhitelistSelected);
 
             var result = await _api.CallAsync<SaveResultDto>("setAccess", new
             {
                 platform = CurrentPlatform,
-                whitelist,
-                blacklist,
+                mode = ModeCode,
+                entries,
                 confirmDemoteAdmins = confirmDemote,
             }).ConfigureAwait(true);
 

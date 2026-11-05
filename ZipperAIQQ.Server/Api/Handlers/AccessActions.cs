@@ -72,6 +72,10 @@ public sealed class GetAccessAction : IApiAction
         var (whitelist, blacklist) = await AccessSettings
             .GetListsAsync(_settings, platform, ct).ConfigureAwait(false);
 
+        // H-1：显式模式 + 单份名单（无 mode 时按并集反推，只读）
+        var (_, listMode, listEntries) = await AccessSettings
+            .TryGetModeAsync(_settings, platform, ct).ConfigureAwait(false);
+
         // 候选人：该平台的联系人目录（抖音未接入时为空，不是"假装没有好友"）
         var directory = _directories.For(platform);
         IReadOnlyList<Channel.ContactInfo> friends = [];
@@ -110,6 +114,10 @@ public sealed class GetAccessAction : IApiAction
 
             whitelist = whitelist.ToList(),
             blacklist = blacklist.ToList(),
+
+            // 新口径：客户端按这一份渲染（旧字段继续保留，兼容旧客户端）
+            mode = listMode.ToString(),
+            entries = listEntries.ToList(),
             alwaysAllow = _filter.AlwaysAllow(platform),
 
             // 旧字段（B4 之前的老客户端还在用）：按「白名单优先」折算成单份

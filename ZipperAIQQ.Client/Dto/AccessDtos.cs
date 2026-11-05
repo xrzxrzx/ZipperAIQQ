@@ -59,6 +59,14 @@ public sealed class AccessDto
     [JsonPropertyName("blacklist")]
     public List<string> Blacklist { get; set; } = [];
 
+    /// <summary>显式模式（H-1）：Whitelist / Blacklist；旧服务端可能为空。</summary>
+    [JsonPropertyName("mode")]
+    public string Mode { get; set; } = string.Empty;
+
+    /// <summary>单份名单（H-1）。</summary>
+    [JsonPropertyName("entries")]
+    public List<string> Entries { get; set; } = [];
+
     /// <summary>主人放行范围（私聊 + 主人所在的群）。</summary>
     [JsonPropertyName("alwaysAllow")]
     public List<string> AlwaysAllow { get; set; } = [];
