@@ -222,14 +222,73 @@ public sealed class SetAccessAction : IApiAction
             ? ReadStringArray(entriesElement, "filterEntries")
             : null;
 
+        // H-1：显式模式 + 单份名单（新字段；与旧字段互斥）
+        string? listMode = null;
+        if (payload.TryGetProperty("mode", out var listModeElement))
+        {
+            if (listModeElement.ValueKind != JsonValueKind.String)
+            {
+                throw new ApiException(ApiResponse.BadRequest, "mode 必须是字符串。");
+            }
+
+            listMode = ParseMode(listModeElement.GetString());
+        }
+
+        var entriesInput = payload.TryGetProperty("entries", out var entriesElement2)
+            ? ReadStringArray(entriesElement2, "entries")
+            : null;
+
         // 有没有提交"可识别字段"：决定末尾"什么都没写"时是 400（垃圾 payload）还是 skipped（没变化）
         var sawKnownField = admins is not null
             || whitelistInput is not null
             || blacklistInput is not null
             || legacyMode is not null
-            || legacyEntries is not null;
+            || legacyEntries is not null
+            || listMode is not null
+            || entriesInput is not null;
 
-        if (legacyMode is not null || legacyEntries is not null)
+        if (listMode is not null || entriesInput is not null)
+        {
+            if (whitelistInput is not null || blacklistInput is not null ||
+                legacyMode is not null || legacyEntries is not null)
+            {
+                throw new ApiException(ApiResponse.BadRequest,
+                    "mode / entries 不能与 whitelist / blacklist / filterMode / filterEntries 同时提交。");
+            }
+
+            var mode = listMode is null
+                ? (await AccessSettings.TryGetModeAsync(_settings, platform, ct).ConfigureAwait(false)).Mode
+                : Enum.Parse<ChatListMode>(listMode, ignoreCase: true);
+
+            var entries = (entriesInput ?? [])
+                .Where(e => !string.IsNullOrWhiteSpace(e))
+                .Select(e => e.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            await _settings.SetAsync(AccessKeys.Mode(platform), mode.ToString(), ct).ConfigureAwait(false);
+            await _settings.SetAsync(AccessKeys.Entries(platform), string.Join(',', entries), ct).ConfigureAwait(false);
+
+            // 兼容镜像：旧版程序 / 旧客户端仍能读到一份合理名单
+            await _settings.SetAsync(
+                AccessKeys.Whitelist(platform),
+                mode == ChatListMode.Whitelist ? string.Join(',', entries) : string.Empty,
+                ct).ConfigureAwait(false);
+            await _settings.SetAsync(
+                AccessKeys.Blacklist(platform),
+                mode == ChatListMode.Blacklist ? string.Join(',', entries) : string.Empty,
+                ct).ConfigureAwait(false);
+
+            _filter.Update(platform, new ChatFilterOptions
+            {
+                Mode = mode,
+                Entries = entries,
+                AlwaysAllow = _filter.AlwaysAllow(platform).ToList(),
+            });
+
+            changed.Add($"mode={mode}/entries={entries.Count}");
+        }
+        else if (legacyMode is not null || legacyEntries is not null)
         {
             if (whitelistInput is not null || blacklistInput is not null)
             {

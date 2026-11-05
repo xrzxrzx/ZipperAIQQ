@@ -43,6 +43,12 @@ public static class AccessKeys
     /// <summary>消息黑名单。</summary>
     public static string Blacklist(string platform) => $"access.{Normalize(platform)}.blacklist";
 
+    /// <summary>显式模式键（H-1：Whitelist / Blacklist）。</summary>
+    public static string Mode(string platform) => $"access.{Normalize(platform)}.mode";
+
+    /// <summary>单份名单键（H-1）。</summary>
+    public static string Entries(string platform) => $"access.{Normalize(platform)}.entries";
+
     /// <summary>规范化平台名（空 → <see cref="DefaultPlatform"/>，统一小写）。</summary>
     public static string Normalize(string? platform) =>
         string.IsNullOrWhiteSpace(platform) ? DefaultPlatform : platform.Trim().ToLowerInvariant();

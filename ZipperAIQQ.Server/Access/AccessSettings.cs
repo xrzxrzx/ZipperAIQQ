@@ -1,3 +1,4 @@
+using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Storage.Settings;
 
 namespace ZipperAIQQ.Server.Access;
@@ -83,6 +84,40 @@ public static class AccessSettings
     /// 旧模型是「模式 + 单名单」（<c>access.filterMode</c> / <c>access.filterEntries</c>）：
     /// 新键两份都不存在时才回退，并按旧模式折成对应的一份。
     /// </remarks>
+    /// <summary>
+    /// 读显式模式与单份名单（H-1）。
+    /// </summary>
+    /// <remarks>
+    /// 没写过 mode 键时回退为「并集 + 反推」：白名单非空 → 白名单模式，否则黑名单模式。
+    /// 只读推导，不写库 —— 首启提示由调用方决定，避免读路径产生副作用。
+    /// </remarks>
+    public static async Task<(bool Found, ChatListMode Mode, IReadOnlyList<string> Entries)>
+        TryGetModeAsync(IRuntimeSettingsStore settings, string platform, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var rawMode = await settings.GetAsync(AccessKeys.Mode(platform), ct).ConfigureAwait(false);
+        var rawEntries = await settings.GetAsync(AccessKeys.Entries(platform), ct).ConfigureAwait(false);
+
+        if (rawMode is not null)
+        {
+            var mode = string.Equals(rawMode, "Blacklist", StringComparison.OrdinalIgnoreCase)
+                ? ChatListMode.Blacklist
+                : ChatListMode.Whitelist;
+            return (true, mode, SplitList(rawEntries));
+        }
+
+        var (found, whitelist, blacklist) = await TryGetListsAsync(settings, platform, ct).ConfigureAwait(false);
+        if (!found)
+        {
+            return (false, ChatListMode.Blacklist, []);
+        }
+
+        var union = whitelist.Concat(blacklist).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var derived = whitelist.Count > 0 ? ChatListMode.Whitelist : ChatListMode.Blacklist;
+        return (true, derived, union);
+    }
+
     public static async Task<(IReadOnlyList<string> Whitelist, IReadOnlyList<string> Blacklist)>
         GetListsAsync(
             IRuntimeSettingsStore settings, string platform, CancellationToken ct = default)

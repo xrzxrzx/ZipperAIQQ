@@ -38,6 +38,18 @@ public sealed record ChatFilterOptions
     public IReadOnlyList<string> Blacklist { get; init; } = [];
 
     /// <summary>
+    /// 显式模式（H-1，D-09）。<c>null</c> = 旧模型（两份名单 + 条数反推）。
+    /// </summary>
+    /// <remarks>
+    /// 显式模式一旦存在，**只认 <see cref="Entries"/>**，忽略 Whitelist/Blacklist：
+    /// 用户的心智模型是「一份名单 + 一个开关」，系统不该再拿条数去猜。
+    /// </remarks>
+    public ChatListMode? Mode { get; init; }
+
+    /// <summary>单份名单（<see cref="Mode"/> 非空时生效）。</summary>
+    public IReadOnlyList<string> Entries { get; init; } = [];
+
+    /// <summary>
     /// 无条件放行的会话（主人私聊 + 主人所在的群）。
     /// </summary>
     /// <remarks>
@@ -142,13 +154,21 @@ public sealed class ChatFilter : IChatFilter
         _buckets[platform] = Bucket.From(Sanitize(options));
     }
 
-    public int WhitelistCount(string platform) => For(platform).Whitelist.Count;
+    public int WhitelistCount(string platform) => For(platform) is { Mode: ChatListMode.Whitelist } b
+        ? b.Entries.Count
+        : For(platform).Whitelist.Count;
 
-    public int BlacklistCount(string platform) => For(platform).Blacklist.Count;
+    public int BlacklistCount(string platform) => For(platform) is { Mode: ChatListMode.Blacklist } b
+        ? b.Entries.Count
+        : For(platform).Blacklist.Count;
 
-    public IReadOnlyCollection<string> Whitelist(string platform) => For(platform).Whitelist.ToList();
+    public IReadOnlyCollection<string> Whitelist(string platform) => For(platform) is { Mode: ChatListMode.Whitelist } b
+        ? b.Entries.ToList()
+        : For(platform).Whitelist.ToList();
 
-    public IReadOnlyCollection<string> Blacklist(string platform) => For(platform).Blacklist.ToList();
+    public IReadOnlyCollection<string> Blacklist(string platform) => For(platform) is { Mode: ChatListMode.Blacklist } b
+        ? b.Entries.ToList()
+        : For(platform).Blacklist.ToList();
 
     public IReadOnlyCollection<string> AlwaysAllow(string platform) => For(platform).AlwaysAllow.ToList();
 
@@ -160,6 +180,18 @@ public sealed class ChatFilter : IChatFilter
         var bucket = For(chat.Platform);
 
         // 黑名单优先于一切自动放行：显式拉黑不能被「主人所在群」捞回来
+        // H-1/D-09：显式模式优先（一份名单 + 一个开关），不再由条数反推
+        if (bucket.Mode is { } mode)
+        {
+            if (mode == ChatListMode.Blacklist)
+            {
+                return !Matches(bucket.Entries, id);   // 黑名单模式：名单内拒，其余放行
+            }
+
+            // 白名单模式：名单内放行；空名单 = 全不收；主人放行仍然豁免（D75 只约束黑名单）
+            return Matches(bucket.Entries, id) || Matches(bucket.AlwaysAllow, id);
+        }
+
         if (Matches(bucket.Blacklist, id))
         {
             return false;
@@ -302,13 +334,17 @@ public sealed class ChatFilter : IChatFilter
     private sealed record Bucket(
         HashSet<string> Whitelist,
         HashSet<string> Blacklist,
-        HashSet<string> AlwaysAllow)
+        HashSet<string> AlwaysAllow,
+        ChatListMode? Mode,
+        HashSet<string> Entries)
     {
-        public static readonly Bucket Empty = new([], [], []);
+        public static readonly Bucket Empty = new([], [], [], null, []);
 
         public static Bucket From(ChatFilterOptions options) => new(
             ToSet(options.Whitelist),
             ToSet(options.Blacklist),
-            ToSet(options.AlwaysAllow));
+            ToSet(options.AlwaysAllow),
+            options.Mode,
+            ToSet(options.Entries));
     }
 }

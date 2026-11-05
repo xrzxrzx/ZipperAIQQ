@@ -257,4 +257,79 @@ public sealed class ChatFilterTests
         Assert.True(filter.IsAllowed(new ChatRef { Platform = "telegram", Type = ChatType.Private, Id = "1" }));
         Assert.Equal(0, filter.WhitelistCount("telegram"));
     }
+
+}
+
+/// <summary>H-1/D-09：显式模式 + 单份名单（不再由条数反推）。</summary>
+public sealed class ChatFilterModeTests
+{
+    private static ChatRef Chat(string id = "1", string platform = "qq") =>
+        new() { Platform = platform, Type = ChatType.Group, Id = id };
+
+    [Fact]
+    public void Whitelist_mode_with_empty_entries_denies_everything()
+    {
+        var filter = new ChatFilter(new ChatFilterOptions
+        {
+            Mode = ChatListMode.Whitelist,
+            Entries = [],
+            AlwaysAllow = ["qq:p1"],
+        });
+
+        Assert.False(filter.IsAllowed(Chat("1")));
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Private, Id = "1" }));
+    }
+
+    [Fact]
+    public void Whitelist_mode_allows_only_listed_sessions()
+    {
+        var filter = new ChatFilter(new ChatFilterOptions
+        {
+            Mode = ChatListMode.Whitelist,
+            Entries = ["qq:g1"],
+        });
+
+        Assert.True(filter.IsAllowed(Chat("1")));
+        Assert.False(filter.IsAllowed(Chat("2")));
+    }
+
+    [Fact]
+    public void Blacklist_mode_denies_listed_sessions_but_allows_the_rest()
+    {
+        var filter = new ChatFilter(new ChatFilterOptions
+        {
+            Mode = ChatListMode.Blacklist,
+            Entries = ["qq:g1"],
+        });
+
+        Assert.False(filter.IsAllowed(Chat("1")));
+        Assert.True(filter.IsAllowed(Chat("2")));
+    }
+
+    [Fact]
+    public void Blacklist_mode_beats_owner_always_allow()
+    {
+        // D75：显式拉黑优先于自动放行
+        var filter = new ChatFilter(new ChatFilterOptions
+        {
+            Mode = ChatListMode.Blacklist,
+            Entries = ["qq:g1"],
+            AlwaysAllow = ["qq:g1"],
+        });
+
+        Assert.False(filter.IsAllowed(Chat("1")));
+    }
+
+    [Fact]
+    public void Explicit_mode_ignores_legacy_lists()
+    {
+        var filter = new ChatFilter(new ChatFilterOptions
+        {
+            Mode = ChatListMode.Blacklist,
+            Entries = [],
+            Whitelist = ["qq:g1"],   // 旧字段：显式模式下不应被采用
+        });
+
+        Assert.True(filter.IsAllowed(Chat("1")));
+    }
 }
