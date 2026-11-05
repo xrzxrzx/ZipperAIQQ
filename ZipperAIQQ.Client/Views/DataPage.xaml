@@ -299,6 +299,38 @@
                 </StackPanel>
             </Border>
 
+            <!-- 定时任务执行（G-6）：到点后到底发了没、为什么没发 -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="定时任务执行" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="{x:Bind Stats.ExecutionSummaryText, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <ItemsControl ItemsSource="{x:Bind Stats.Executions}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="dto:ScheduleExecutionDto">
+                                <Grid ColumnSpacing="12" Padding="0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="110" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{x:Bind TimeText}"
+                                               Style="{StaticResource CaptionStyle}" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{x:Bind Summary}" Style="{StaticResource BodyStyle}" />
+                                        <TextBlock Text="{x:Bind DetailText}"
+                                                   Style="{StaticResource CaptionStyle}" FontSize="11"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
             <TextBlock Text="{x:Bind Stats.StatusLine, Mode=OneWay}"
                        Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
         </StackPanel>

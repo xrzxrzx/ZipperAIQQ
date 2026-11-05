@@ -37,6 +37,12 @@ public sealed partial class StatsViewModel : ObservableObject
     [ObservableProperty]
     public partial string AlertSummaryText { get; set; } = "暂无告警";
 
+    /// <summary>最近定时任务执行（G-6）。</summary>
+    public ObservableCollection<ScheduleExecutionDto> Executions { get; } = [];
+
+    [ObservableProperty]
+    public partial string ExecutionSummaryText { get; set; } = "暂无执行记录";
+
     // ── 额度看板（E-8）──
 
     [ObservableProperty]
@@ -158,6 +164,7 @@ public sealed partial class StatsViewModel : ObservableObject
             Apply(stats);
             await LoadAlertsAsync().ConfigureAwait(true);
             await LoadQuotaAsync().ConfigureAwait(true);
+            await LoadExecutionsAsync().ConfigureAwait(true);
             StatusLine = SelectedSession == AllSessionsLabel
                 ? "统计已刷新"
                 : $"统计已刷新（{SelectedSession}）";
@@ -187,6 +194,7 @@ public sealed partial class StatsViewModel : ObservableObject
                 Apply(stats);
                 await LoadAlertsAsync().ConfigureAwait(true);
                 await LoadQuotaAsync().ConfigureAwait(true);
+                await LoadExecutionsAsync().ConfigureAwait(true);
             }
         }
         catch (Exception ex)
@@ -301,6 +309,30 @@ public sealed partial class StatsViewModel : ObservableObject
         catch (Exception ex)
         {
             QuotaStatusLine = $"保存失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>拉最近定时任务执行（失败只影响这张卡）。</summary>
+    private async Task LoadExecutionsAsync()
+    {
+        try
+        {
+            var response = await _api
+                .CallAsync<ScheduleExecutionsResponseDto>("getScheduleExecutions", new { limit = 10 })
+                .ConfigureAwait(true);
+
+            Executions.Clear();
+            foreach (var item in response?.Executions ?? [])
+            {
+                Executions.Add(item);
+            }
+
+            ExecutionSummaryText = Executions.Count == 0 ? "暂无执行记录" : $"最近 {Executions.Count} 条";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"读取定时执行记录失败：{ex}");
+            ExecutionSummaryText = "执行记录读取失败";
         }
     }
 

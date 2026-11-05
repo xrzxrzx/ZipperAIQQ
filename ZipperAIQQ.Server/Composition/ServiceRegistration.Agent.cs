@@ -136,6 +136,7 @@ public static partial class ServiceRegistration
         // G 批：到点投 Agent + 执行审计（谁决定发/不发/失败）
         services.AddSingleton<IScheduleExecutionStore, SqliteScheduleExecutionStore>();
         services.AddSingleton<IScheduleExecutor, ScheduleAgentExecutor>();
+        services.AddSingleton<Api.IApiAction, Api.Handlers.GetScheduleExecutionsAction>();
         services.AddHostedService<SchedulePoller>();
 
         // ── 消息路由 ──

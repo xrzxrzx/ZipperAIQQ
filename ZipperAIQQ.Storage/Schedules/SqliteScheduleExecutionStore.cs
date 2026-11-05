@@ -32,6 +32,38 @@ public sealed class SqliteScheduleExecutionStore : IScheduleExecutionStore
         }, ct);
     }
 
+    public Task<IReadOnlyList<ScheduleExecution>> ListRecentAsync(
+        int limit = 20, CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        return _db.ReadAsync<IReadOnlyList<ScheduleExecution>>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT Id, TaskId, Outcome, Detail, CreatedAtMs
+                FROM ScheduleExecutions
+                ORDER BY Id DESC
+                LIMIT @limit;
+                """;
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            var list = new List<ScheduleExecution>();
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                list.Add(new ScheduleExecution(
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(4))));
+            }
+
+            return list;
+        }, ct);
+    }
+
     public Task<IReadOnlyList<ScheduleExecution>> ListByTaskAsync(
         long taskId, int limit = 20, CancellationToken ct = default)
     {
