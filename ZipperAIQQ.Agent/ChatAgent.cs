@@ -684,6 +684,9 @@ public sealed class ChatAgent : IChatAgent
         var canCrossSession = _permissionGate.IsAllowed(ToolCapability.CrossSessionHistory, context.Role);
         tools.AddRange(MessageTools.Create(_store, request.Chat, maxResults: 30, allowCrossSession: canCrossSession));
 
+        // R-09 评估结论：先补跨会话语义召回（不建图）
+        tools.AddRange(MemoryRecallTool.Create(_retriever, context, _policy));
+
         // 主动给别人发消息（管理员）：让 AI 能跨会话传话，而不只是被动回当前会话
         tools.AddRange(SendToOtherSessionTool.Create(
             _channel, _store, context, _permissionGate, _configs, maxResults: 10));

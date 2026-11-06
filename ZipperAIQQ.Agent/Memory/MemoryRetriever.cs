@@ -93,6 +93,105 @@ public sealed class MemoryRetriever
         return count;
     }
 
+    /// <summary>跨会话召回的一条结果（带分数构成，便于解释「为什么把它捞出来」）。</summary>
+    public sealed record RecalledMemory(StoredMessage Message, double Score, float Similarity);
+
+    /// <summary>
+    /// 跨会话向量召回 + 混合打分（R-09 评估结论：先补跨会话召回，不建图）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 实测：向量 top-5 邻居里 37% 在别的会话 —— 这才是「相关记忆找不到」的真实缺口；
+    /// 同一会话的邻居已经有热窗与本地检索覆盖，图扩散的边际收益很小。
+    /// </para>
+    /// <para>混合分 = 0.7×相似度 + 0.2×关键词重合 + 0.1×时间新鲜度（30 天半衰）。</para>
+    /// </remarks>
+    public async Task<IReadOnlyList<RecalledMemory>> RecallAcrossSessionsAsync(
+        string? excludeSessionId,
+        string query,
+        int topK = 5,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return [];
+        }
+
+        var queryVector = _embedding.Embed(query);
+        var candidates = await _vectors
+            .SearchAcrossSessionsAsync(queryVector, Math.Max(topK * 4, 12), excludeSessionId, ct)
+            .ConfigureAwait(false);
+
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        // 按会话取回正文（一次一条会话，避免 N+1）
+        var bySession = candidates
+            .GroupBy(c => c.SessionId, StringComparer.Ordinal)
+            .ToList();
+
+        var messages = new Dictionary<long, StoredMessage>();
+        foreach (var group in bySession)
+        {
+            var ids = group.Select(c => c.MessageId).ToList();
+            try
+            {
+                foreach (var message in await _messages
+                             .GetByIdsAsync(group.Key, ids, ct).ConfigureAwait(false))
+                {
+                    messages[message.Id] = message;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning(ex, "跨会话召回：读取 {Session} 的消息失败", group.Key);
+            }
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var scored = new List<RecalledMemory>(candidates.Count);
+
+        foreach (var candidate in candidates)
+        {
+            if (!messages.TryGetValue(candidate.MessageId, out var message))
+            {
+                continue;
+            }
+
+            var keyword = KeywordOverlap(query, message.Message.PlainText);
+            var ageDays = Math.Max(0, (now - message.Message.OccurredAt).TotalDays);
+            var recency = Math.Exp(-ageDays / 30.0);
+
+            var score = 0.7 * candidate.Score + 0.2 * keyword + 0.1 * recency;
+            scored.Add(new RecalledMemory(message, score, candidate.Score));
+        }
+
+        return scored
+            .OrderByDescending(r => r.Score)
+            .Take(topK)
+            .ToList();
+    }
+
+    /// <summary>查询与文本的 2-gram 重合率（中文无分词时最稳的粗略指标）。</summary>
+    private static double KeywordOverlap(string query, string text)
+    {
+        if (query.Length < 2 || text.Length < 2)
+        {
+            return 0;
+        }
+
+        var grams = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < query.Length - 1; i++)
+        {
+            grams.Add(query.Substring(i, 2));
+        }
+
+        var hit = grams.Count(g => text.Contains(g, StringComparison.OrdinalIgnoreCase));
+        return (double)hit / grams.Count;
+    }
+
     /// <summary>
     /// 按语义检索该会话的历史消息。
     /// </summary>
