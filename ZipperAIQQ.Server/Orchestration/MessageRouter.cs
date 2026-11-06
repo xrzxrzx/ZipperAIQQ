@@ -222,16 +222,9 @@ public sealed class MessageRouter : BackgroundService
             .GetModeAsync(msg.Chat.SessionId, ct)
             .ConfigureAwait(false);
 
-        // K-3 复用：群聊 jev 模式下**先不判**，等这批消息合并后再判一次（只判最后一条）。
-        // 否则连发 10 条 = 10 次 judge，而最终只会合并成一整轮回复。
-        var modeNow = await _replyModes.GetModeAsync(msg.Chat.SessionId, ct).ConfigureAwait(false);
-        var deferToBatch = modeNow == ReplyMode.Jev &&
-                           msg.Chat.Type == ChatType.Group &&
-                           !_replyModes.IsMentioned(msg, selfId);
-
-        if (!deferToBatch && !await _replyModes.ShouldReplyAsync(msg, selfId, ct).ConfigureAwait(false))
+        if (!await _replyModes.ShouldReplyAsync(msg, selfId, ct).ConfigureAwait(false))
         {
-            _logger.Debug("会话 {Session} 按回复模式不需要响应（{Mode}）", msg.Chat.SessionId, modeNow);
+            _logger.Debug("会话 {Session} 按回复模式不需要响应（{Mode}）", msg.Chat.SessionId, mode);
             return;
         }
 
