@@ -69,7 +69,8 @@ public sealed class PermissionGate : IPermissionGate
         return context.Role >= required
             ? PermissionDecision.Allow()
             : PermissionDecision.Deny(
-                $"权限不足：{Describe(capability)}需要 {required} 及以上角色，当前是 {context.Role}。");
+                $"权限不足：{Describe(capability)}需要 {required} 及以上角色，当前是 {context.Role}。" +
+                "可以让主人/管理员在「人员与名单」里调整你的角色，或者请他们代为执行。");
     }
 
     public bool IsAllowed(ToolCapability capability, Role role) => role >= MinRoleOf(capability);

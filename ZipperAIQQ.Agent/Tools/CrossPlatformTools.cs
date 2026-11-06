@@ -171,7 +171,8 @@ public static class CrossPlatformTools
 
         if (role < required)
         {
-            denial = $"权限不足：工具「{ToolName}」需要 {required} 及以上角色，当前是 {role}。";
+            denial = $"权限不足：工具「{ToolName}」需要 {required} 及以上角色，当前是 {role}。" +
+                     "可以让主人/管理员调整你的角色，或者请他们代为执行。";
             return false;
         }
 

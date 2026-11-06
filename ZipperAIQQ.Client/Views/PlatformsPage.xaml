@@ -3,6 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:ZipperAIQQ.Client.ViewModels"
+    xmlns:dto="using:ZipperAIQQ.Client.Dto"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="mc">
 
@@ -104,6 +105,17 @@
                     </StackPanel>
                     <TextBlock Text="{x:Bind Vm.OverviewStatus, Mode=OneWay}"
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                    <!-- I-4：各平台的主人一眼可见（未设置就明说，不显示空白） -->
+                    <TextBlock Text="各平台主人" Style="{StaticResource CaptionStyle}" Margin="0,6,0,0" />
+                    <ItemsControl ItemsSource="{x:Bind Vm.PlatformOwners}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="dto:PlatformInfoDto">
+                                <TextBlock Text="{x:Bind OwnerLine}" Style="{StaticResource CaptionStyle}"
+                                           TextWrapping="Wrap" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </StackPanel>
             </Border>
 
