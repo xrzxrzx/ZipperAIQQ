@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 17;
+    public const int CurrentSchemaVersion = 18;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -60,6 +60,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, AlertTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, BillingTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, ScheduleExecutionTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, TurnLogTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -350,6 +351,22 @@ public sealed class DatabaseInitializer
 
         CREATE INDEX IF NOT EXISTS IX_ScheduleExecutions_Task
             ON ScheduleExecutions (TaskId, Id);
+        """;
+
+    /// <summary>轮次审计（K-5）：静默收轮的产物。</summary>
+    private const string TurnLogTable = """
+        CREATE TABLE IF NOT EXISTS TurnLogs (
+            Id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            SessionId     TEXT    NOT NULL,
+            StartedAtMs   INTEGER NOT NULL,
+            EndedAtMs     INTEGER NOT NULL,
+            EndReason     TEXT    NOT NULL,
+            SteerCount    INTEGER NOT NULL DEFAULT 0,
+            FollowUpCount INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_TurnLogs_Session
+            ON TurnLogs (SessionId, Id);
         """;
 
     /// <summary>余额采样（E 批）：供应商不提供历史，只能自己留曲线。</summary>

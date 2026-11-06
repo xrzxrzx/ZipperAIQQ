@@ -79,10 +79,12 @@ public static partial class ServiceRegistration
         services.AddSingleton<IEventBus>(sp => new EventBus(sp.GetRequiredService<ILogger>()));
 
         // K-2：会话轮次协调器（同一会话串行 + 挂起等待 + 静默收轮）
+        services.AddSingleton<ZipperAIQQ.Storage.Turns.ITurnLogStore, ZipperAIQQ.Storage.Turns.SqliteTurnLogStore>();
         services.AddSingleton(sp => new Orchestration.TurnCoordinator(
             new Orchestration.TurnOptions(),
             sp.GetRequiredService<ZipperAIQQ.Storage.Metrics.IMetricsStore>(),
-            sp.GetRequiredService<ILogger>()));
+            sp.GetRequiredService<ILogger>(),
+            sp.GetRequiredService<ZipperAIQQ.Storage.Turns.ITurnLogStore>()));
 
         // ── M2-A：HTTP / WS 端点 ──
         // HttpAccessPolicy 构造时校验：非 loopback 无 token 直接抛，拒绝启动

@@ -2,6 +2,7 @@ using Serilog;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Server.Orchestration;
 using ZipperAIQQ.Storage.Metrics;
+using ZipperAIQQ.Storage.Turns;
 
 namespace ZipperAIQQ.Tests.Server;
 
@@ -29,6 +30,20 @@ public sealed class TurnCoordinatorTests
         public Task<IReadOnlyList<MetricSessionInfo>> ListSessionAsync(
             int windowHours = 24, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<MetricSessionInfo>>([]);
+    }
+
+    private sealed class FakeTurnLogs : ITurnLogStore
+    {
+        public List<TurnLog> Rows { get; } = [];
+
+        public Task AppendAsync(TurnLog log, CancellationToken ct = default)
+        {
+            Rows.Add(log);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<TurnLog>> ListRecentAsync(int limit = 20, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<TurnLog>>(Rows);
     }
 
     private static IncomingMessage Msg(string text) => new()
@@ -148,6 +163,31 @@ public sealed class TurnCoordinatorTests
 
         await Task.Delay(250);
         Assert.Equal(2, runs);
+    }
+
+    [Fact]
+    public async Task Finished_turn_writes_an_audit_row()
+    {
+        var logs = new FakeTurnLogs();
+        var coordinator = new TurnCoordinator(
+            new TurnOptions { SuspendedEnabled = false },
+            new FakeMetrics(),
+            new LoggerConfiguration().CreateLogger(),
+            logs);
+
+        var done = new TaskCompletionSource();
+        await coordinator.SubmitAsync(Chat, [Msg("审计")], (_, _) =>
+        {
+            done.TrySetResult();
+            return Task.CompletedTask;
+        }, CancellationToken.None);
+
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(100);
+
+        var row = Assert.Single(logs.Rows);
+        Assert.Equal(Chat.SessionId, row.SessionId);
+        Assert.Equal("Immediate", row.EndReason);
     }
 
     [Fact]

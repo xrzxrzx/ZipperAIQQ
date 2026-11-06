@@ -140,6 +140,7 @@ public static partial class ServiceRegistration
         services.AddSingleton<IScheduleExecutionStore, SqliteScheduleExecutionStore>();
         services.AddSingleton<IScheduleExecutor, ScheduleAgentExecutor>();
         services.AddSingleton<Api.IApiAction, Api.Handlers.GetScheduleExecutionsAction>();
+        services.AddSingleton<Api.IApiAction, Api.Handlers.GetTurnLogsAction>();
         services.AddHostedService<SchedulePoller>();
 
         // ── 消息路由 ──

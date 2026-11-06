@@ -3,6 +3,7 @@ using Serilog;
 using ZipperAIQQ.Agent.Steering;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Storage.Metrics;
+using ZipperAIQQ.Storage.Turns;
 
 namespace ZipperAIQQ.Server.Orchestration;
 
@@ -61,9 +62,14 @@ public sealed class TurnCoordinator
     private readonly TurnOptions _options;
     private readonly IMetricsStore _metrics;
     private readonly ILogger _logger;
+    private readonly ITurnLogStore? _turnLogs;
     private readonly ConcurrentDictionary<string, SessionTurn> _turns = new(StringComparer.Ordinal);
 
-    public TurnCoordinator(TurnOptions options, IMetricsStore metrics, ILogger logger)
+    public TurnCoordinator(
+        TurnOptions options,
+        IMetricsStore metrics,
+        ILogger logger,
+        ITurnLogStore? turnLogs = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(metrics);
@@ -72,6 +78,7 @@ public sealed class TurnCoordinator
         _options = options;
         _metrics = metrics;
         _logger = logger;
+        _turnLogs = turnLogs;
     }
 
     private sealed class SessionTurn
@@ -263,6 +270,26 @@ public sealed class TurnCoordinator
             }
 
             await RecordAsync(chat.SessionId, "turn.duration", elapsed, CancellationToken.None).ConfigureAwait(false);
+
+            // K-5：静默收轮的唯一产物 —— 审计一行（失败不影响收轮）
+            if (_turnLogs is not null)
+            {
+                try
+                {
+                    await _turnLogs.AppendAsync(new TurnLog(
+                        0,
+                        chat.SessionId,
+                        startedAt,
+                        DateTimeOffset.UtcNow,
+                        reason.ToString(),
+                        turn.SteerCount,
+                        turn.FollowUpCount), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warning(ex, "轮次审计写入失败（会话 {Session}）", chat.SessionId);
+                }
+            }
             _logger.Information(
                 "会话 {Session} 收轮：原因 {Reason}，耗时 {Elapsed:F0}ms，followUp {FollowUp} 条",
                 chat.SessionId, reason, elapsed, turn.FollowUpCount);
