@@ -123,6 +123,8 @@ public static partial class ServiceRegistration
                 // 平台专用工具（抖音）靠它按平台取联系人目录
                 PlatformContacts = sp.GetRequiredService<IPlatformContacts>(),
                 ChannelHealth = sp.GetRequiredService<ZipperAIQQ.Agent.IChannelHealthLookup>(),
+                ReplyLength = new ZipperAIQQ.Agent.Length.ReplyLengthOptions(),
+                ReplyModes = sp.GetRequiredService<ZipperAIQQ.Agent.IReplyModeDecider>(),
                 Options = BuildAgentOptions(options),
                 Logger = sp.GetRequiredService<ILogger>(),
             };

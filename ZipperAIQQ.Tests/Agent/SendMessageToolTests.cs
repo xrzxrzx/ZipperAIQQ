@@ -102,6 +102,80 @@ public sealed class SendMessageToolTests
         return (result?.ToString() ?? string.Empty, kinds);
     }
 
+    private sealed class RecordingChannel : IMessageChannel
+    {
+        public List<string> Sent { get; } = [];
+        public string Platform => "qq";
+        public ChannelCapabilities Capabilities => ChannelCapabilities.Text;
+        public Task StartAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task SendAsync(OutgoingMessage message, CancellationToken ct)
+        {
+            Sent.Add(string.Concat(message.Segments.OfType<TextSegment>().Select(s => s.Text)));
+            return Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<InboundEvent> ReceiveAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+    }
+
+    private sealed class CapturingMetrics : IMetricsStore
+    {
+        public List<string> Kinds { get; } = [];
+        public Task RecordAsync(MetricEntry entry, CancellationToken ct = default)
+        {
+            Kinds.Add(entry.Kind);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<MetricSummary>> GetSummaryAsync(
+            int windowHours = 24, string? sessionId = null, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<MetricSummary>>([]);
+
+        public Task<IReadOnlyList<MetricSessionInfo>> ListSessionAsync(
+            int windowHours = 24, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<MetricSessionInfo>>([]);
+    }
+
+    [Fact]
+    public async Task Oversized_message_is_rewritten_then_trimmed_and_counted()
+    {
+        var channel = new RecordingChannel();
+        var metrics = new CapturingMetrics();
+        var condensed = false;
+
+        var tool = SendMessageTool.Create(
+            channel,
+            new NoopStore(),
+            "bot",
+            new ChatRef { Platform = "qq", Type = ChatType.Private, Id = "10001" },
+            maxMessages: 5,
+            waitInterval: _ => Task.CompletedTask,
+            faces: FaceCatalog.Empty,
+            metrics: metrics,
+            onSent: _ => { },
+            budget: new ZipperAIQQ.Agent.Length.ReplyLengthBudget(MaxChars: 10, MaxMessages: 2),
+            condense: (text, maxChars, ct) =>
+            {
+                condensed = true;
+                Assert.Equal(10, maxChars);
+                return Task.FromResult("好长的回复已经压短了。");   // 仍超 10 字 → 需兜底裁剪
+            });
+
+        await tool.InvokeAsync(
+            new AIFunctionArguments { ["messages"] = new[] { new string('长', 50) } },
+            CancellationToken.None);
+
+        Assert.True(condensed);
+        var sent = Assert.Single(channel.Sent);
+        Assert.True(sent.Length <= 10, $"实际长度 {sent.Length}：{sent}");
+        Assert.Contains("reply.trimmed", metrics.Kinds);
+    }
+
     [Fact]
     public async Task Channel_unavailable_is_reported_to_caller()
     {

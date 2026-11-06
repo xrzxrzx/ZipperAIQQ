@@ -5,6 +5,7 @@ using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Cost;
+using ZipperAIQQ.Agent.Length;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Reply;
 using ZipperAIQQ.Agent.Search;
@@ -58,6 +59,8 @@ public sealed class ChatAgent : IChatAgent
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
     private readonly IChannelHealthLookup? _channelHealth;
+    private readonly ReplyLengthOptions? _replyLength;
+    private readonly IReplyModeDecider? _replyModes;
 
     /// <summary>按平台查主人（Server 用 AccessSettings 实现）；不传时退回旧键逻辑。</summary>
     private readonly IOwnerLookup? _ownerLookup;
@@ -109,6 +112,8 @@ public sealed class ChatAgent : IChatAgent
         _settings = settings;
         _roles = deps.Roles;
         _channelHealth = deps.ChannelHealth;
+        _replyLength = deps.ReplyLength;
+        _replyModes = deps.ReplyModes;
         _ownerLookup = deps.OwnerLookup;
         _workspace = deps.Workspace;
         _platformContacts = deps.PlatformContacts;
@@ -400,6 +405,15 @@ public sealed class ChatAgent : IChatAgent
                 .AppendLine($"【你现在的平台】{request.Chat.Platform}" +
                             $"（会话 {request.Chat.SessionId}）。跨平台查到别的会话时，结果前面会标 [会话] 来源。");
 
+        // R-11 / J-1：本轮长度预算（场景由 JEV 模式 + 是否私聊/被 @ 决定，不额外调模型）
+        var lengthBudget = await ResolveLengthBudgetAsync(request, selfId, ct).ConfigureAwait(false);
+        if (lengthBudget is not null)
+        {
+            reinject.AppendLine().AppendLine(
+                $"【本轮长度预算】约 {lengthBudget.MaxChars} 字以内、最多 {lengthBudget.MaxMessages} 条。" +
+                "超出的内容会被压缩甚至裁掉，所以先想把什么说清楚，别铺陈。");
+        }
+
         // 人设守卫（第 20 项）：每次重注入都带，位置紧贴当前消息 ——
         // 长对话里人设会被上下文稀释，靠这一条把它拉回来。
         // 主人有例外（问题记录 02 #2）：主人要求改设定/称呼/扮演时照做。
@@ -439,7 +453,11 @@ public sealed class ChatAgent : IChatAgent
             _faces,
             _metrics,
             n => sent += n,
-            kind => _lastSendFailure = kind);
+            kind => _lastSendFailure = kind,
+            lengthBudget,
+            lengthBudget is null
+                ? null
+                : (text, maxChars, token) => CondenseAsync(text, maxChars, token));
 
         var chatOptions = new ChatOptions
         {
@@ -812,6 +830,74 @@ public sealed class ChatAgent : IChatAgent
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>算本轮预算；关掉（Enabled=false）返回 null = 回退到只看软提示。</summary>
+    private async Task<ReplyLengthBudget?> ResolveLengthBudgetAsync(
+        AgentRunRequest request, string? selfId, CancellationToken ct)
+    {
+        if (_replyLength is not { Enabled: true })
+        {
+            return null;
+        }
+
+        // 可回退（J-3）：运行时开关 `reply.length.enabled=false` → 退回「只有软提示」的旧行为
+        try
+        {
+            var flag = await _settings.GetAsync("reply.length.enabled", ct).ConfigureAwait(false);
+            if (string.Equals(flag?.Trim(), "false", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+        }
+        catch
+        {
+            // 读不到开关按启用处理
+        }
+
+        ReplyMode mode;
+        try
+        {
+            mode = _replyModes is null
+                ? ReplyMode.Every
+                : await _replyModes.GetModeAsync(request.Chat.SessionId, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            mode = ReplyMode.Every;   // 读不到模式按最宽松处理，别因为判长度失败改变回复行为
+        }
+
+        var mentioned = request.Chat.Type == Channel.Models.ChatType.Private ||
+                        (!string.IsNullOrWhiteSpace(selfId) && request.Segments
+                            .OfType<Channel.Models.MentionSegment>()
+                            .Any(m => string.Equals(m.UserId, selfId, StringComparison.Ordinal)));
+
+        var scene = ReplyLengthPolicy.Decide(mode, request.Chat.Type, mentioned, request.UserText);
+        return ReplyLengthPolicy.BudgetFor(scene, _replyLength);
+    }
+
+    /// <summary>让模型把超长回复压缩到预算内（J-2；拍板选择「重写」而不是粗暴截断）。</summary>
+    private async Task<string> CondenseAsync(string text, int maxChars, CancellationToken ct)
+    {
+        try
+        {
+            using var purpose = CallPurposeScope.Begin(CallPurpose.Compression);
+            var response = await _clients.Current.GetResponseAsync(
+                [
+                    new ChatMessage(ChatRole.System,
+                        "把用户给你的这段话压缩改写：保留要点与语气，不要新增内容，不要解释你在做什么。只输出改写后的正文。"),
+                    new ChatMessage(ChatRole.User, "控制在 " + maxChars + " 字以内：" + Environment.NewLine + text),
+                ],
+                cancellationToken: ct).ConfigureAwait(false);
+
+            var rewritten = response.Text?.Trim();
+            return string.IsNullOrWhiteSpace(rewritten) ? text : rewritten;
+        }
+        catch
+        {
+            // 改写失败就退回原文，交给本地句末裁剪兜底
+            return text;
+        }
     }
 
     private static string BuildPersonaText(Persona persona)

@@ -29,6 +29,7 @@ public static class MetricKindCatalog
         ["tool.send_message"] = "发送消息",
         ["embedding.backfill"] = "向量回填",
         ["turn.total"] = "整轮耗时",
+        ["reply.trimmed"] = "回复超预算被压缩",
         ["tool.web_search"] = "网页搜索",
         ["tool.fetch_url"] = "网页抓取",
         ["tool.search_history"] = "检索历史",

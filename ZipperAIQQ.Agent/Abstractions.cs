@@ -128,6 +128,12 @@ public sealed record ChatAgentDependencies
     /// <summary>通道健康查询（F-3）；未注册时不做短路。</summary>
     public IChannelHealthLookup? ChannelHealth { get; init; }
 
+    /// <summary>回复长度预算（R-11 / J 批）；未注册时只留软提示。</summary>
+    public Length.ReplyLengthOptions? ReplyLength { get; init; }
+
+    /// <summary>JEV 模式（判长度场景用；只读模式，不触发模型调用）。</summary>
+    public IReplyModeDecider? ReplyModes { get; init; }
+
     /// <summary>网页搜索（#38）；未注册时不给模型搜索工具。</summary>
     public Search.IWebSearchProvider? WebSearch { get; init; }
 

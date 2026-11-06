@@ -4,6 +4,7 @@ using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Agent.Faces;
+using ZipperAIQQ.Agent.Length;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Metrics;
@@ -32,7 +33,9 @@ public static class SendMessageTool
         FaceCatalog faces,
         IMetricsStore metrics,
         Action<int> onSent,
-        Action<FailureKind>? onFailure = null)
+        Action<FailureKind>? onFailure = null,
+        ReplyLengthBudget? budget = null,
+        Func<string, int, CancellationToken, Task<string>>? condense = null)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
@@ -41,7 +44,8 @@ public static class SendMessageTool
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(onSent);
 
-        var cap = Math.Max(1, maxMessages);
+        // R-11 / J-2：条数取「全局上限」与「本轮预算」的较小值
+        var cap = Math.Max(1, budget is null ? maxMessages : Math.Min(maxMessages, budget.MaxMessages));
 
         return AIFunctionFactory.Create(
             async (string[] messages, CancellationToken ct) =>
@@ -67,6 +71,18 @@ public static class SendMessageTool
 
                 foreach (var text in toSend)
                 {
+                    var finalText = text;
+
+                    // J-2：超预算先让模型重写（拍板），改写后仍超长才本地裁到完整句
+                    if (budget is not null && finalText.Length > budget.MaxChars)
+                    {
+                        var rewritten = condense is null
+                            ? finalText
+                            : await condense(finalText, budget.MaxChars, ct).ConfigureAwait(false);
+                        finalText = ReplyLengthPolicy.TrimToBudget(rewritten, budget.MaxChars);
+                        await RecordMetricsAsync(metrics, chat.SessionId, "reply.trimmed").ConfigureAwait(false);
+                    }
+
                     // 会话级最小间隔：**每次真正发送前**都排一次队。
                     // （以前是 `if (sent > 0)` —— 单条发送、跨轮次完全不等，等于没限速）
                     await waitInterval(ct).ConfigureAwait(false);
@@ -74,7 +90,7 @@ public static class SendMessageTool
                     var outgoing = new OutgoingMessage
                     {
                         Chat = chat,
-                        Segments = MessageContentParser.Parse(text, faces),
+                        Segments = MessageContentParser.Parse(finalText, faces),
                     };
 
                     try
@@ -104,7 +120,7 @@ public static class SendMessageTool
                 }
 
                 sw.Stop();
-                await RecordMetricsAsync(metrics, chat.SessionId, sw.Elapsed.TotalMilliseconds).ConfigureAwait(false);
+                await RecordMetricsAsync(metrics, chat.SessionId, "tool.send_message", sw.Elapsed.TotalMilliseconds).ConfigureAwait(false);
 
                 if (sent > 0)
                 {
@@ -139,12 +155,13 @@ public static class SendMessageTool
     /// 按条记会让表迅速膨胀，而「工具调用慢在哪」本来就该按调用看。
     /// 指标失败不影响发送结果 —— 消息已经发出去了。
     /// </remarks>
-    private static async Task RecordMetricsAsync(IMetricsStore metrics, string sessionId, double elapsedMs)
+    private static async Task RecordMetricsAsync(
+        IMetricsStore metrics, string sessionId, string kind, double elapsedMs = 0)
     {
         try
         {
             await metrics
-                .RecordAsync(new MetricEntry(sessionId, "tool.send_message", elapsedMs, null, null))
+                .RecordAsync(new MetricEntry(sessionId, kind, elapsedMs, null, null))
                 .ConfigureAwait(false);
         }
         catch
