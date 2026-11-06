@@ -97,6 +97,7 @@ public sealed class SqliteMessageStore : IMessageStore
             cmd.Parameters.AddWithValue("@receivedAtMs", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             cmd.Parameters.AddWithValue("@replyToMessageId", (object?)message.ReplyToMessageId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@direction", direction);
+            cmd.Parameters.AddWithValue("@blocked", message.Blocked ? 1 : 0);
 
             var result = await cmd.ExecuteScalarAsync(token).ConfigureAwait(false);
             return Convert.ToInt64(result, CultureInfo.InvariantCulture);
@@ -151,6 +152,7 @@ public sealed class SqliteMessageStore : IMessageStore
                 SELECT {SelectColumnsSql}
                 FROM Messages
                 WHERE SessionId = @sessionId
+                  AND Blocked = 0
                   AND (@from IS NULL OR SentAtMs >= @from)
                   AND (@to IS NULL OR SentAtMs <= @to)
                 ORDER BY SentAtMs ASC, Id ASC
@@ -184,7 +186,7 @@ public sealed class SqliteMessageStore : IMessageStore
             cmd.CommandText = $"""
                 SELECT {SelectColumnsSql}
                 FROM Messages
-                WHERE SessionId = @sessionId AND MessageId = @messageId
+                WHERE SessionId = @sessionId AND MessageId = @messageId AND Blocked = 0
                 ORDER BY Id DESC
                 LIMIT 1;
                 """;
@@ -216,7 +218,7 @@ public sealed class SqliteMessageStore : IMessageStore
             cmd.CommandText = $"""
                 SELECT {SelectColumnsSql}
                 FROM Messages
-                WHERE SessionId = @sessionId AND Id IN ({placeholders})
+                WHERE SessionId = @sessionId AND Id IN ({placeholders}) AND Blocked = 0
                 ORDER BY SentAtMs ASC, Id ASC;
                 """;
             cmd.Parameters.AddWithValue("@sessionId", sessionId);
@@ -322,6 +324,7 @@ public sealed class SqliteMessageStore : IMessageStore
             OccurredAt = DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(10)),
             EventId = reader.IsDBNull(4) ? null : reader.GetString(4),
             ReplyToMessageId = reader.IsDBNull(12) ? null : reader.GetString(12),
+            Blocked = reader.FieldCount > 14 && reader.GetInt32(14) == 1,
         };
 
         return new StoredMessage(
@@ -336,11 +339,11 @@ public sealed class SqliteMessageStore : IMessageStore
         INSERT INTO Messages (
             Platform, SessionId, ChatType, ChatId, MessageId,
             SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
-            PlainText, SegmentsJson, SentAtMs, ReceivedAtMs, ReplyToMessageId, Direction
+            PlainText, SegmentsJson, SentAtMs, ReceivedAtMs, ReplyToMessageId, Direction, Blocked
         ) VALUES (
             @platform, @sessionId, @chatType, @chatId, @messageId,
             @senderUserId, @senderGroupCard, @senderNickname, @senderIsFriend,
-            @plainText, @segmentsJson, @sentAtMs, @receivedAtMs, @replyToMessageId, @direction
+            @plainText, @segmentsJson, @sentAtMs, @receivedAtMs, @replyToMessageId, @direction, @blocked
         )
         RETURNING Id;
         """;
@@ -348,7 +351,7 @@ public sealed class SqliteMessageStore : IMessageStore
     private const string SelectColumnsSql = """
         Id, Platform, ChatType, ChatId, MessageId,
         SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
-        ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction
+        ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction, Blocked
         """;
 
     /// <summary>关键词搜索（LIKE）；参数化，绝不拼字符串。</summary>
@@ -375,6 +378,7 @@ public sealed class SqliteMessageStore : IMessageStore
                 SELECT {SelectColumnsSql}
                 FROM Messages
                 WHERE SessionId = @sessionId
+                  AND Blocked = 0
                   AND PlainText LIKE @pattern
                   AND (@from IS NULL OR SentAtMs >= @from)
                   AND (@to IS NULL OR SentAtMs <= @to)
@@ -438,9 +442,10 @@ public sealed class SqliteMessageStore : IMessageStore
     private const string SelectCrossSessionSearchSql = """
         SELECT Id, Platform, ChatType, ChatId, MessageId,
                SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
-               ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction
+               ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction, Blocked
         FROM Messages
         WHERE PlainText LIKE @pattern
+          AND Blocked = 0
           AND (@exclude = '' OR SessionId <> @exclude)
           AND (@platform = '' OR Platform = @platform)
         ORDER BY SentAtMs DESC, Id DESC
@@ -450,9 +455,10 @@ public sealed class SqliteMessageStore : IMessageStore
     private const string SelectRecentSql = """
         SELECT Id, Platform, ChatType, ChatId, MessageId,
                SenderUserId, SenderGroupCard, SenderNickname, SenderIsFriend,
-               ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction
+               ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction, Blocked
         FROM Messages
         WHERE SessionId = @sessionId
+          AND Blocked = 0
         ORDER BY SentAtMs DESC, Id DESC
         LIMIT @limit;
         """;

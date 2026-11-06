@@ -30,6 +30,7 @@ public sealed class MessageRouter : BackgroundService
     private readonly External.ExternalWsHub _external;
     private readonly Configuration.ServerOptions _options;
     private readonly Identity.ISelfIdRegistry _selfIds;
+    private readonly IChatFilter _filter;
     private readonly ILogger _logger;
 
     public MessageRouter(
@@ -44,6 +45,7 @@ public sealed class MessageRouter : BackgroundService
         External.ExternalWsHub external,
         Configuration.ServerOptions options,
         Identity.ISelfIdRegistry selfIds,
+        IChatFilter filter,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -57,6 +59,7 @@ public sealed class MessageRouter : BackgroundService
         ArgumentNullException.ThrowIfNull(external);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(selfIds);
+        ArgumentNullException.ThrowIfNull(filter);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
@@ -70,6 +73,7 @@ public sealed class MessageRouter : BackgroundService
         _external = external;
         _options = options;
         _selfIds = selfIds;
+        _filter = filter;
         _logger = logger;
     }
 
@@ -155,8 +159,22 @@ public sealed class MessageRouter : BackgroundService
 
     private async Task HandleMessageAsync(IncomingMessage msg, CancellationToken ct)
     {
-        // ① 先落库（无论是否回复，历史都要留）
+        // ① 先落库（H-5：**一律入库**，被名单拦下的也留档，只是不处理）
+        var allowed = _filter.IsAllowed(msg.Chat);
+        if (!allowed)
+        {
+            msg = msg with { Blocked = true };
+        }
+
         var id = await _store.AppendAsync(msg, ct).ConfigureAwait(false);
+
+        if (!allowed)
+        {
+            _logger.Debug(
+                "会话 {Session} 未通过名单：消息 #{Id} 已留档，不处理（不回复 / 不执行命令）",
+                msg.Chat.SessionId, id);
+            return;
+        }
 
         // ② 命令优先（FR-9.1）：命中就执行并回复，**不进 agent**
         //    没命中（比如 "/foo" 这种普通文本）继续走原流程，用户无感知（9.2）

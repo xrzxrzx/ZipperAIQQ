@@ -562,13 +562,8 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
             return;
         }
 
-        // 接收过滤（FR-17.3）：不在名单内 → 不落库、不进模型
-        if (!_filter.IsAllowed(evt.Chat))
-        {
-            return;
-        }
-
-        // 语音转写（FR-1.5，通道层完成）：放在过滤之后 —— 被过滤的聊天不必花一次转写
+        // H-5：名单判定已上移到路由层 —— 通道只负责收，是否处理由路由决定（消息一律入库留档）。
+        // 语音转写（FR-1.5，通道层完成）。
         if (evt is IncomingMessage message)
         {
             evt = await EnrichRecordsAsync(message).ConfigureAwait(false);

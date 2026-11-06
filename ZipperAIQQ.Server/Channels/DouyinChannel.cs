@@ -544,17 +544,7 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
                     break;
                 }
 
-                // 会话白名单（决策七 / 设计 §6.1）：空 = 全部放行；非空则只收匹配的会话。
-                // 与 QQ 的接收过滤同口径（`douyin:p*` / `douyin:g*` 支持 `*` 后缀），
-                // 但**在通道层**拦：不进库、不进模型 —— 与"过滤发生在通道层"（FR-17.3）一致。
-                // 会话过滤与 QQ 完全同一套（2026-10-28）：配置入口在「人员与名单」的
-                // access.douyin.whitelist / blacklist；通道层拦截 → 不进库、不进模型（FR-17.3）。
-                if (!_filter.IsAllowed(message.Chat))
-                {
-                    _logger.Debug("抖音会话 {Session} 未通过名单过滤，已丢弃", message.Chat.SessionId);
-                    break;
-                }
-
+                // H-5：名单判定上移到路由层；通道一律投递，路由负责留档与"是否处理"。
                 await _inbox.Writer.WriteAsync(message, ct).ConfigureAwait(false);
                 break;
             }
