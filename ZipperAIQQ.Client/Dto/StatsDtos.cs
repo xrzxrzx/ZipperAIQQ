@@ -210,6 +210,9 @@ public sealed class KindStatsDto
         ["jev.judge"] = "JEV 判定调用",
         ["turn.duration"] = "轮次耗时",
         ["turn.suspended"] = "轮次挂起",
+        ["turn.steer"] = "引导注入",
+        ["turn.followup"] = "排队消息",
+        ["turn.interrupted"] = "引导达上限转排队",
         ["tool.web_search"] = "网页搜索",
         ["tool.fetch_url"] = "网页抓取",
     };

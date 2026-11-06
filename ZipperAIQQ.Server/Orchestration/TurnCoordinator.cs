@@ -36,6 +36,9 @@ public sealed record TurnOptions
     public bool SuspendedEnabled { get; init; } = true;
 
     public TimeSpan SuspendTimeout { get; init; } = TimeSpan.FromMinutes(3);
+
+    /// <summary>连续引导上限（拍板：2）；达到后强制跑完，新消息只排队。</summary>
+    public int MaxSteers { get; init; } = 2;
 }
 
 /// <summary>
@@ -77,6 +80,7 @@ public sealed class TurnCoordinator
         public readonly List<IncomingMessage> Pending = [];
         public TaskCompletionSource<bool>? Wakeup;
         public readonly SteerQueue Steer = new();
+        public int SteerCount;
         public TurnState State = TurnState.Idle;
         public int FollowUpCount;
     }
@@ -88,7 +92,7 @@ public sealed class TurnCoordinator
     public SteerQueue SteerQueueFor(string sessionId) =>
         _turns.GetOrAdd(sessionId, _ => new SessionTurn()).Steer;
 
-    public void Submit(
+    public Task SubmitAsync(
         ChatRef chat,
         IReadOnlyList<IncomingMessage> batch,
         Func<IReadOnlyList<IncomingMessage>, CancellationToken, Task> handler,
@@ -101,7 +105,7 @@ public sealed class TurnCoordinator
 
         if (batch.Count == 0)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         var turn = _turns.GetOrAdd(chat.SessionId, _ => new SessionTurn());
@@ -113,19 +117,32 @@ public sealed class TurnCoordinator
                 turn.State = TurnState.Running;
                 turn.Pending.AddRange(batch);
                 _ = Task.Run(() => RunLoopAsync(chat, turn, handler, ct), CancellationToken.None);
-                return;
+                return Task.CompletedTask;
             }
 
             // K-3：私聊默认 steer —— 注入当前轮的下一次模型调用，不另起一批
             if (preferSteer && turn.State == TurnState.Running)
             {
-                foreach (var message in batch)
+                if (turn.SteerCount >= _options.MaxSteers)
                 {
-                    turn.Steer.Enqueue(message.PlainText);
+                    // 连续引导上限（拍板 2）：达到后不许再打断，全部排队
+                    turn.Pending.AddRange(batch);
+                    _logger.Information(
+                        "会话 {Session} 引导已达上限 {Max}，本轮改为排队（{Count} 条）",
+                        chat.SessionId, _options.MaxSteers, batch.Count);
                 }
+                else
+                {
+                    turn.SteerCount++;
+                    foreach (var message in batch)
+                    {
+                        turn.Steer.Enqueue(message.PlainText);
+                    }
 
-                _logger.Debug("会话 {Session} 运行中收到 {Count} 条，已进引导队列", chat.SessionId, batch.Count);
-                return;
+                    _logger.Debug("会话 {Session} 运行中收到 {Count} 条，已进引导队列",
+                        chat.SessionId, batch.Count);
+                    return Task.CompletedTask;
+                }
             }
 
             // 其余情况（群聊 / 挂起中）：并入队列。挂起中的等待者被唤醒 → 继续同一轮
@@ -137,6 +154,8 @@ public sealed class TurnCoordinator
                 "会话 {Session} 在 {State} 状态收到 {Count} 条，已并入当前轮（累计 {FollowUp} 条）",
                 chat.SessionId, turn.State, batch.Count, turn.FollowUpCount);
         }
+
+        return Task.CompletedTask;
     }
 
     private async Task RunLoopAsync(
@@ -249,6 +268,7 @@ public sealed class TurnCoordinator
                 chat.SessionId, reason, elapsed, turn.FollowUpCount);
 
             turn.FollowUpCount = 0;
+            turn.SteerCount = 0;
 
             // 收轮瞬间又来了消息：保持 Running 续跑（上面已判定），不能丢
         }

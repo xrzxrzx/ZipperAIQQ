@@ -153,6 +153,9 @@ public sealed class MessageRouter : BackgroundService
     private sealed class SessionBuffer
     {
         public readonly List<IncomingMessage> Messages = [];
+
+        /// <summary>判定为「应引导当前轮」的消息 id（K-3）。</summary>
+        public readonly HashSet<string> SteerIds = new(StringComparer.Ordinal);
         public bool Processing;
 
         /// <summary>已从字典摘除：拿到它的处理循环要让调用方重新取新缓冲。</summary>
@@ -222,7 +225,8 @@ public sealed class MessageRouter : BackgroundService
             .GetModeAsync(msg.Chat.SessionId, ct)
             .ConfigureAwait(false);
 
-        if (!await _replyModes.ShouldReplyAsync(msg, selfId, ct).ConfigureAwait(false))
+        var verdict = await _replyModes.DecideAsync(msg, selfId, ct).ConfigureAwait(false);
+        if (!verdict.ShouldReply)
         {
             _logger.Debug("会话 {Session} 按回复模式不需要响应（{Mode}）", msg.Chat.SessionId, mode);
             return;
@@ -242,6 +246,11 @@ public sealed class MessageRouter : BackgroundService
                 }
 
                 buffer.Messages.Add(msg);
+
+                if (verdict.PreferSteer && !string.IsNullOrWhiteSpace(msg.EventId))
+                {
+                    buffer.SteerIds.Add(msg.EventId);
+                }
                 if (buffer.Processing)
                 {
                     return;
@@ -310,12 +319,15 @@ public sealed class MessageRouter : BackgroundService
                 }
 
                 // K-2：交给轮次协调器 —— 同一会话串行；跑/挂起中到达的批次并入当前轮
-                _turns.Submit(
+                var preferSteer = chat.Type == ChatType.Private ||
+                                  batch.Any(m => m.EventId is { } id && buffer.SteerIds.Remove(id));
+
+                await _turns.SubmitAsync(
                     chat,
                     batch,
                     (messages, token) => RunTurnAsync(chat, messages, token),
                     ct,
-                    preferSteer: chat.Type == ChatType.Private);
+                    preferSteer).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

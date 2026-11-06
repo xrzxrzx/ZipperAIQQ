@@ -13,8 +13,9 @@ public sealed class JudgeVerdictCacheTests
 
         cache.Set(key, true);
 
-        Assert.True(cache.TryGet(key, out var verdict));
+        Assert.True(cache.TryGet(key, out var verdict, out var steer));
         Assert.True(verdict);
+        Assert.False(steer);
     }
 
     [Fact]
@@ -25,7 +26,7 @@ public sealed class JudgeVerdictCacheTests
 
         Assert.Null(key);
         cache.Set(key, true);
-        Assert.False(cache.TryGet(key, out _));
+        Assert.False(cache.TryGet(key, out _, out _));
         Assert.Equal(0, cache.Count);
     }
 
@@ -38,7 +39,7 @@ public sealed class JudgeVerdictCacheTests
         cache.Set(key, false);
         Thread.Sleep(80);
 
-        Assert.False(cache.TryGet(key, out _));
+        Assert.False(cache.TryGet(key, out _, out _));
         Assert.Equal(0, cache.Count);
     }
 
@@ -50,7 +51,7 @@ public sealed class JudgeVerdictCacheTests
         cache.Set(JudgeVerdictCache.KeyOf("qq:g1", "same"), true);
         cache.Set(JudgeVerdictCache.KeyOf("qq:g2", "same"), false);
 
-        Assert.True(cache.TryGet(JudgeVerdictCache.KeyOf("qq:g1", "same"), out var a) && a);
-        Assert.True(cache.TryGet(JudgeVerdictCache.KeyOf("qq:g2", "same"), out var b) && !b);
+        Assert.True(cache.TryGet(JudgeVerdictCache.KeyOf("qq:g1", "same"), out var a, out _) && a);
+        Assert.True(cache.TryGet(JudgeVerdictCache.KeyOf("qq:g2", "same"), out var b, out _) && !b);
     }
 }

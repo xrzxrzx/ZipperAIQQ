@@ -18,7 +18,7 @@ namespace ZipperAIQQ.Server.Reply;
 /// </remarks>
 public sealed class JudgeVerdictCache
 {
-    private sealed record Entry(bool Verdict, DateTimeOffset At);
+    private sealed record Entry(bool Verdict, bool PreferSteer, DateTimeOffset At);
 
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly object _gate = new();
@@ -48,9 +48,10 @@ public sealed class JudgeVerdictCache
     public static string? KeyOf(string sessionId, string? messageId) =>
         string.IsNullOrWhiteSpace(messageId) ? null : sessionId + "|" + messageId;
 
-    public bool TryGet(string? key, out bool verdict)
+    public bool TryGet(string? key, out bool verdict, out bool preferSteer)
     {
         verdict = false;
+        preferSteer = false;
         if (key is null)
         {
             return false;
@@ -70,11 +71,12 @@ public sealed class JudgeVerdictCache
             }
 
             verdict = entry.Verdict;
+            preferSteer = entry.PreferSteer;
             return true;
         }
     }
 
-    public void Set(string? key, bool verdict)
+    public void Set(string? key, bool verdict, bool preferSteer = false)
     {
         if (key is null)
         {
@@ -88,7 +90,7 @@ public sealed class JudgeVerdictCache
                 PruneExpired();
             }
 
-            _entries[key] = new Entry(verdict, DateTimeOffset.UtcNow);
+            _entries[key] = new Entry(verdict, preferSteer, DateTimeOffset.UtcNow);
         }
     }
 

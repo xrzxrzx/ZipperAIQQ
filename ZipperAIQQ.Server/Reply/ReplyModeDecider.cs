@@ -113,7 +113,11 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         return TryParse(global, out var fallback) ? fallback : ReplyMode.Every;
     }
 
-    public async Task<bool> ShouldReplyAsync(IncomingMessage message, string selfId, CancellationToken ct = default)
+    public async Task<bool> ShouldReplyAsync(IncomingMessage message, string selfId, CancellationToken ct = default) =>
+        (await DecideAsync(message, selfId, ct).ConfigureAwait(false)).ShouldReply;
+
+    public async Task<JevVerdict> DecideAsync(
+        IncomingMessage message, string selfId, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(message);
 
@@ -121,16 +125,13 @@ public sealed class ReplyModeDecider : IReplyModeDecider
 
         return mode switch
         {
-            ReplyMode.Every => true,
-            ReplyMode.Mention => IsMentioned(message, selfId),
-            // JEV 模式语义：
-            //   · **私聊** → 必回（对方就是在专门跟我说话，判断"该不该"没有意义）
-            //   · 群里**被 @** → 必回，不消耗一次判断
-            //   · 群里没 @ → 交给 JEV 判断「该不该插话」
-            ReplyMode.Jev => message.Chat.Type == ChatType.Private
-                             || IsMentioned(message, selfId)
-                             || await JudgeCachedAsync(message, selfId, ct).ConfigureAwait(false),
-            _ => true,
+            ReplyMode.Every => new JevVerdict(true, false),
+            ReplyMode.Mention => new JevVerdict(IsMentioned(message, selfId), false),
+            // JEV：私聊/被 @ 必回且不判；群里没 @ 才判，一次调用同时给「要不要回 / 引导还是排队」
+            ReplyMode.Jev => message.Chat.Type == ChatType.Private || IsMentioned(message, selfId)
+                ? new JevVerdict(true, false)
+                : await JudgeCachedAsync(message, selfId, ct).ConfigureAwait(false),
+            _ => new JevVerdict(true, false),
         };
     }
 
@@ -162,17 +163,17 @@ public sealed class ReplyModeDecider : IReplyModeDecider
     /// <summary>
     /// 带缓存的 judge：同一消息只判一次（重放 / 多条路径检查 / K-3 的排队判定都复用它）。
     /// </summary>
-    private async Task<bool> JudgeCachedAsync(IncomingMessage message, string selfId, CancellationToken ct)
+    private async Task<JevVerdict> JudgeCachedAsync(IncomingMessage message, string selfId, CancellationToken ct)
     {
         var key = JudgeVerdictCache.KeyOf(message.Chat.SessionId, message.EventId);
 
-        if (_judgeCache.TryGet(key, out var cached))
+        if (_judgeCache.TryGet(key, out var cached, out var cachedSteer))
         {
-            return cached;
+            return new JevVerdict(cached, cachedSteer);
         }
 
         var verdict = await JudgeAsync(message, selfId, ct).ConfigureAwait(false);
-        _judgeCache.Set(key, verdict);
+        _judgeCache.Set(key, verdict.ShouldReply, verdict.PreferSteer);
 
         try
         {
@@ -188,14 +189,14 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         return verdict;
     }
 
-    private async Task<bool> JudgeAsync(IncomingMessage message, string selfId, CancellationToken ct)
+    private async Task<JevVerdict> JudgeAsync(IncomingMessage message, string selfId, CancellationToken ct)
     {
         var judge = await GetJudgeAsync(ct).ConfigureAwait(false);
         if (judge is null)
         {
             // 11.4：没配 judge 端点 → 降级 mention
             _logger.Warning("jev 模式没有可用的 Judge 端点，降级为 mention");
-            return IsMentioned(message, selfId);
+            return new JevVerdict(IsMentioned(message, selfId), false);
         }
 
         // decisions 模型（Jev 这类）走专用接口：它不接受 chat/completions
@@ -208,7 +209,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         if (client is null)
         {
             _logger.Warning("judge 端点 {Name} 没有可用的 chat 客户端，降级为 mention", judge.Value.Endpoint.Name);
-            return IsMentioned(message, selfId);
+            return new JevVerdict(IsMentioned(message, selfId), false);
         }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -232,11 +233,16 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             var text = (response.Text ?? string.Empty).Trim().ToLowerInvariant();
             var shouldReply = text.StartsWith("yes", StringComparison.Ordinal) || text.StartsWith("是", StringComparison.Ordinal);
 
+            // 第二个答案（K-3）：模型在 yes 后面回 steer / queue；缺省按排队处理
+            var preferSteer = shouldReply &&
+                              (text.Contains("steer", StringComparison.Ordinal) ||
+                               text.Contains("引导", StringComparison.Ordinal));
+
             await RecordAsync(message.Chat.SessionId, sw.Elapsed.TotalMilliseconds, shouldReply, ct).ConfigureAwait(false);
             _logger.Information("JEV 判断：{Result}（{Elapsed:F0}ms，会话 {SessionId}）",
                 shouldReply ? "回" : "不回", sw.Elapsed.TotalMilliseconds, message.Chat.SessionId);
 
-            return shouldReply;
+            return new JevVerdict(shouldReply, preferSteer);
         }
         catch (Exception ex)
         {
@@ -245,7 +251,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             _logger.Warning(ex, "JEV 判断失败，降级为 mention（会话 {SessionId}）", message.Chat.SessionId);
             await RecordAsync(message.Chat.SessionId, sw.Elapsed.TotalMilliseconds, false, ct).ConfigureAwait(false);
             await RecordDegradeAsync(message.Chat.SessionId, ct).ConfigureAwait(false);
-            return IsMentioned(message, selfId);
+            return new JevVerdict(IsMentioned(message, selfId), false);
         }
     }
 
@@ -383,7 +389,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
     }
 
     /// <summary>用 Decisions API（Jev）判断该不该回。</summary>
-    private async Task<bool> JudgeWithDecisionsAsync(JudgeBinding judge, IncomingMessage message, CancellationToken ct)
+    private async Task<JevVerdict> JudgeWithDecisionsAsync(JudgeBinding judge, IncomingMessage message, CancellationToken ct)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(JudgeTimeout);
@@ -395,7 +401,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
 
             var threshold = await GetJudgeThresholdAsync(ct).ConfigureAwait(false);
 
-            var (shouldReply, probability) = await _decisions
+            var (shouldReply, probability, preferSteer) = await _decisions
                 .JudgeAsync(judge.Endpoint, judge.ApiKey, personaText, recent, message.PlainText, threshold, cts.Token)
                 .ConfigureAwait(false);
 
@@ -405,14 +411,14 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             _logger.Information("JEV(decisions) 判断：{Result}（概率 {P:F2}，{Elapsed:F0}ms，会话 {SessionId}）",
                 shouldReply ? "回" : "不回", probability, sw.Elapsed.TotalMilliseconds, message.Chat.SessionId);
 
-            return shouldReply;
+            return new JevVerdict(shouldReply, preferSteer);
         }
         catch (Exception ex)
         {
             sw.Stop();
             _logger.Warning(ex, "JEV(decisions) 判断失败，降级为 mention（会话 {SessionId}）", message.Chat.SessionId);
             await RecordDegradeAsync(message.Chat.SessionId, ct).ConfigureAwait(false);
-            return IsMentioned(message, string.Empty);
+            return new JevVerdict(IsMentioned(message, string.Empty), false);
         }
     }
 

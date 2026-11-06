@@ -55,7 +55,7 @@ public sealed class TurnCoordinatorTests
         var releaseFirst = new TaskCompletionSource();
         var allDone = new TaskCompletionSource();
 
-        coordinator.Submit(Chat, [Msg("第一")], async (batch, _) =>
+        await coordinator.SubmitAsync(Chat, [Msg("第一")], async (batch, _) =>
         {
             lock (handled)
             {
@@ -74,7 +74,7 @@ public sealed class TurnCoordinatorTests
         }, CancellationToken.None);
 
         await firstStarted.Task;
-        coordinator.Submit(Chat, [Msg("第二")], (_, _) => Task.CompletedTask, CancellationToken.None);
+        await coordinator.SubmitAsync(Chat, [Msg("第二")], (_, _) => Task.CompletedTask, CancellationToken.None);
         releaseFirst.SetResult();
 
         await allDone.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -98,7 +98,7 @@ public sealed class TurnCoordinatorTests
 
         for (var i = 0; i < 5; i++)
         {
-            coordinator.Submit(Chat, [Msg($"m{i}")], async (batch, _) =>
+            await coordinator.SubmitAsync(Chat, [Msg($"m{i}")], async (batch, _) =>
             {
                 var now = Interlocked.Increment(ref concurrent);
                 InterlockedMax(ref maxConcurrent, now);
@@ -129,7 +129,7 @@ public sealed class TurnCoordinatorTests
         var runs = 0;
         var firstDone = new TaskCompletionSource();
 
-        coordinator.Submit(Chat, [Msg("a")], (_, _) =>
+        await coordinator.SubmitAsync(Chat, [Msg("a")], (_, _) =>
         {
             Interlocked.Increment(ref runs);
             firstDone.TrySetResult();
@@ -140,7 +140,7 @@ public sealed class TurnCoordinatorTests
 
         // 等挂起超时收轮，再发一条 → 必须是新的一轮（数量 +1）
         await Task.Delay(250);
-        coordinator.Submit(Chat, [Msg("b")], (_, _) =>
+        await coordinator.SubmitAsync(Chat, [Msg("b")], (_, _) =>
         {
             Interlocked.Increment(ref runs);
             return Task.CompletedTask;
@@ -162,7 +162,7 @@ public sealed class TurnCoordinatorTests
         var release = new TaskCompletionSource();
         var calls = 0;
 
-        coordinator.Submit(Chat, [Msg("先处理这条")], async (_, _) =>
+        await coordinator.SubmitAsync(Chat, [Msg("先处理这条")], async (_, _) =>
         {
             Interlocked.Increment(ref calls);
             started.TrySetResult();
@@ -171,7 +171,7 @@ public sealed class TurnCoordinatorTests
 
         await started.Task;
 
-        coordinator.Submit(Chat, [Msg("再补一句")], (_, _) => Task.CompletedTask,
+        await coordinator.SubmitAsync(Chat, [Msg("再补一句")], (_, _) => Task.CompletedTask,
             CancellationToken.None, preferSteer: true);
 
         Assert.Equal(1, coordinator.SteerQueueFor(Chat.SessionId).Count);
@@ -182,6 +182,39 @@ public sealed class TurnCoordinatorTests
 
         // 收轮时没注入的引导消息会退回 pending，下一轮继续处理 —— 不静默丢
         Assert.Equal(0, coordinator.SteerQueueFor(Chat.SessionId).Count);
+    }
+
+    [Fact]
+    public async Task Steering_is_capped_and_excess_goes_to_queue()
+    {
+        var coordinator = new TurnCoordinator(
+            new TurnOptions { SuspendedEnabled = false, MaxSteers = 2 },
+            new FakeMetrics(),
+            new LoggerConfiguration().CreateLogger());
+
+        var started = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        var calls = 0;
+
+        await coordinator.SubmitAsync(Chat, [Msg("开始")], async (_, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            started.TrySetResult();
+            await release.Task;
+        }, CancellationToken.None);
+
+        await started.Task;
+
+        for (var i = 0; i < 3; i++)
+        {
+            await coordinator.SubmitAsync(Chat, [Msg($"插话{i}")], (_, _) => Task.CompletedTask,
+                CancellationToken.None, preferSteer: true);
+        }
+
+        // 拍板：连续引导上限 2；第 3 条只能排队
+        Assert.Equal(2, coordinator.SteerQueueFor(Chat.SessionId).Count);
+        release.SetResult();
+        await Task.Delay(100);
     }
 
     private static void InterlockedMax(ref int target, int value)

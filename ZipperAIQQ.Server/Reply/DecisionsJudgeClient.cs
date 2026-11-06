@@ -62,7 +62,7 @@ public sealed class DecisionsJudgeClient
     /// 判定为「该回」的概率阈值（可运行时配置）。
     /// 0.5 是中性；调低 → 更愿意插话（漏回代价高时用），调高 → 更少出声（误回代价高时用）。
     /// </param>
-    public async Task<(bool ShouldReply, double Probability)> JudgeAsync(
+    public async Task<(bool ShouldReply, double Probability, bool PreferSteer)> JudgeAsync(
         LlmEndpoint endpoint,
         string apiKey,
         string? persona,
@@ -88,6 +88,16 @@ public sealed class DecisionsJudgeClient
             ["state"] = state,
             ["questions"] = new JsonObject
             {
+                ["steer_now"] = new JsonObject
+                {
+                    ["type"] = "noul",
+                    ["instructions"] = "如果我现在正忙着回上一条，这条『当前消息』应该**立刻插话引导**我，还是等我这条说完再**排队**处理？",
+                    ["criteria"] = new JsonObject
+                    {
+                        ["true"] = "这条消息是在补充、纠正、催促，或者话题必须马上纳入当前回复（插话引导）。",
+                        ["false"] = "这条消息可以等我先把当前回复说完再处理（排队）。",
+                    },
+                },
                 ["should_reply"] = new JsonObject
                 {
                     ["type"] = "noul",
@@ -116,14 +126,18 @@ public sealed class DecisionsJudgeClient
                 $"decisions API {(int)response.StatusCode}：{Truncate(text, 300)}");
         }
 
-        var probability = ParseNoul(text);
+        var probability = ParseNoul(text, "should_reply");
         var shouldReply = probability >= threshold;
 
-        _logger.Debug(
-            "Decisions 判断：概率 {P:F3}（阈值 {T:F2}）→ {R}",
-            probability, threshold, shouldReply ? "回" : "不回");
+        // 第二个问题与第一个问题在**同一次请求**里（K-3 复用），拿不到就按「排队」处理
+        var steerProbability = TryParseNoul(text, "steer_now", out var steer) ? steer : 0;
+        var preferSteer = shouldReply && steerProbability >= threshold;
 
-        return (shouldReply, probability);
+        _logger.Debug(
+            "Decisions 判断：回 {R}（{P:F3}），引导 {S}（{SP:F3}）",
+            shouldReply, probability, preferSteer, steerProbability);
+
+        return (shouldReply, probability, preferSteer);
     }
 
     /// <summary>把 chat 用的 baseUrl 换成 decisions 的地址。</summary>
@@ -151,12 +165,26 @@ public sealed class DecisionsJudgeClient
     }
 
     /// <summary>从响应里取 <c>answers.&lt;question&gt;.noul</c>。</summary>
-    private static double ParseNoul(string json)
+    private static bool TryParseNoul(string json, string question, out double probability)
+    {
+        try
+        {
+            probability = ParseNoul(json, question);
+            return true;
+        }
+        catch
+        {
+            probability = 0;
+            return false;
+        }
+    }
+
+    private static double ParseNoul(string json, string question)
     {
         using var doc = JsonDocument.Parse(json);
 
         if (!doc.RootElement.TryGetProperty("answers", out var answers) ||
-            !answers.TryGetProperty("should_reply", out var answer) ||
+            !answers.TryGetProperty(question, out var answer) ||
             !answer.TryGetProperty("noul", out var noul) ||
             !noul.TryGetDouble(out var probability))
         {
