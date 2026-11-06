@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Serilog;
+using ZipperAIQQ.Agent.Steering;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Storage.Metrics;
 
@@ -75,6 +76,7 @@ public sealed class TurnCoordinator
         public readonly object Gate = new();
         public readonly List<IncomingMessage> Pending = [];
         public TaskCompletionSource<bool>? Wakeup;
+        public readonly SteerQueue Steer = new();
         public TurnState State = TurnState.Idle;
         public int FollowUpCount;
     }
@@ -82,11 +84,16 @@ public sealed class TurnCoordinator
     /// <summary>
     /// 提交一批消息。若该会话正在跑/挂起，则并入队列（followUp），由正在跑的循环接手。
     /// </summary>
+    /// <summary>取某会话的引导队列（ChatAgent 每轮绑定到 <see cref="SteerContext"/>）。</summary>
+    public SteerQueue SteerQueueFor(string sessionId) =>
+        _turns.GetOrAdd(sessionId, _ => new SessionTurn()).Steer;
+
     public void Submit(
         ChatRef chat,
         IReadOnlyList<IncomingMessage> batch,
         Func<IReadOnlyList<IncomingMessage>, CancellationToken, Task> handler,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool preferSteer = false)
     {
         ArgumentNullException.ThrowIfNull(chat);
         ArgumentNullException.ThrowIfNull(batch);
@@ -109,7 +116,19 @@ public sealed class TurnCoordinator
                 return;
             }
 
-            // 运行/挂起中：并入队列。挂起中的等待者被唤醒 → 继续同一轮
+            // K-3：私聊默认 steer —— 注入当前轮的下一次模型调用，不另起一批
+            if (preferSteer && turn.State == TurnState.Running)
+            {
+                foreach (var message in batch)
+                {
+                    turn.Steer.Enqueue(message.PlainText);
+                }
+
+                _logger.Debug("会话 {Session} 运行中收到 {Count} 条，已进引导队列", chat.SessionId, batch.Count);
+                return;
+            }
+
+            // 其余情况（群聊 / 挂起中）：并入队列。挂起中的等待者被唤醒 → 继续同一轮
             turn.Pending.AddRange(batch);
             turn.FollowUpCount += batch.Count;
             turn.Wakeup?.TrySetResult(true);
@@ -202,6 +221,18 @@ public sealed class TurnCoordinator
         finally
         {
             var elapsed = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+
+            // 没来得及注入的引导消息：退回 pending，下一轮处理（不能静默丢）
+            foreach (var text in turn.Steer.Drain())
+            {
+                turn.Pending.Add(new IncomingMessage
+                {
+                    Chat = chat,
+                    Sender = new SenderInfo { UserId = "steer", Nickname = "插入消息" },
+                    Segments = [new TextSegment(text)],
+                    OccurredAt = DateTimeOffset.UtcNow,
+                });
+            }
 
             lock (turn.Gate)
             {

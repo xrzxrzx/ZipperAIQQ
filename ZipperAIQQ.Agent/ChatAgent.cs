@@ -6,6 +6,7 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Cost;
 using ZipperAIQQ.Agent.Length;
+using ZipperAIQQ.Agent.Steering;
 using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Reply;
 using ZipperAIQQ.Agent.Search;
@@ -61,6 +62,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly IChannelHealthLookup? _channelHealth;
     private readonly ReplyLengthOptions? _replyLength;
     private readonly IReplyModeDecider? _replyModes;
+    private readonly Func<string, SteerQueue>? _steerQueues;
 
     /// <summary>按平台查主人（Server 用 AccessSettings 实现）；不传时退回旧键逻辑。</summary>
     private readonly IOwnerLookup? _ownerLookup;
@@ -114,6 +116,7 @@ public sealed class ChatAgent : IChatAgent
         _channelHealth = deps.ChannelHealth;
         _replyLength = deps.ReplyLength;
         _replyModes = deps.ReplyModes;
+        _steerQueues = deps.SteerQueues;
         _ownerLookup = deps.OwnerLookup;
         _workspace = deps.Workspace;
         _platformContacts = deps.PlatformContacts;
@@ -283,6 +286,9 @@ public sealed class ChatAgent : IChatAgent
 
     private async Task<AgentRunResult> RunCoreAsync(AgentRunRequest request, CancellationToken ct)
     {
+        // K-3：本轮从引导队列取「运行中插进来的消息」
+        using var steerScope = SteerContext.Bind(_steerQueues?.Invoke(SessionId));
+
         using var activity = AgentTelemetry.Source.StartActivity("agent.run");
         activity?.SetTag("session.id", SessionId);
         activity?.SetTag("chat.type", request.Chat.Type.ToString());

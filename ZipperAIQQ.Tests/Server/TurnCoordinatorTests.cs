@@ -150,6 +150,40 @@ public sealed class TurnCoordinatorTests
         Assert.Equal(2, runs);
     }
 
+    [Fact]
+    public async Task Private_message_while_running_goes_to_steer_queue_not_new_batch()
+    {
+        var coordinator = new TurnCoordinator(
+            new TurnOptions { SuspendedEnabled = false },
+            new FakeMetrics(),
+            new LoggerConfiguration().CreateLogger());
+
+        var started = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        var calls = 0;
+
+        coordinator.Submit(Chat, [Msg("先处理这条")], async (_, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            started.TrySetResult();
+            await release.Task;
+        }, CancellationToken.None, preferSteer: true);
+
+        await started.Task;
+
+        coordinator.Submit(Chat, [Msg("再补一句")], (_, _) => Task.CompletedTask,
+            CancellationToken.None, preferSteer: true);
+
+        Assert.Equal(1, coordinator.SteerQueueFor(Chat.SessionId).Count);
+        Assert.Equal(1, Volatile.Read(ref calls));
+
+        release.SetResult();
+        await Task.Delay(100);
+
+        // 收轮时没注入的引导消息会退回 pending，下一轮继续处理 —— 不静默丢
+        Assert.Equal(0, coordinator.SteerQueueFor(Chat.SessionId).Count);
+    }
+
     private static void InterlockedMax(ref int target, int value)
     {
         int current;

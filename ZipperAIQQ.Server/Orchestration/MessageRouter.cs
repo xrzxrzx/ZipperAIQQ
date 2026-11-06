@@ -310,7 +310,12 @@ public sealed class MessageRouter : BackgroundService
                 }
 
                 // K-2：交给轮次协调器 —— 同一会话串行；跑/挂起中到达的批次并入当前轮
-                _turns.Submit(chat, batch, (messages, token) => RunTurnAsync(chat, messages, token), ct);
+                _turns.Submit(
+                    chat,
+                    batch,
+                    (messages, token) => RunTurnAsync(chat, messages, token),
+                    ct,
+                    preferSteer: chat.Type == ChatType.Private);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

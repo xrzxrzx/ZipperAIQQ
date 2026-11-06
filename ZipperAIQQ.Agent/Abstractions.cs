@@ -134,6 +134,9 @@ public sealed record ChatAgentDependencies
     /// <summary>JEV 模式（判长度场景用；只读模式，不触发模型调用）。</summary>
     public IReplyModeDecider? ReplyModes { get; init; }
 
+    /// <summary>取某会话的引导队列（K-3）；未注册时不做 steer 注入。</summary>
+    public Func<string, Steering.SteerQueue>? SteerQueues { get; init; }
+
     /// <summary>网页搜索（#38）；未注册时不给模型搜索工具。</summary>
     public Search.IWebSearchProvider? WebSearch { get; init; }
 

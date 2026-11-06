@@ -125,6 +125,7 @@ public static partial class ServiceRegistration
                 ChannelHealth = sp.GetRequiredService<ZipperAIQQ.Agent.IChannelHealthLookup>(),
                 ReplyLength = new ZipperAIQQ.Agent.Length.ReplyLengthOptions(),
                 ReplyModes = sp.GetRequiredService<ZipperAIQQ.Agent.IReplyModeDecider>(),
+                SteerQueues = sp.GetRequiredService<Orchestration.TurnCoordinator>().SteerQueueFor,
                 Options = BuildAgentOptions(options),
                 Logger = sp.GetRequiredService<ILogger>(),
             };
