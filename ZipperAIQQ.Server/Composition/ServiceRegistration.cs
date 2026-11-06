@@ -78,6 +78,12 @@ public static partial class ServiceRegistration
         // ── 事件总线（Agent 事件：漂移 / 降级；M2 客户端接 WS 后订阅同一批事件）──
         services.AddSingleton<IEventBus>(sp => new EventBus(sp.GetRequiredService<ILogger>()));
 
+        // K-2：会话轮次协调器（同一会话串行 + 挂起等待 + 静默收轮）
+        services.AddSingleton(sp => new Orchestration.TurnCoordinator(
+            new Orchestration.TurnOptions(),
+            sp.GetRequiredService<ZipperAIQQ.Storage.Metrics.IMetricsStore>(),
+            sp.GetRequiredService<ILogger>()));
+
         // ── M2-A：HTTP / WS 端点 ──
         // HttpAccessPolicy 构造时校验：非 loopback 无 token 直接抛，拒绝启动
         services.AddSingleton(_ => new HttpAccessPolicy(options.HttpAddress, options.HttpToken));

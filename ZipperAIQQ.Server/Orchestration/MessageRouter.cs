@@ -31,6 +31,7 @@ public sealed class MessageRouter : BackgroundService
     private readonly Configuration.ServerOptions _options;
     private readonly Identity.ISelfIdRegistry _selfIds;
     private readonly IChatFilter _filter;
+    private readonly TurnCoordinator _turns;
     private readonly ILogger _logger;
 
     public MessageRouter(
@@ -46,6 +47,7 @@ public sealed class MessageRouter : BackgroundService
         Configuration.ServerOptions options,
         Identity.ISelfIdRegistry selfIds,
         IChatFilter filter,
+        TurnCoordinator turns,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -60,6 +62,7 @@ public sealed class MessageRouter : BackgroundService
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(selfIds);
         ArgumentNullException.ThrowIfNull(filter);
+        ArgumentNullException.ThrowIfNull(turns);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
@@ -74,6 +77,7 @@ public sealed class MessageRouter : BackgroundService
         _options = options;
         _selfIds = selfIds;
         _filter = filter;
+        _turns = turns;
         _logger = logger;
     }
 
@@ -252,6 +256,31 @@ public sealed class MessageRouter : BackgroundService
         _ = ProcessBatchAsync(msg.Chat, buffer, ct);
     }
 
+    /// <summary>一轮里处理一批消息（由 <see cref="TurnCoordinator"/> 串行调度）。</summary>
+    private async Task RunTurnAsync(ChatRef chat, IReadOnlyList<IncomingMessage> batch, CancellationToken ct)
+    {
+        if (batch.Count == 0)
+        {
+            return;
+        }
+
+        var last = batch[^1];
+        var agent = _agents.GetOrCreate(chat);
+
+        var result = await agent.RunAsync(new AgentRunRequest
+        {
+            Chat = chat,
+            Sender = last.Sender,
+            Now = last.OccurredAt,
+            UserText = last.PlainText,
+            Segments = last.Segments,
+            Batch = batch,
+        }, ct).ConfigureAwait(false);
+
+        _logger.Information("会话 {Session} 合并 {Count} 条 → 发出 {Sent} 条",
+            chat.SessionId, batch.Count, result.MessagesSent);
+    }
+
     /// <summary>
     /// 处理同一会话的一批消息。
     /// </summary>
@@ -280,21 +309,8 @@ public sealed class MessageRouter : BackgroundService
                     break;
                 }
 
-                var last = batch[^1];
-                var agent = _agents.GetOrCreate(chat);
-
-                var result = await agent.RunAsync(new AgentRunRequest
-                {
-                    Chat = chat,
-                    Sender = last.Sender,
-                    Now = last.OccurredAt,
-                    UserText = last.PlainText,
-                    Segments = last.Segments,
-                    Batch = batch,
-                }, ct).ConfigureAwait(false);
-
-                _logger.Information("会话 {Session} 合并 {Count} 条 → 发出 {Sent} 条",
-                    chat.SessionId, batch.Count, result.MessagesSent);
+                // K-2：交给轮次协调器 —— 同一会话串行；跑/挂起中到达的批次并入当前轮
+                _turns.Submit(chat, batch, (messages, token) => RunTurnAsync(chat, messages, token), ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
