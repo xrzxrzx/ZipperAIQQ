@@ -207,6 +207,9 @@ public sealed class KindStatsDto
         ["embedding.backfill"] = "向量回填",
         ["turn.total"] = "整轮耗时",
         ["reply.trimmed"] = "回复超预算被压缩",
+        ["jev.judge"] = "JEV 判定调用",
+        ["turn.duration"] = "轮次耗时",
+        ["turn.suspended"] = "轮次挂起",
         ["tool.web_search"] = "网页搜索",
         ["tool.fetch_url"] = "网页抓取",
     };

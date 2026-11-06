@@ -64,6 +64,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
     private readonly IPersonaStore _personas;
     private readonly DecisionsJudgeClient _decisions;
     private readonly ILogger _logger;
+    private readonly JudgeVerdictCache _judgeCache = new();
 
     // judge 客户端缓存：端点名 + 更新时间变了才重建（避免每次判断都 new HttpClient）
     private IChatClient? _judgeClient;
@@ -128,7 +129,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             //   · 群里没 @ → 交给 JEV 判断「该不该插话」
             ReplyMode.Jev => message.Chat.Type == ChatType.Private
                              || IsMentioned(message, selfId)
-                             || await JudgeAsync(message, selfId, ct).ConfigureAwait(false),
+                             || await JudgeCachedAsync(message, selfId, ct).ConfigureAwait(false),
             _ => true,
         };
     }
@@ -157,6 +158,35 @@ public sealed class ReplyModeDecider : IReplyModeDecider
     }
 
     // ── jev ──
+
+    /// <summary>
+    /// 带缓存的 judge：同一消息只判一次（重放 / 多条路径检查 / K-3 的排队判定都复用它）。
+    /// </summary>
+    private async Task<bool> JudgeCachedAsync(IncomingMessage message, string selfId, CancellationToken ct)
+    {
+        var key = JudgeVerdictCache.KeyOf(message.Chat.SessionId, message.EventId);
+
+        if (_judgeCache.TryGet(key, out var cached))
+        {
+            return cached;
+        }
+
+        var verdict = await JudgeAsync(message, selfId, ct).ConfigureAwait(false);
+        _judgeCache.Set(key, verdict);
+
+        try
+        {
+            await _metrics
+                .RecordAsync(new MetricEntry(message.Chat.SessionId, "jev.judge", 0), ct)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // 指标失败不影响判定
+        }
+
+        return verdict;
+    }
 
     private async Task<bool> JudgeAsync(IncomingMessage message, string selfId, CancellationToken ct)
     {
