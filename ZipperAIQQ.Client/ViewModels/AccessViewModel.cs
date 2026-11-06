@@ -71,8 +71,17 @@ public sealed partial class AccessViewModel : ObservableObject
     /// <summary>已选白名单条目（显示名）。</summary>
     public ObservableCollection<string> WhitelistSelected { get; } = [];
 
-    /// <summary>已选黑名单条目（显示名）。</summary>
+    /// <summary>已选黑名单条目（显示名）。**H-4 起界面不再使用**（保留以兼容旧逻辑）。</summary>
     public ObservableCollection<string> BlacklistSelected { get; } = [];
+
+    /// <summary>模式下拉（H-4：一份名单 + 一个开关）。</summary>
+    public ObservableCollection<string> ModeOptions { get; } = ["白名单模式", "黑名单模式"];
+
+    [ObservableProperty]
+    public partial string SelectedModeDisplay { get; set; } = "黑名单模式";
+
+    /// <summary>界面标签 → 服务端模式名。</summary>
+    private string ModeCode => SelectedModeDisplay == "白名单模式" ? "Whitelist" : "Blacklist";
 
     [ObservableProperty]
     public partial string AlwaysAllowText { get; set; } = "—";
@@ -158,7 +167,7 @@ public sealed partial class AccessViewModel : ObservableObject
     /// 失败时旧的主人 / 名单 / 候选原样留着，由调用方决定怎么提示。
     /// </summary>
     /// <returns><c>null</c> = 成功；否则是可显示的错误原因。</returns>
-    private async Task<string?> LoadForPlatformAsync(string platformCode)
+    private async Task<string?> LoadForPlatformAsync(string platformCode, bool keepCandidates = false)
     {
         try
         {
@@ -171,7 +180,7 @@ public sealed partial class AccessViewModel : ObservableObject
                 return "服务端没有返回数据。";
             }
 
-            Apply(data, platformCode);
+            Apply(data, platformCode, keepCandidates);
             return null;
         }
         catch (Exception ex)
@@ -181,66 +190,76 @@ public sealed partial class AccessViewModel : ObservableObject
     }
 
     /// <summary>把一次 <c>getAccess</c> 的结果铺到界面上：平台 / 主人 / 管理员 / 名单 / 候选。</summary>
-    private void Apply(AccessDto data, string requestedPlatform)
+    /// <param name="keepCandidates">
+    /// <c>true</c> = **不动候选集合**，只刷新选中项（保存名单 / 管理员之后用）。
+    /// </param>
+    /// <remarks>
+    /// 保存不改变「候选有哪些人」，却会把候选集合整个 Clear + Add —— 那会让
+    /// <c>MultiSelectList</c> 重建 <c>ItemsSource</c>，ListView 立刻滚回顶部，
+    /// 长列表下根本没法接着操作（问题记录 05 #2）。
+    /// </remarks>
+    private void Apply(AccessDto data, string requestedPlatform, bool keepCandidates = false)
     {
         SyncPlatforms(data, requestedPlatform);
 
-        // 主人候选
-        _ownerDisplayToId.Clear();
-        OwnerOptions.Clear();
-        foreach (var candidate in data.Candidates)
+        if (!keepCandidates)
         {
-            _ownerDisplayToId[candidate.Display] = candidate.UserId;
-            OwnerOptions.Add(candidate.Display);
+            _ownerDisplayToId.Clear();
+            OwnerOptions.Clear();
+            _adminDisplayToId.Clear();
+            AdminCandidates.Clear();
+            _sessionDisplayToId.Clear();
+            ListCandidates.Clear();
+
+            foreach (var candidate in data.Candidates)
+            {
+                _ownerDisplayToId[candidate.Display] = candidate.UserId;
+                OwnerOptions.Add(candidate.Display);
+
+                _adminDisplayToId[candidate.Display] = candidate.UserId;
+                AdminCandidates.Add(candidate.Display);
+
+                // ⚠️ 这里以前写死 "qq"：切到抖音后白名单条目会变成 qqp…（2026-10-28 实测）
+                var sessionId = $"{requestedPlatform}:p{candidate.UserId}";
+                var display = $"私聊 · {candidate.Nickname}（{sessionId}）";
+                _sessionDisplayToId[display] = sessionId;
+                ListCandidates.Add(display);
+            }
+
+            foreach (var group in data.GroupCandidates)
+            {
+                _sessionDisplayToId[group.Display] = group.SessionId;
+                ListCandidates.Add(group.Display);
+            }
         }
 
         SelectedOwnerDisplay = _ownerDisplayToId
             .FirstOrDefault(kv => kv.Value == data.OwnerId).Key ?? string.Empty;
 
         // 管理员：好友候选 + 已有值（可能不在候选里）
-        _adminDisplayToId.Clear();
-        AdminCandidates.Clear();
-        foreach (var candidate in data.Candidates)
-        {
-            _adminDisplayToId[candidate.Display] = candidate.UserId;
-            AdminCandidates.Add(candidate.Display);
-        }
+        SyncSelection(
+            AdminsSelected,
+            data.Admins
+                .Select(admin => ResolveDisplay(AdminCandidates, _adminDisplayToId, admin, $"账号 {admin}"))
+                .ToList());
 
-        AdminsSelected.Clear();
-        foreach (var admin in data.Admins)
-        {
-            AddDisplay(AdminCandidates, _adminDisplayToId, AdminsSelected, admin, $"账号 {admin}");
-        }
+        // H-4：一份名单 + 显式模式；旧服务端没给 mode/entries 时按双名单折算
+        var mode = string.IsNullOrWhiteSpace(data.Mode)
+            ? (data.Whitelist.Count > 0 ? "Whitelist" : "Blacklist")
+            : data.Mode;
+        SelectedModeDisplay = mode == "Whitelist" ? "白名单模式" : "黑名单模式";
 
-        // 名单：私聊会话 + 群会话
-        _sessionDisplayToId.Clear();
-        ListCandidates.Clear();
-        foreach (var candidate in data.Candidates)
-        {
-            // ⚠️ 这里以前写死 "qq"：切到抖音后白名单条目会变成 qqp…（2026-10-28 实测）
-            var sessionId = $"{requestedPlatform}:p{candidate.UserId}";
-            var display = $"私聊 · {candidate.Nickname}（{sessionId}）";
-            _sessionDisplayToId[display] = sessionId;
-            ListCandidates.Add(display);
-        }
+        var entries = data.Entries.Count > 0
+            ? data.Entries
+            : (mode == "Whitelist" ? data.Whitelist : data.Blacklist);
 
-        foreach (var group in data.GroupCandidates)
-        {
-            _sessionDisplayToId[group.Display] = group.SessionId;
-            ListCandidates.Add(group.Display);
-        }
+        SyncSelection(
+            WhitelistSelected,
+            entries
+                .Select(entry => ResolveDisplay(ListCandidates, _sessionDisplayToId, entry, entry))
+                .ToList());
 
-        WhitelistSelected.Clear();
-        foreach (var entry in data.Whitelist)
-        {
-            AddDisplay(ListCandidates, _sessionDisplayToId, WhitelistSelected, entry, entry);
-        }
-
-        BlacklistSelected.Clear();
-        foreach (var entry in data.Blacklist)
-        {
-            AddDisplay(ListCandidates, _sessionDisplayToId, BlacklistSelected, entry, entry);
-        }
+        SyncSelection(BlacklistSelected, []);
 
         AlwaysAllowText = data.AlwaysAllow.Count == 0
             ? "（服务端未返回 —— 可能是旧版本；本地新服务端会显示主人私聊与所在群）"
@@ -311,24 +330,42 @@ public sealed partial class AccessViewModel : ObservableObject
     private static string PlatformLabel(string code) => PlatformCatalog.LabelOf(code);
 
     /// <summary>把 ID 转成显示名；候选里没有就补一条「原值」。</summary>
-    private static void AddDisplay(
+    private static string ResolveDisplay(
         ObservableCollection<string> candidates,
         Dictionary<string, string> map,
-        ObservableCollection<string> selected,
         string value,
         string fallbackLabel)
     {
         var display = map.FirstOrDefault(kv => kv.Value == value).Key;
-        if (string.IsNullOrEmpty(display))
+        if (!string.IsNullOrEmpty(display))
         {
-            display = fallbackLabel;
-            map[display] = value;
-            candidates.Add(display);
+            return display;
         }
 
-        if (!selected.Contains(display))
+        display = fallbackLabel;
+        map[display] = value;
+        candidates.Add(display);
+        return display;
+    }
+
+    /// <summary>
+    /// 内容一样就不动集合。
+    /// </summary>
+    /// <remarks>
+    /// 每次 <c>Clear + Add</c> 都会让 <c>MultiSelectList</c> 重建选中项，
+    /// 选中项一重建就 <c>ScrollIntoView</c> —— 表现就是「点一下就跳/保存就回顶」（问题记录 05 #2）。
+    /// </remarks>
+    private static void SyncSelection(ObservableCollection<string> target, IReadOnlyList<string> desired)
+    {
+        if (target.SequenceEqual(desired, StringComparer.Ordinal))
         {
-            selected.Add(display);
+            return;
+        }
+
+        target.Clear();
+        foreach (var item in desired)
+        {
+            target.Add(item);
         }
     }
 
@@ -383,27 +420,26 @@ public sealed partial class AccessViewModel : ObservableObject
     {
         try
         {
-            var whitelist = Map(_sessionDisplayToId, WhitelistSelected);
-            var blacklist = Map(_sessionDisplayToId, BlacklistSelected);
-
-            var overlap = whitelist.Intersect(blacklist, StringComparer.OrdinalIgnoreCase).ToList();
-            if (overlap.Count > 0)
-            {
-                ListStatus = $"同一条目不能同时在白名单与黑名单：{string.Join("、", overlap)}";
-                return false;
-            }
+            var entries = Map(_sessionDisplayToId, WhitelistSelected);
 
             var result = await _api.CallAsync<SaveResultDto>("setAccess", new
             {
                 platform = CurrentPlatform,
-                whitelist,
-                blacklist,
+                mode = ModeCode,
+                entries,
                 confirmDemoteAdmins = confirmDemote,
             }).ConfigureAwait(true);
 
             NeedsAdminConfirm = false;
             ListStatus = result?.Skipped == true ? "无变化" : "名单已保存";
-            await LoadAsync().ConfigureAwait(true);
+
+            // 只刷新选中项，**不重建候选**：重建会让列表滚回顶部（问题记录 05 #2）。
+            var error = await LoadForPlatformAsync(CurrentPlatform, keepCandidates: true).ConfigureAwait(true);
+            if (error is not null)
+            {
+                ListStatus = $"已保存，但刷新选择失败：{error}";
+            }
+
             return true;
         }
         catch (ApiCallException ex) when (ex.Code == 409)

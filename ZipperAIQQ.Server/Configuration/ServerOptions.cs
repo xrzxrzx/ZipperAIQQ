@@ -168,6 +168,18 @@ public sealed record ServerOptions
     /// </remarks>
     public Mail.MailOptions Mail { get; init; } = new();
 
+    /// <summary>余额采样参数（<c>billing</c> 配置节）。</summary>
+    public Billing.BillingOptions Billing { get; init; } = new();
+
+    /// <summary>额度闸门参数（<c>quota</c> 配置节；默认关）。</summary>
+    public Billing.QuotaOptions Quota { get; init; } = new();
+
+    /// <summary>告警策略（<c>alerts</c> 配置节）：抑制窗口。</summary>
+    public Alerts.AlertOptions Alerts { get; init; } = new();
+
+    /// <summary>通道可靠性参数（<c>channel</c> 配置节）：巡检 / 退避 / 熔断阈值。</summary>
+    public ChannelReliabilityOptions ChannelReliability { get; init; } = new();
+
     // ── 发送限速 ──
     /// <summary>全局最短发送间隔（毫秒）。</summary>
     public int SendIntervalMs { get; init; } = 300;

@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Serilog;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Failures;
+using ZipperAIQQ.Channel.Reliability;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 
@@ -27,7 +29,7 @@ namespace ZipperAIQQ.Server.Channels;
 /// 由上层转成「回填给模型的失败原因」（FR-2.3）。静默吞掉会让模型以为发出去了。
 /// </para>
 /// </remarks>
-public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannelLogin, IAsyncDisposable
+public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannelLogin, IAsyncDisposable, IRecoverableChannel
 {
     /// <summary>平台标识，与 <see cref="ChatRef.Platform"/>、<c>session</c> 前缀一致。</summary>
     public const string PlatformName = "douyin";
@@ -289,7 +291,8 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         var batches = BuildBatches(message.Segments, _options.MaxTextLength);
         if (batches.Count == 0)
         {
-            throw new InvalidOperationException(
+            throw new ContentInvalidException(
+                "douyin",
                 "消息没有可发送的内容片段（引用由 replyTo 承载，不单独成帧）。");
         }
 
@@ -541,17 +544,7 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
                     break;
                 }
 
-                // 会话白名单（决策七 / 设计 §6.1）：空 = 全部放行；非空则只收匹配的会话。
-                // 与 QQ 的接收过滤同口径（`douyin:p*` / `douyin:g*` 支持 `*` 后缀），
-                // 但**在通道层**拦：不进库、不进模型 —— 与"过滤发生在通道层"（FR-17.3）一致。
-                // 会话过滤与 QQ 完全同一套（2026-10-28）：配置入口在「人员与名单」的
-                // access.douyin.whitelist / blacklist；通道层拦截 → 不进库、不进模型（FR-17.3）。
-                if (!_filter.IsAllowed(message.Chat))
-                {
-                    _logger.Debug("抖音会话 {Session} 未通过名单过滤，已丢弃", message.Chat.SessionId);
-                    break;
-                }
-
+                // H-5：名单判定上移到路由层；通道一律投递，路由负责留档与"是否处理"。
                 await _inbox.Writer.WriteAsync(message, ct).ConfigureAwait(false);
                 break;
             }
@@ -658,7 +651,21 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         _pendingAcks[requestId] = completion;
         try
         {
-            await connection.SendAsync(json, ct).ConfigureAwait(false);
+            try
+            {
+                await connection.SendAsync(json, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is System.Net.WebSockets.WebSocketException
+                                          or ObjectDisposedException
+                                          or System.Net.Sockets.SocketException
+                                          or IOException)
+            {
+                throw new ChannelUnavailableException("douyin", $"抖音连接不可用：{ex.Message}", ex);
+            }
 
             var timeout = TimeSpan.FromMilliseconds(Math.Max(1, _options.SendTimeoutMs));
             DouyinAck ack;
@@ -668,13 +675,15 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
             }
             catch (TimeoutException)
             {
-                throw new TimeoutException(
+                throw new ChannelSendFailedException(
+                    "douyin",
                     $"抖音发送超时：{_options.SendTimeoutMs}ms 内没收到 ack（第 {sequence}/{total} 帧）。");
             }
 
             if (!ack.Ok)
             {
-                throw new InvalidOperationException(
+                throw new ChannelSendFailedException(
+                    "douyin",
                     $"抖音发送失败：{ack.Error ?? "sidecar 未给出原因"}");
             }
         }
@@ -792,6 +801,15 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         return batches;
     }
 
+    /// <summary>当前是否已连上 sidecar（供恢复循环判断）。</summary>
+    bool IRecoverableChannel.IsConnected => IsConnected;
+
+    /// <summary>
+    /// 抖音的「恢复」是**空操作**：服务端没有出站连接，连接由 sidecar 反向连入。
+    /// 这里只把当前状态如实报回去，让共用的恢复循环继续按退避等待。
+    /// </summary>
+    Task<bool> IRecoverableChannel.TryRecoverAsync(CancellationToken ct) => Task.FromResult(IsConnected);
+
     private IDouyinConnection RequireConnection()
     {
         // 运行时开关先判：关掉时即使连接还在，也按"未启用"回答 —— 否则会误报"未连接"，
@@ -803,7 +821,8 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         }
 
         return _connection
-            ?? throw new InvalidOperationException(
+            ?? throw new ChannelUnavailableException(
+                "douyin",
                 "抖音未连接：sidecar 尚未连入 /ws/channel（或已断开），无法发送。");
     }
 

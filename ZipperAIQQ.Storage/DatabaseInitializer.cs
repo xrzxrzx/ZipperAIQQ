@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 13;
+    public const int CurrentSchemaVersion = 18;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -57,6 +57,10 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, RuntimeSettingsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, NoticesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, MailTables, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, AlertTables, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, BillingTables, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, ScheduleExecutionTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, TurnLogTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -66,6 +70,17 @@ public sealed class DatabaseInitializer
         {
             await ExecuteAsync(conn, "ALTER TABLE Messages ADD COLUMN Direction INTEGER NOT NULL DEFAULT 0;", ct).ConfigureAwait(false);
             _logger.Information("已应用迁移：Messages.Direction");
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        {
+            // 已迁移过
+        }
+
+        // ── v17：被名单拦下的消息也留档（H-5）──
+        try
+        {
+            await ExecuteAsync(conn, "ALTER TABLE Messages ADD COLUMN Blocked INTEGER NOT NULL DEFAULT 0;", ct).ConfigureAwait(false);
+            _logger.Information("已应用迁移：Messages.Blocked");
         }
         catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
         {
@@ -182,7 +197,8 @@ public sealed class DatabaseInitializer
             SegmentsJson     TEXT    NOT NULL,
             SentAtMs         INTEGER NOT NULL,
             ReceivedAtMs     INTEGER NOT NULL,
-            ReplyToMessageId TEXT
+            ReplyToMessageId TEXT,
+            Blocked          INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS IX_Messages_Session_SentAt
@@ -323,6 +339,82 @@ public sealed class DatabaseInitializer
     /// <c>NextRunAtMs</c> 存 **UTC Unix 毫秒**；显示与解析一律北京时间（FR-15.3）。
     /// </para>
     /// </remarks>
+    /// <summary>定时任务执行审计（G 批）：谁决定发/不发/失败。</summary>
+    private const string ScheduleExecutionTable = """
+        CREATE TABLE IF NOT EXISTS ScheduleExecutions (
+            Id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            TaskId      INTEGER NOT NULL,
+            Outcome     TEXT    NOT NULL,
+            Detail      TEXT,
+            CreatedAtMs INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_ScheduleExecutions_Task
+            ON ScheduleExecutions (TaskId, Id);
+        """;
+
+    /// <summary>轮次审计（K-5）：静默收轮的产物。</summary>
+    private const string TurnLogTable = """
+        CREATE TABLE IF NOT EXISTS TurnLogs (
+            Id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            SessionId     TEXT    NOT NULL,
+            StartedAtMs   INTEGER NOT NULL,
+            EndedAtMs     INTEGER NOT NULL,
+            EndReason     TEXT    NOT NULL,
+            SteerCount    INTEGER NOT NULL DEFAULT 0,
+            FollowUpCount INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_TurnLogs_Session
+            ON TurnLogs (SessionId, Id);
+        """;
+
+    /// <summary>余额采样（E 批）：供应商不提供历史，只能自己留曲线。</summary>
+    private const string BillingTables = """
+        CREATE TABLE IF NOT EXISTS BalanceSamples (
+            Id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            Provider    TEXT    NOT NULL,
+            Currency    TEXT    NOT NULL,
+            Total       REAL    NOT NULL,
+            Granted     REAL    NOT NULL,
+            ToppedUp    REAL    NOT NULL,
+            IsAvailable INTEGER NOT NULL,
+            SampledAtMs INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_BalanceSamples_Provider_At
+            ON BalanceSamples (Provider, SampledAtMs);
+        """;
+
+    /// <summary>告警投递记录 + 主人跨平台账号镜像（D 批）。</summary>
+    private const string AlertTables = """
+        CREATE TABLE IF NOT EXISTS Alerts (
+            Id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            Kind        TEXT    NOT NULL,
+            Platform    TEXT,
+            Target      TEXT,
+            Ok          INTEGER NOT NULL,
+            Error       TEXT,
+            CreatedAtMs INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_Alerts_Kind_Platform
+            ON Alerts (Kind, Platform, CreatedAtMs);
+
+        CREATE TABLE IF NOT EXISTS OwnerIdentities (
+            Id          INTEGER PRIMARY KEY,
+            DisplayName TEXT,
+            CreatedAtMs INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS OwnerAccounts (
+            IdentityId INTEGER NOT NULL,
+            Platform   TEXT    NOT NULL,
+            UserId     TEXT    NOT NULL,
+            PRIMARY KEY (IdentityId, Platform, UserId)
+        );
+        """;
+
     private const string ScheduleTasksTable = """
         CREATE TABLE IF NOT EXISTS ScheduleTasks (
             Id              INTEGER PRIMARY KEY AUTOINCREMENT,

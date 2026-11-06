@@ -21,6 +21,7 @@ public sealed class PermissionGate : IPermissionGate
             // 定时任务：默认仅管理员，但**允许**配置给白名单（需求 14.6 明确要求可显式开启）
             [ToolCapability.Schedule] = Role.Whitelist,
             [ToolCapability.CrossSessionHistory] = Role.Admin,
+            [ToolCapability.QueryContacts] = Role.Admin,
             // 写操作：改自己签名 / 戳别人 —— 都是**对外可见**的动作，硬底线管理员
             [ToolCapability.WriteProfile] = Role.Admin,
             [ToolCapability.SendPoke] = Role.Admin,
@@ -38,6 +39,7 @@ public sealed class PermissionGate : IPermissionGate
             // 需求 14.6：默认仅管理员；白名单需要显式开启（这里改这一行即可）
             [ToolCapability.Schedule] = Role.Admin,
             [ToolCapability.CrossSessionHistory] = Role.Admin,
+            [ToolCapability.QueryContacts] = Role.Admin,
             // 写操作：改自己签名 / 戳别人 —— 都是**对外可见**的动作，硬底线管理员
             [ToolCapability.WriteProfile] = Role.Admin,
             [ToolCapability.SendPoke] = Role.Admin,
@@ -67,7 +69,8 @@ public sealed class PermissionGate : IPermissionGate
         return context.Role >= required
             ? PermissionDecision.Allow()
             : PermissionDecision.Deny(
-                $"权限不足：{Describe(capability)}需要 {required} 及以上角色，当前是 {context.Role}。");
+                $"权限不足：{Describe(capability)}需要 {required} 及以上角色，当前是 {context.Role}。" +
+                "可以让主人/管理员在「人员与名单」里调整你的角色，或者请他们代为执行。");
     }
 
     public bool IsAllowed(ToolCapability capability, Role role) => role >= MinRoleOf(capability);
@@ -112,6 +115,8 @@ public sealed class PermissionGate : IPermissionGate
         ToolCapability.WriteFile => "写文件",
         ToolCapability.DeleteFile => "删除文件",
         ToolCapability.Schedule => "定时任务",
+        ToolCapability.CrossSessionHistory => "跨会话检索",
+        ToolCapability.QueryContacts => "跨平台通讯录",
         _ => capability.ToString(),
     };
 }

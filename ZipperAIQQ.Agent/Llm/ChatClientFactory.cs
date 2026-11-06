@@ -56,7 +56,8 @@ public static class ChatClientFactory
         };
 
         // ⭐ 工具循环：没有这一层，模型调用工具后不会自动执行，只会把调用意图当文本吐出来。
-        var invoking = new FunctionInvokingChatClient(raw);
+        // K-3：引导注入必须挂在工具循环**里面**，才能在「工具调用完成后、下一次模型调用前」插话
+        var invoking = new FunctionInvokingChatClient(new Steering.SteeringChatClient(raw));
 
         // 工具调用**必须留日志**：出问题时（"好友列表查不到""计划任务没建"）
         // 没有这条线就只能靠翻聊天记录猜。实测吃过这个亏。

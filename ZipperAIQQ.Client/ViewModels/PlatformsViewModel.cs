@@ -159,6 +159,9 @@ public sealed partial class PlatformsViewModel : ObservableObject
     /// <summary>顶部接入状态（邮件 / 抖音两块，不用 getPlatforms.platforms）。</summary>
     public ObservableCollection<OverviewChipItem> OverviewChips { get; } = [];
 
+    /// <summary>各平台的主人（I-4）：一行一个平台，未设置时明说。</summary>
+    public ObservableCollection<PlatformInfoDto> PlatformOwners { get; } = [];
+
     /// <summary>邮件账号卡（每张卡一个账号）。</summary>
     public ObservableCollection<MailAccountItem> MailAccounts { get; } = [];
 
@@ -340,6 +343,12 @@ public sealed partial class PlatformsViewModel : ObservableObject
         ApplyMailBlock(data.Mail);
         ApplyDouyinBlock(data.Douyin);
         RebuildOverviewChips();
+
+        PlatformOwners.Clear();
+        foreach (var platform in data.Platforms)
+        {
+            PlatformOwners.Add(platform);
+        }
     }
 
     /// <summary>邮件块：通道开关 + 人设润色的真值 + 账号兜底（账号仍以 listMailAccounts 为准）。</summary>

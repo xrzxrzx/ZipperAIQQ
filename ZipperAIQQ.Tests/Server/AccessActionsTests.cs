@@ -258,6 +258,46 @@ public sealed class AccessActionsTests : IAsyncLifetime
 
     private GetAccessAction NewGetAccess() => new(_settings, _roles, _filter, _directories, Logger);
 
+    // ─────────────────────────── H-1：管理员 × 黑名单（选项 A）───────────────────────────
+
+    [Fact]
+    public async Task Blacklist_mode_with_admin_requires_confirmation()
+    {
+        await _settings.SetAsync(AccessKeys.Admins("qq"), "10001", default);
+
+        var payload = JsonDocument.Parse("""
+            {"platform":"qq","mode":"Blacklist","entries":["qq:p10001"]}
+            """).RootElement;
+
+        var error = await Assert.ThrowsAsync<ApiException>(
+            () => NewSetAccess().HandleAsync(payload, CancellationToken.None));
+
+        Assert.Equal(ApiResponse.Conflict, error.Code);
+
+        // 没确认就不能落库：管理员身份与旧模式都没变
+        var admins = await AccessSettings.GetAdminsAsync(_settings, "qq", default);
+        Assert.Contains("10001", admins);
+    }
+
+    [Fact]
+    public async Task Blacklist_mode_with_confirmation_demotes_admin()
+    {
+        await _settings.SetAsync(AccessKeys.Admins("qq"), "10001,20002", default);
+
+        var payload = JsonDocument.Parse("""
+            {"platform":"qq","mode":"Blacklist","entries":["qq:p10001"],"confirmDemoteAdmins":true}
+            """).RootElement;
+
+        await NewSetAccess().HandleAsync(payload, CancellationToken.None);
+
+        var admins = await AccessSettings.GetAdminsAsync(_settings, "qq", default);
+        Assert.DoesNotContain("10001", admins);
+        Assert.Contains("20002", admins);
+
+        // 名单已生效：被拉黑的会话被拒
+        Assert.False(_filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Private, Id = "10001" }));
+    }
+
     private SetAccessAction NewSetAccess() => new(_settings, _roles, _filter, _configs);
 
     private GetOwnerAction NewGetOwner() => new(_settings, _directories, Logger);

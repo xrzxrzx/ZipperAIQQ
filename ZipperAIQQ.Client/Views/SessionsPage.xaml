@@ -107,10 +107,16 @@
                                            FontWeight="SemiBold"
                                            VerticalAlignment="Top" />
 
-                                <TextBlock Grid.Column="3"
-                                           Text="{x:Bind BodyText}"
-                                           TextWrapping="Wrap"
-                                           IsTextSelectionEnabled="True" />
+                                <StackPanel Grid.Column="3" Spacing="2">
+                                    <TextBlock Text="{x:Bind BodyText}"
+                                               TextWrapping="Wrap"
+                                               IsTextSelectionEnabled="True" />
+                                    <!-- H-6：未回复只在没被名单拦下时出现；留档消息单独标注 -->
+                                    <TextBlock Text="{x:Bind UnansweredText}"
+                                               Foreground="#E0A030" FontSize="11" />
+                                    <TextBlock Text="{x:Bind BlockedText}"
+                                               Foreground="#8A7A85" FontSize="11" />
+                                </StackPanel>
                             </Grid>
                         </DataTemplate>
                     </ListView.ItemTemplate>

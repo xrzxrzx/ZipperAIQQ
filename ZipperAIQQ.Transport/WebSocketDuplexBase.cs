@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 
 namespace ZipperAIQQ.Transport;
 
-public abstract class WebSocketDuplexBase : IWebSocketTransport
+public abstract class WebSocketDuplexBase : IWebSocketTransport, IResettableTransport
 {
     protected ILogger _logger;
 
@@ -71,7 +71,14 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport
 
     private async Task ReceiveLoopAsync()
     {
-        if (_socket == null)
+        // ⚠️ 必须**捕获**本次连接的 socket / 取消源 / 完成信号。
+        // 读字段的话，重连时 ResetAsync 换掉 _ct 之后，旧循环会拿着新 token 继续读同一个 socket，
+        // 于是两条循环并发读 → 大帧被撕成两半 → 下游 JSON 解析失败（实测把 /status 都吞了）。
+        var socket = _socket;
+        var token = _ct;
+        var completion = _cs;
+
+        if (socket == null)
         {
             _logger.Error("WebSocket为空");
             return;
@@ -79,9 +86,9 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport
 
         try
         {
-            while (_socket.State == WebSocketState.Open && !_ct.IsCancellationRequested)
+            while (socket.State == WebSocketState.Open && !token.IsCancellationRequested)
             {
-                var message = await ReceiveFullMessage(_socket);
+                var message = await ReceiveFullMessage(socket, token);
                 if (message == null)
                 {
                     _logger.Warning("接收消息为空，断开连接");
@@ -116,11 +123,11 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport
         }
         finally
         {
-            _cs.TrySetResult();
+            completion.TrySetResult();
         }
     }
 
-    private async Task<string?> ReceiveFullMessage(WebSocket socket)
+    private async Task<string?> ReceiveFullMessage(WebSocket socket, CancellationToken token)
     {
         byte[] buffer = new byte[1024 * 4];
         using var ms = new MemoryStream();
@@ -128,7 +135,7 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport
 
         do
         {
-            result = await socket.ReceiveAsync(buffer, _ct);
+            result = await socket.ReceiveAsync(buffer, token);
 
             if (result.MessageType == WebSocketMessageType.Close)
             {
@@ -143,18 +150,104 @@ public abstract class WebSocketDuplexBase : IWebSocketTransport
     }
 
     /// <summary>
-    /// 不确保发送成功
+    /// 发送一帧；**状态不对就抛 <see cref="WebSocketException"/>**。
     /// </summary>
-    /// <param name="message"></param>
-    /// <returns></returns>
+    /// <remarks>
+    /// 旧实现状态不对时静默 return —— 上层以为发成功了，只能等到 echo 超时才失败，
+    /// 而且分不清「根本没发出去」还是「发出去了没回」。11-05 的 <c>Aborted</c> 正是这样
+    /// 被一路错判成「模型没按规矩来」，于是又烧了一次模型调用（问题记录 04 #7 第 1 步）。
+    /// </remarks>
     public async Task SendAsync(JsonNode message)
     {
-        if (_isDisposed || _ct.IsCancellationRequested)
-            return;
+        ArgumentNullException.ThrowIfNull(message);
+
+        if (_isDisposed)
+        {
+            throw new WebSocketException("WebSocket 已被释放，无法发送");
+        }
+
+        var socket = _socket;
+        if (socket is null)
+        {
+            throw new WebSocketException("WebSocket 尚未建立，无法发送");
+        }
+
+        if (socket.State != WebSocketState.Open)
+        {
+            throw new WebSocketException($"WebSocket 状态为 {socket.State}，无法发送");
+        }
+
+        if (_ct.IsCancellationRequested)
+        {
+            // 取消是调用方的决定，交给上层按 ct 判断 —— 不能记成通道故障。
+            throw new OperationCanceledException(_ct);
+        }
 
         var jsonBytes = Encoding.UTF8.GetBytes(message.ToJsonString());
         var buffer = new ArraySegment<byte>(jsonBytes);
-        await _socket!.SendAsync(buffer, WebSocketMessageType.Text, true, _ct);
+        await socket.SendAsync(buffer, WebSocketMessageType.Text, true, _ct);
+    }
+
+    /// <summary>
+    /// 丢掉旧连接，为下一次 <c>ConnectAsync</c> 让路（可重复调用）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 断线后 socket 会停在 <c>Aborted</c> 且**不会**变回 null；<c>Attach</c> 见到它就直接拒绝，
+    /// 于是「重连」永远连不上。这里把它关掉、置空，并换一条新的取消源与完成信号。
+    /// </para>
+    /// <para>
+    /// 顺序很重要：先取消接收循环 → 再 abort socket（避免关一半时它还在读）→ 最后换新 CTS。
+    /// </para>
+    /// </remarks>
+    public async Task ResetAsync(CancellationToken ct = default)
+    {
+        var socket = _socket;
+        _socket = null;
+
+        try
+        {
+            _cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // 已经释放过：继续往下清
+        }
+
+        if (socket is not null)
+        {
+            try
+            {
+                socket.Abort();
+                socket.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug(ex, "释放旧 WebSocket 时出错（继续复位）");
+            }
+        }
+
+        var recv = _recvTask;
+        if (recv is not null && !recv.IsCompleted)
+        {
+            // 不等它也能继续；但等一小会儿能少一堆"读已释放对象"的噪声日志
+            try
+            {
+                await Task.WhenAny(recv, Task.Delay(TimeSpan.FromSeconds(2), ct)).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 调用方取消：复位本身已经做完了
+            }
+        }
+
+        _recvTask = null;
+        _isDisposed = false;
+        _cts = new CancellationTokenSource();
+        _ct = _cts.Token;
+        _cs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        StateChanged?.Invoke(WebSocketTransportState.Disconnected);
     }
 
     protected abstract ValueTask OnMessageAsync(JsonNode json);

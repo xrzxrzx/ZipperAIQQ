@@ -45,6 +45,22 @@ public sealed class PlatformInfoDto
     /// <summary>该平台支持的能力名；旧服务端没给 → 空表。</summary>
     [JsonPropertyName("features")]
     public List<string> Features { get; set; } = [];
+
+    /// <summary>该平台的主人账号（I-4）；未配置为空。</summary>
+    [JsonPropertyName("ownerId")]
+    public string? OwnerId { get; set; }
+
+    [JsonPropertyName("ownerName")]
+    public string? OwnerName { get; set; }
+
+    /// <summary>展示文案：未配置主人时明说，不显示空白。</summary>
+    [JsonIgnore]
+    public string OwnerText => string.IsNullOrWhiteSpace(OwnerId)
+        ? "未设置主人"
+        : $"{OwnerName ?? OwnerId}（{OwnerId}）";
+
+    [JsonIgnore]
+    public string OwnerLine => $"{Label} · {OwnerText}";
 }
 
 /// <summary>邮件平台块（<c>getPlatforms.mail</c>）。</summary>

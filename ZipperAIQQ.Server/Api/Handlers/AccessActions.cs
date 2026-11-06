@@ -72,6 +72,10 @@ public sealed class GetAccessAction : IApiAction
         var (whitelist, blacklist) = await AccessSettings
             .GetListsAsync(_settings, platform, ct).ConfigureAwait(false);
 
+        // H-1：显式模式 + 单份名单（无 mode 时按并集反推，只读）
+        var (_, listMode, listEntries) = await AccessSettings
+            .TryGetModeAsync(_settings, platform, ct).ConfigureAwait(false);
+
         // 候选人：该平台的联系人目录（抖音未接入时为空，不是"假装没有好友"）
         var directory = _directories.For(platform);
         IReadOnlyList<Channel.ContactInfo> friends = [];
@@ -110,6 +114,10 @@ public sealed class GetAccessAction : IApiAction
 
             whitelist = whitelist.ToList(),
             blacklist = blacklist.ToList(),
+
+            // 新口径：客户端按这一份渲染（旧字段继续保留，兼容旧客户端）
+            mode = listMode.ToString(),
+            entries = listEntries.ToList(),
             alwaysAllow = _filter.AlwaysAllow(platform),
 
             // 旧字段（B4 之前的老客户端还在用）：按「白名单优先」折算成单份
@@ -222,14 +230,116 @@ public sealed class SetAccessAction : IApiAction
             ? ReadStringArray(entriesElement, "filterEntries")
             : null;
 
+        // H-1：显式模式 + 单份名单（新字段；与旧字段互斥）
+        string? listMode = null;
+        if (payload.TryGetProperty("mode", out var listModeElement))
+        {
+            if (listModeElement.ValueKind != JsonValueKind.String)
+            {
+                throw new ApiException(ApiResponse.BadRequest, "mode 必须是字符串。");
+            }
+
+            listMode = ParseMode(listModeElement.GetString());
+        }
+
+        var entriesInput = payload.TryGetProperty("entries", out var entriesElement2)
+            ? ReadStringArray(entriesElement2, "entries")
+            : null;
+
         // 有没有提交"可识别字段"：决定末尾"什么都没写"时是 400（垃圾 payload）还是 skipped（没变化）
         var sawKnownField = admins is not null
             || whitelistInput is not null
             || blacklistInput is not null
             || legacyMode is not null
-            || legacyEntries is not null;
+            || legacyEntries is not null
+            || listMode is not null
+            || entriesInput is not null;
 
-        if (legacyMode is not null || legacyEntries is not null)
+        if (listMode is not null || entriesInput is not null)
+        {
+            if (whitelistInput is not null || blacklistInput is not null ||
+                legacyMode is not null || legacyEntries is not null)
+            {
+                throw new ApiException(ApiResponse.BadRequest,
+                    "mode / entries 不能与 whitelist / blacklist / filterMode / filterEntries 同时提交。");
+            }
+
+            var mode = listMode is null
+                ? (await AccessSettings.TryGetModeAsync(_settings, platform, ct).ConfigureAwait(false)).Mode
+                : Enum.Parse<ChatListMode>(listMode, ignoreCase: true);
+
+            var entries = (entriesInput ?? [])
+                .Where(e => !string.IsNullOrWhiteSpace(e))
+                .Select(e => e.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // 管理员 × 黑名单冲突（#23，选项 A）：黑名单模式下把管理员加进名单要二次确认，
+            // 确认后**剥夺管理员并拉黑** —— 与旧双名单语义保持一致，不在换存储形态时顺手改权限规则。
+            if (mode == ChatListMode.Blacklist)
+            {
+                var currentAdmins = (await AccessSettings
+                    .GetAdminsAsync(_settings, platform, ct).ConfigureAwait(false)).ToList();
+
+                if (currentAdmins.Count == 0 && _roles is ConfiguredRoleResolver startupRoles)
+                {
+                    currentAdmins = startupRoles.Admins(platform).ToList();
+                }
+
+                var conflicts = currentAdmins
+                    .Where(admin => entries.Any(entry => IsPrivateSessionOf(platform, entry, admin)))
+                    .ToList();
+
+                if (conflicts.Count > 0)
+                {
+                    var confirm = payload.TryGetProperty("confirmDemoteAdmins", out var confirmElement)
+                        && confirmElement.ValueKind == JsonValueKind.True;
+
+                    if (!confirm)
+                    {
+                        throw new ApiException(
+                            ApiResponse.Conflict,
+                            $"以下管理员在黑名单里：{string.Join("、", conflicts)}。" +
+                            "确认后将剥夺其管理员身份并拉黑；请带 confirmDemoteAdmins=true 重发。",
+                            new { code = "admin_in_blacklist", admins = conflicts, platform });
+                    }
+
+                    var remaining = currentAdmins
+                        .Except(conflicts, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                    await PersistAdminsAsync(platform, remaining, ct).ConfigureAwait(false);
+
+                    await _configs
+                        .AppendAuditAsync("demoteAdmin", "http-client", string.Join(",", conflicts), ct)
+                        .ConfigureAwait(false);
+
+                    changed.Add($"demoteAdmins={conflicts.Count}");
+                }
+            }
+
+            await _settings.SetAsync(AccessKeys.Mode(platform), mode.ToString(), ct).ConfigureAwait(false);
+            await _settings.SetAsync(AccessKeys.Entries(platform), string.Join(',', entries), ct).ConfigureAwait(false);
+
+            // 兼容镜像：旧版程序 / 旧客户端仍能读到一份合理名单
+            await _settings.SetAsync(
+                AccessKeys.Whitelist(platform),
+                mode == ChatListMode.Whitelist ? string.Join(',', entries) : string.Empty,
+                ct).ConfigureAwait(false);
+            await _settings.SetAsync(
+                AccessKeys.Blacklist(platform),
+                mode == ChatListMode.Blacklist ? string.Join(',', entries) : string.Empty,
+                ct).ConfigureAwait(false);
+
+            _filter.Update(platform, new ChatFilterOptions
+            {
+                Mode = mode,
+                Entries = entries,
+                AlwaysAllow = _filter.AlwaysAllow(platform).ToList(),
+            });
+
+            changed.Add($"mode={mode}/entries={entries.Count}");
+        }
+        else if (legacyMode is not null || legacyEntries is not null)
         {
             if (whitelistInput is not null || blacklistInput is not null)
             {

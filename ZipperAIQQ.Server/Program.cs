@@ -136,19 +136,31 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
                 Log.Logger.Information("{Platform} 管理员已加载：{Count} 人", platform, admins.Count);
             }
 
-            var (listsFound, whitelist, blacklist) = await ZipperAIQQ.Server.Access.AccessSettings
-                .TryGetListsAsync(settingsStore, platform, CancellationToken.None);
-            if (listsFound)
+            // H-1：显式模式优先；没有 mode 键时回退为「并集 + 反推」（只读推导，不写库）
+            var (modeFound, listMode, entries) = await ZipperAIQQ.Server.Access.AccessSettings
+                .TryGetModeAsync(settingsStore, platform, CancellationToken.None);
+            if (modeFound)
             {
                 filter.Update(platform, new ZipperAIQQ.Channel.Filtering.ChatFilterOptions
                 {
-                    Whitelist = whitelist,
-                    Blacklist = blacklist,
+                    Mode = listMode,
+                    Entries = entries,
                     AlwaysAllow = filter.AlwaysAllow(platform).ToList(),
                 });
                 Log.Logger.Information(
-                    "{Platform} 名单已加载：白 {White} / 黑 {Black}",
-                    platform, whitelist.Count, blacklist.Count);
+                    "{Platform} 名单已加载：{Mode} 模式，{Count} 条",
+                    platform, listMode, entries.Count);
+            }
+        }
+
+        // D4-a：统一身份表优先于按平台键 —— 有身份记录就以它为准（旧安装表为空则继续用 settings）
+        var ownerAccounts = app.Services.GetRequiredService<ZipperAIQQ.Storage.Owners.IOwnerAccountStore>();
+        var resolverForOwners = app.Services.GetRequiredService<ZipperAIQQ.Agent.Security.IRoleResolver>();
+        if (resolverForOwners is ZipperAIQQ.Agent.Security.ConfiguredRoleResolver configuredOwners)
+        {
+            foreach (var account in await ownerAccounts.ListAsync(CancellationToken.None).ConfigureAwait(false))
+            {
+                configuredOwners.SetOwner(account.Platform, account.UserId);
             }
         }
 

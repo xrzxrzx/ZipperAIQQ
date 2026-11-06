@@ -4,11 +4,16 @@ using Serilog;
 using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
+using ZipperAIQQ.Agent.Cost;
+using ZipperAIQQ.Agent.Length;
+using ZipperAIQQ.Agent.Steering;
 using ZipperAIQQ.Agent.Memory;
+using ZipperAIQQ.Agent.Reply;
 using ZipperAIQQ.Agent.Search;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Channel.Models;
 using System.Text;
 using ZipperAIQQ.Core.Events;
@@ -54,6 +59,10 @@ public sealed class ChatAgent : IChatAgent
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
+    private readonly IChannelHealthLookup? _channelHealth;
+    private readonly ReplyLengthOptions? _replyLength;
+    private readonly IReplyModeDecider? _replyModes;
+    private readonly Func<string, SteerQueue>? _steerQueues;
 
     /// <summary>按平台查主人（Server 用 AccessSettings 实现）；不传时退回旧键逻辑。</summary>
     private readonly IOwnerLookup? _ownerLookup;
@@ -104,6 +113,10 @@ public sealed class ChatAgent : IChatAgent
         _configs = configs;
         _settings = settings;
         _roles = deps.Roles;
+        _channelHealth = deps.ChannelHealth;
+        _replyLength = deps.ReplyLength;
+        _replyModes = deps.ReplyModes;
+        _steerQueues = deps.SteerQueues;
         _ownerLookup = deps.OwnerLookup;
         _workspace = deps.Workspace;
         _platformContacts = deps.PlatformContacts;
@@ -181,18 +194,57 @@ public sealed class ChatAgent : IChatAgent
         ArgumentNullException.ThrowIfNull(request);
 
         await _lock.WaitAsync(ct).ConfigureAwait(false);
+        var turn = Stopwatch.StartNew();
         try
         {
             return await RunCoreAsync(request, ct).ConfigureAwait(false);
         }
         finally
         {
+            turn.Stop();
             _lock.Release();
+            await RecordTurnAsync(turn.Elapsed).ConfigureAwait(false);
             TriggerCompressionInBackground();
         }
     }
 
+    /// <summary>
+    /// 记一次**整轮**耗时（含工具循环、漂移重试）。
+    /// </summary>
+    /// <remarks>
+    /// 与 <c>llm.call</c> 分表记：那条是单次 HTTP 往返，这条是「用户实际等了多久」。
+    /// 11-05 的「平均上万毫秒」争议正来自两者被混成一个平均值（问题记录 04 #3）。
+    /// <para>
+    /// 用 <see cref="CancellationToken.None"/>：请求被取消时这一笔仍要落库，
+    /// 否则「超时/取消」的轮次会从统计里凭空消失。
+    /// </para>
+    /// </remarks>
+    private async Task RecordTurnAsync(TimeSpan elapsed)
+    {
+        try
+        {
+            await _metrics
+                .RecordAsync(
+                    new MetricEntry(SessionId, "turn.total", elapsed.TotalMilliseconds),
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "记录整轮耗时失败（会话 {SessionId}）", SessionId);
+        }
+    }
+
     private int _compressing;
+
+    /// <summary>
+    /// 本轮最后一次发送失败的原因（<c>send_message</c> 工具回填）。
+    /// </summary>
+    /// <remarks>
+    /// 只用来回答一个问题：**这次「一条都没发出去」是不是通道的错**。
+    /// 是的话就不该再调模型重试 —— 通道坏了，模型说什么都发不出去（11-05 每次循环白烧一次调用）。
+    /// </remarks>
+    private FailureKind? _lastSendFailure;
 
     /// <summary>
     /// 后台尝试压缩摘要。
@@ -234,9 +286,36 @@ public sealed class ChatAgent : IChatAgent
 
     private async Task<AgentRunResult> RunCoreAsync(AgentRunRequest request, CancellationToken ct)
     {
+        // K-3：本轮从引导队列取「运行中插进来的消息」
+        using var steerScope = SteerContext.Bind(_steerQueues?.Invoke(SessionId));
+
         using var activity = AgentTelemetry.Source.StartActivity("agent.run");
         activity?.SetTag("session.id", SessionId);
         activity?.SetTag("chat.type", request.Chat.Type.ToString());
+
+        // 通道熔断 + 非关键轮次：别再叫模型（发了也发不出去）
+        if (TurnShortCircuit.ShouldSkip(
+                _channelHealth?.IsChannelDown(request.Chat.Platform) == true,
+                CallPurposeScope.Current))
+        {
+            activity?.SetTag("agent.shortcircuit", CallPurposeScope.Current.ToString());
+            _logger.Warning(
+                "通道 {Platform} 熔断中，跳过本轮（用途 {Purpose}，会话 {SessionId}）",
+                request.Chat.Platform, CallPurposeScope.Current, SessionId);
+
+            try
+            {
+                await _metrics
+                    .RecordAsync(new MetricEntry(SessionId, "agent.shortcircuit", 0), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug(ex, "记录短路指标失败");
+            }
+
+            return new AgentRunResult(null, 0);
+        }
 
         // 会话从库恢复（M1-C 遗留的补做）：实例存活期内只做一次。
         // 放在打 hot.window 标签之前，否则标签永远显示 0。
@@ -332,6 +411,15 @@ public sealed class ChatAgent : IChatAgent
                 .AppendLine($"【你现在的平台】{request.Chat.Platform}" +
                             $"（会话 {request.Chat.SessionId}）。跨平台查到别的会话时，结果前面会标 [会话] 来源。");
 
+        // R-11 / J-1：本轮长度预算（场景由 JEV 模式 + 是否私聊/被 @ 决定，不额外调模型）
+        var lengthBudget = await ResolveLengthBudgetAsync(request, selfId, ct).ConfigureAwait(false);
+        if (lengthBudget is not null)
+        {
+            reinject.AppendLine().AppendLine(
+                $"【本轮长度预算】约 {lengthBudget.MaxChars} 字以内、最多 {lengthBudget.MaxMessages} 条。" +
+                "超出的内容会被压缩甚至裁掉，所以先想把什么说清楚，别铺陈。");
+        }
+
         // 人设守卫（第 20 项）：每次重注入都带，位置紧贴当前消息 ——
         // 长对话里人设会被上下文稀释，靠这一条把它拉回来。
         // 主人有例外（问题记录 02 #2）：主人要求改设定/称呼/扮演时照做。
@@ -360,6 +448,7 @@ public sealed class ChatAgent : IChatAgent
 
         // send_message 绑定当前会话（模型无法指定发给谁）
         var sent = 0;
+        _lastSendFailure = null;
         var tool = SendMessageTool.Create(
             _channel,
             _store,
@@ -369,7 +458,12 @@ public sealed class ChatAgent : IChatAgent
             ct => _sendThrottle.WaitAsync(_options.MinSendIntervalMs, ct),
             _faces,
             _metrics,
-            n => sent += n);
+            n => sent += n,
+            kind => _lastSendFailure = kind,
+            lengthBudget,
+            lengthBudget is null
+                ? null
+                : (text, maxChars, token) => CondenseAsync(text, maxChars, token));
 
         var chatOptions = new ChatOptions
         {
@@ -380,11 +474,18 @@ public sealed class ChatAgent : IChatAgent
         ChatResponse response;
         try
         {
+            using var purposeScope = CallPurposeScope.Begin(CallPurpose.UserReply);
             response = await CallLlmAsync(messages, chatOptions, "llm.call", ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 取消是调用方的决定，不算失败 —— 否则会污染失败计数
+            throw;
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "调用模型失败（会话 {SessionId}）", SessionId);
+            await RecordLlmFailureAsync(ex).ConfigureAwait(false);
             return new AgentRunResult(null, 0);
         }
 
@@ -396,7 +497,10 @@ public sealed class ChatAgent : IChatAgent
         // 硬规矩：**只在没有副作用时才重试**。sent == 0 说明本轮什么都没发出去，
         // 重跑整条链是安全的；一旦本轮已经发过消息，重跑就可能把同样的话再发一遍 ——
         // 宁可这一轮答得不好，也不能让消息重复。
-        if (sent == 0 && !string.IsNullOrWhiteSpace(finalText))
+        // 通道坏了：不再重试（模型说什么都发不出去），也别浪费一次调用
+        var channelDown = _lastSendFailure is { } lastKind && SendFailureClassifier.IsChannelDown(lastKind);
+
+        if (DriftRetryPolicy.ShouldRetry(sent, finalText, _lastSendFailure))
         {
             activity?.SetTag("drift.detected", "no_tool_call");
             PublishEvent(new DriftDetectedEvent(SessionId, BeijingTime.Now, "instruction", "no_tool_call"));
@@ -404,6 +508,7 @@ public sealed class ChatAgent : IChatAgent
             messages.Add(new ChatMessage(ChatRole.User, DriftCorrectionPrompt));
             try
             {
+                using var retryScope = CallPurposeScope.Begin(CallPurpose.DriftRetry);
                 var retry = await CallLlmAsync(messages, chatOptions, "llm.retry", ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(retry.Text))
                 {
@@ -421,10 +526,19 @@ public sealed class ChatAgent : IChatAgent
             }
         }
 
+        else if (channelDown)
+        {
+            // 通道坏了：这次不重试。日志留痕，便于对照「少烧了多少次调用」。
+            activity?.SetTag("drift.skipped", "channel_down");
+            _logger.Warning(
+                "通道不可用（{Kind}），跳过漂移重试（会话 {SessionId}）",
+                _lastSendFailure, SessionId);
+        }
+
         // ══════ §8.3 降级：连续 2 次都没调工具 → 由我们代发 ══════
         // 兜底不是"随便发发"：表情照样解析、按空行分条，与 send_message 工具**同一套解析**。
         // （上一版这里直接拼 TextSegment，结果表情变字面量、几句话挤成一条 —— 实测抓到的 bug。）
-        if (sent == 0 && !string.IsNullOrWhiteSpace(finalText))
+        if (sent == 0 && !string.IsNullOrWhiteSpace(finalText) && !channelDown)
         {
             var parts = MessageContentParser.SplitByBlankLine(finalText, _options.MaxMessagesPerCall);
 
@@ -570,6 +684,9 @@ public sealed class ChatAgent : IChatAgent
         var canCrossSession = _permissionGate.IsAllowed(ToolCapability.CrossSessionHistory, context.Role);
         tools.AddRange(MessageTools.Create(_store, request.Chat, maxResults: 30, allowCrossSession: canCrossSession));
 
+        // R-09 评估结论：先补跨会话语义召回（不建图）
+        tools.AddRange(MemoryRecallTool.Create(_retriever, context, _policy));
+
         // 主动给别人发消息（管理员）：让 AI 能跨会话传话，而不只是被动回当前会话
         tools.AddRange(SendToOtherSessionTool.Create(
             _channel, _store, context, _permissionGate, _configs, maxResults: 10));
@@ -597,6 +714,9 @@ public sealed class ChatAgent : IChatAgent
         if (_platformContacts is not null)
         {
             tools.AddRange(DouyinTools.Create(_platformContacts, context, _policy));
+
+            // I-2：跨平台通讯录（所有平台的人/群汇总，带平台标签）
+            tools.AddRange(CrossPlatformTools.Create(_platformContacts, context, _policy));
         }
 
         var allowed = new List<AITool>(tools.Count);
@@ -698,7 +818,95 @@ public sealed class ChatAgent : IChatAgent
 
         sb.AppendLine().Append($"【当前说话的人】{senderId} —— 在这套配置里是：{roleLabel}");
 
+        // R-08：主人的跨平台账号一次给全 —— 否则模型被问「我那个群」时只会看当前平台。
+        if (_ownerLookup is not null)
+        {
+            try
+            {
+                var accounts = await _ownerLookup.GetAllAsync(ct).ConfigureAwait(false);
+                if (accounts.Count > 1)
+                {
+                    sb.AppendLine().Append("【主人账号（跨平台）】")
+                      .Append(string.Join("；", accounts.Select(a =>
+                          $"{a.Platform}: {a.OwnerName ?? a.OwnerId}（{a.OwnerId}）")))
+                      .Append("。跨平台找人 / 查群时按平台标识区分。");
+                }
+            }
+            catch
+            {
+                // 查不到就当没有：不能因为跨平台联想失败影响本轮回复
+            }
+        }
+
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>算本轮预算；关掉（Enabled=false）返回 null = 回退到只看软提示。</summary>
+    private async Task<ReplyLengthBudget?> ResolveLengthBudgetAsync(
+        AgentRunRequest request, string? selfId, CancellationToken ct)
+    {
+        if (_replyLength is not { Enabled: true })
+        {
+            return null;
+        }
+
+        // 可回退（J-3）：运行时开关 `reply.length.enabled=false` → 退回「只有软提示」的旧行为
+        try
+        {
+            var flag = await _settings.GetAsync("reply.length.enabled", ct).ConfigureAwait(false);
+            if (string.Equals(flag?.Trim(), "false", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+        }
+        catch
+        {
+            // 读不到开关按启用处理
+        }
+
+        ReplyMode mode;
+        try
+        {
+            mode = _replyModes is null
+                ? ReplyMode.Every
+                : await _replyModes.GetModeAsync(request.Chat.SessionId, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            mode = ReplyMode.Every;   // 读不到模式按最宽松处理，别因为判长度失败改变回复行为
+        }
+
+        var mentioned = request.Chat.Type == Channel.Models.ChatType.Private ||
+                        (!string.IsNullOrWhiteSpace(selfId) && request.Segments
+                            .OfType<Channel.Models.MentionSegment>()
+                            .Any(m => string.Equals(m.UserId, selfId, StringComparison.Ordinal)));
+
+        var scene = ReplyLengthPolicy.Decide(mode, request.Chat.Type, mentioned, request.UserText);
+        return ReplyLengthPolicy.BudgetFor(scene, _replyLength);
+    }
+
+    /// <summary>让模型把超长回复压缩到预算内（J-2；拍板选择「重写」而不是粗暴截断）。</summary>
+    private async Task<string> CondenseAsync(string text, int maxChars, CancellationToken ct)
+    {
+        try
+        {
+            using var purpose = CallPurposeScope.Begin(CallPurpose.Compression);
+            var response = await _clients.Current.GetResponseAsync(
+                [
+                    new ChatMessage(ChatRole.System,
+                        "把用户给你的这段话压缩改写：保留要点与语气，不要新增内容，不要解释你在做什么。只输出改写后的正文。"),
+                    new ChatMessage(ChatRole.User, "控制在 " + maxChars + " 字以内：" + Environment.NewLine + text),
+                ],
+                cancellationToken: ct).ConfigureAwait(false);
+
+            var rewritten = response.Text?.Trim();
+            return string.IsNullOrWhiteSpace(rewritten) ? text : rewritten;
+        }
+        catch
+        {
+            // 改写失败就退回原文，交给本地句末裁剪兜底
+            return text;
+        }
     }
 
     private static string BuildPersonaText(Persona persona)
@@ -831,6 +1039,31 @@ public sealed class ChatAgent : IChatAgent
             response.Usage?.CachedInputTokenCount), ct).ConfigureAwait(false);
 
         return response;
+    }
+
+    /// <summary>
+    /// 记一次「模型调用失败」。
+    /// </summary>
+    /// <remarks>
+    /// 旧实现只写日志、不落指标 —— 于是「失败了多少次」在数据页永远看不见，
+    /// 事故复盘只能翻日志。分类结果（<see cref="FailureKind"/>）也一并写日志，
+    /// 方便区分「模型 5xx」和「报文被拒」。
+    /// </remarks>
+    private async Task RecordLlmFailureAsync(Exception exception)
+    {
+        var kind = SendFailureClassifier.Classify(exception);
+        _logger.Warning("模型调用失败归类：{Kind}（会话 {SessionId}）", kind, SessionId);
+
+        try
+        {
+            await _metrics
+                .RecordAsync(new MetricEntry(SessionId, "llm.fail", 0), CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "记录模型失败指标失败（会话 {SessionId}）", SessionId);
+        }
     }
 
     /// <summary>

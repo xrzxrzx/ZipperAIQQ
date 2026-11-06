@@ -125,6 +125,8 @@ public sealed class GetStatsAction : IApiAction
                     kindLabel = MetricKindCatalog.Label(r.Kind),
                     count = r.Count,
                     avgMs = Math.Round(r.AvgMs, 1),
+                    // p95：平均值会被长尾抹平，数据页要能看出「最慢那一小撮」（问题记录 04 #3）
+                    p95Ms = Math.Round(r.P95Ms, 1),
                     minMs = Math.Round(r.MinMs, 1),
                     maxMs = Math.Round(r.MaxMs, 1),
                     inputTokens = r.TotalInputTokens,

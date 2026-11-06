@@ -166,14 +166,16 @@
                     <Grid ColumnSpacing="12" Padding="0,0,0,4">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="180" />
+                            <ColumnDefinition Width="70" />
                             <ColumnDefinition Width="80" />
-                            <ColumnDefinition Width="90" />
+                            <ColumnDefinition Width="80" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="类别" Style="{StaticResource CaptionStyle}" />
                         <TextBlock Grid.Column="1" Text="次数" Style="{StaticResource CaptionStyle}" />
                         <TextBlock Grid.Column="2" Text="平均耗时" Style="{StaticResource CaptionStyle}" />
-                        <TextBlock Grid.Column="3" Text="Token（入 / 出）" Style="{StaticResource CaptionStyle}" />
+                        <TextBlock Grid.Column="3" Text="p95" Style="{StaticResource CaptionStyle}" />
+                        <TextBlock Grid.Column="4" Text="Token（入 / 出）" Style="{StaticResource CaptionStyle}" />
                     </Grid>
 
                     <ItemsControl ItemsSource="{x:Bind Stats.KindRows}">
@@ -182,8 +184,9 @@
                                 <Grid ColumnSpacing="12" Padding="0,5">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="180" />
+                                        <ColumnDefinition Width="70" />
                                         <ColumnDefinition Width="80" />
-                                        <ColumnDefinition Width="90" />
+                                        <ColumnDefinition Width="80" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
@@ -196,7 +199,9 @@
                                                Style="{StaticResource BodyStyle}" />
                                     <TextBlock Grid.Column="2" Text="{x:Bind AvgMsText}"
                                                Style="{StaticResource BodyStyle}" />
-                                    <TextBlock Grid.Column="3" Text="{x:Bind TokenText}"
+                                    <TextBlock Grid.Column="3" Text="{x:Bind P95MsText}"
+                                               Style="{StaticResource BodyStyle}" />
+                                    <TextBlock Grid.Column="4" Text="{x:Bind TokenText}"
                                                Style="{StaticResource BodyStyle}" />
                                 </Grid>
                             </DataTemplate>
@@ -208,6 +213,121 @@
 
                     <Button Content="刷新统计" Style="{StaticResource JpButtonStyle}"
                             Command="{x:Bind Stats.LoadCommand}" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
+            <!-- 额度看板（E-8）：本窗口用量 / 余额 / 开关与阈值（保存即生效） -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <TextBlock Text="额度闸门" Style="{StaticResource SectionHeaderStyle}" />
+                        <ToggleSwitch IsOn="{x:Bind Stats.QuotaEnabled, Mode=TwoWay}"
+                                      OnContent="开" OffContent="关" />
+                    </StackPanel>
+
+                    <ProgressBar Value="{x:Bind Stats.QuotaProgressPercent, Mode=OneWay}"
+                                 Maximum="100" />
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="本窗口已用 / 上限" Style="{StaticResource CaptionStyle}" />
+                            <TextBlock Text="{x:Bind Stats.QuotaSpentText, Mode=OneWay}"
+                                       Style="{StaticResource BodyStyle}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock Text="余额" Style="{StaticResource CaptionStyle}" />
+                            <TextBlock Text="{x:Bind Stats.QuotaRemainingText, Mode=OneWay}"
+                                       Style="{StaticResource BodyStyle}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ComboBox Width="96" Header="窗口"
+                                  SelectedValue="{x:Bind Stats.QuotaWindow, Mode=TwoWay}"
+                                  SelectedValuePath="Tag">
+                            <ComboBoxItem Content="小时" Tag="hour" />
+                            <ComboBoxItem Content="日" Tag="day" />
+                            <ComboBoxItem Content="月" Tag="month" />
+                        </ComboBox>
+                        <TextBox Header="上限（元）" Width="110"
+                                 Text="{x:Bind Stats.QuotaLimitText, Mode=TwoWay}" />
+                        <TextBox Header="预警比例" Width="110"
+                                 Text="{x:Bind Stats.QuotaWarnText, Mode=TwoWay}" />
+                        <Button Content="保存额度"
+                                Command="{x:Bind Stats.SaveQuotaCommand}"
+                                Style="{StaticResource JpButtonStyle}"
+                                VerticalAlignment="Bottom" />
+                    </StackPanel>
+
+                    <TextBlock Text="{x:Bind Stats.QuotaStatusLine, Mode=OneWay}"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <!-- 最近告警（D-6）：出过什么事、送没送到，一眼能看到 -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="最近告警" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="{x:Bind Stats.AlertSummaryText, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <ItemsControl ItemsSource="{x:Bind Stats.Alerts}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="dto:AlertItemDto">
+                                <Grid ColumnSpacing="12" Padding="0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="110" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{x:Bind TimeText}"
+                                               Style="{StaticResource CaptionStyle}" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{x:Bind Summary}" Style="{StaticResource BodyStyle}" />
+                                        <TextBlock Text="{x:Bind DetailText}"
+                                                   Style="{StaticResource CaptionStyle}" FontSize="11" />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <!-- 定时任务执行（G-6）：到点后到底发了没、为什么没发 -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="定时任务执行" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="{x:Bind Stats.ExecutionSummaryText, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <ItemsControl ItemsSource="{x:Bind Stats.Executions}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="dto:ScheduleExecutionDto">
+                                <Grid ColumnSpacing="12" Padding="0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="110" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{x:Bind TimeText}"
+                                               Style="{StaticResource CaptionStyle}" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{x:Bind Summary}" Style="{StaticResource BodyStyle}" />
+                                        <TextBlock Text="{x:Bind DetailText}"
+                                                   Style="{StaticResource CaptionStyle}" FontSize="11"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </StackPanel>
             </Border>
 

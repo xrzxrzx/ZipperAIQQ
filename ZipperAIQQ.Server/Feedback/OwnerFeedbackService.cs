@@ -6,6 +6,8 @@ using ZipperAIQQ.Server.Access;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Settings;
 
+using ZipperAIQQ.Core.Time;
+using ZipperAIQQ.Server.Alerts;
 using ZipperAIQQ.Server.Config;
 namespace ZipperAIQQ.Server.Feedback;
 
@@ -44,12 +46,14 @@ public sealed class OwnerFeedbackService
     private readonly IMessageStore _messages;
     private readonly IMessageChannel _channel;
     private readonly ILogger _logger;
+    private readonly IAlertSink? _alerts;
 
     public OwnerFeedbackService(
         IRuntimeSettingsStore settings,
         IMessageStore messages,
         IMessageChannel channel,
-        ILogger logger)
+        ILogger logger,
+        IAlertSink? alerts = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(messages);
@@ -60,6 +64,7 @@ public sealed class OwnerFeedbackService
         _messages = messages;
         _channel = channel;
         _logger = logger;
+        _alerts = alerts;
     }
 
     public async Task HandleAsync(IncomingNotice notice, CancellationToken ct = default)
@@ -128,6 +133,16 @@ public sealed class OwnerFeedbackService
         catch (Exception ex)
         {
             _logger.Warning(ex, "主人反馈发送失败：{Type} → {Session}", notice.Type, chat.SessionId);
+
+            // 反馈没送到 = 主人该知道的事没送到；交给降级链再试一次（D-5）
+            if (_alerts is not null)
+            {
+                await _alerts.RaiseAsync(new AlertMessage(
+                    AlertKind.OwnerFeedbackFailed,
+                    platform,
+                    $"⚠️ 主人反馈发送失败（{notice.Type} → {chat.SessionId}）：{ex.Message}",
+                    BeijingTime.Now), ct).ConfigureAwait(false);
+            }
         }
     }
 

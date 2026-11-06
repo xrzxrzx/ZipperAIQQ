@@ -31,6 +31,44 @@ public sealed partial class StatsViewModel : ObservableObject
 
     public StatsDto? Stats { get; private set; }
 
+    /// <summary>最近告警（D-6：数据页直接能看「出过什么事」）。</summary>
+    public ObservableCollection<AlertItemDto> Alerts { get; } = [];
+
+    [ObservableProperty]
+    public partial string AlertSummaryText { get; set; } = "暂无告警";
+
+    /// <summary>最近定时任务执行（G-6）。</summary>
+    public ObservableCollection<ScheduleExecutionDto> Executions { get; } = [];
+
+    [ObservableProperty]
+    public partial string ExecutionSummaryText { get; set; } = "暂无执行记录";
+
+    // ── 额度看板（E-8）──
+
+    [ObservableProperty]
+    public partial bool QuotaEnabled { get; set; }
+
+    [ObservableProperty]
+    public partial string QuotaWindow { get; set; } = "day";
+
+    [ObservableProperty]
+    public partial string QuotaLimitText { get; set; } = "5";
+
+    [ObservableProperty]
+    public partial string QuotaWarnText { get; set; } = "0.7";
+
+    [ObservableProperty]
+    public partial string QuotaSpentText { get; set; } = "—";
+
+    [ObservableProperty]
+    public partial string QuotaRemainingText { get; set; } = "—";
+
+    [ObservableProperty]
+    public partial double QuotaProgressPercent { get; set; }
+
+    [ObservableProperty]
+    public partial string QuotaStatusLine { get; set; } = string.Empty;
+
     [ObservableProperty]
     public partial string StatusLine { get; set; } = string.Empty;
 
@@ -124,6 +162,9 @@ public sealed partial class StatsViewModel : ObservableObject
             }
 
             Apply(stats);
+            await LoadAlertsAsync().ConfigureAwait(true);
+            await LoadQuotaAsync().ConfigureAwait(true);
+            await LoadExecutionsAsync().ConfigureAwait(true);
             StatusLine = SelectedSession == AllSessionsLabel
                 ? "统计已刷新"
                 : $"统计已刷新（{SelectedSession}）";
@@ -151,12 +192,147 @@ public sealed partial class StatsViewModel : ObservableObject
             if (stats is not null)
             {
                 Apply(stats);
+                await LoadAlertsAsync().ConfigureAwait(true);
+                await LoadQuotaAsync().ConfigureAwait(true);
+                await LoadExecutionsAsync().ConfigureAwait(true);
             }
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"客户端异常：{ex}");
             // 心跳失败不提示（连接断了由状态条体现）
+        }
+    }
+
+    /// <summary>拉最近告警；失败不影响统计页其余内容。</summary>
+    private async Task LoadAlertsAsync()
+    {
+        try
+        {
+            var response = await _api
+                .CallAsync<AlertsResponseDto>("getAlerts", new { limit = 10 })
+                .ConfigureAwait(true);
+
+            Alerts.Clear();
+            foreach (var alert in response?.Alerts ?? [])
+            {
+                Alerts.Add(alert);
+            }
+
+            AlertSummaryText = Alerts.Count == 0 ? "暂无告警" : $"最近 {Alerts.Count} 条";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"读取告警失败：{ex}");
+            AlertSummaryText = "告警读取失败";
+        }
+    }
+
+    /// <summary>拉额度看板（失败只影响这张卡）。</summary>
+    private async Task LoadQuotaAsync()
+    {
+        try
+        {
+            var quota = await _api.CallAsync<QuotaDto>("getQuota", null).ConfigureAwait(true);
+            if (quota is null)
+            {
+                QuotaStatusLine = "额度读取失败：服务端没有返回数据";
+                return;
+            }
+
+            QuotaEnabled = quota.Enabled;
+            QuotaWindow = quota.Window;
+            QuotaLimitText = quota.LimitCny.ToString("0.##");
+            QuotaWarnText = quota.WarnRatio.ToString("0.##");
+
+            QuotaSpentText = quota.HasData
+                ? $"¥{quota.SpentCny:F2} / ¥{quota.LimitCny:F2}"
+                : $"无数据（上限 ¥{quota.LimitCny:F2}）";
+
+            QuotaRemainingText = quota.RemainingCny is { } remaining
+                ? $"¥{remaining:F2}"
+                : "—";
+
+            QuotaProgressPercent = quota.LimitCny <= 0
+                ? 0
+                : Math.Clamp((double)(quota.SpentCny / quota.LimitCny) * 100, 0, 100);
+
+            var source = quota.Source switch
+            {
+                "balance" => "余额差",
+                "estimate" => "token 估算",
+                _ => "无数据",
+            };
+            QuotaStatusLine = $"{quota.Window} 窗口 · 口径：{source}";
+        }
+        catch (Exception ex)
+        {
+            QuotaStatusLine = $"额度读取失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>保存额度配置（服务端热更新，不用重启）。</summary>
+    [RelayCommand]
+    private async Task SaveQuotaAsync()
+    {
+        try
+        {
+            if (!decimal.TryParse(QuotaLimitText, out var limit) || limit <= 0)
+            {
+                QuotaStatusLine = "上限必须是大于 0 的数字";
+                return;
+            }
+
+            if (!decimal.TryParse(QuotaWarnText, out var warn) || warn <= 0 || warn >= 1)
+            {
+                QuotaStatusLine = "预警比例必须在 0~1 之间";
+                return;
+            }
+
+            var saved = await _api.CallAsync<QuotaSavedDto>("setQuota", new
+            {
+                enabled = QuotaEnabled,
+                window = QuotaWindow,
+                limitCny = limit,
+                warnRatio = warn,
+            }).ConfigureAwait(true);
+
+            if (saved is null)
+            {
+                QuotaStatusLine = "保存失败：服务端没有返回数据";
+                return;
+            }
+
+            QuotaStatusLine = $"已保存并生效：{saved.Window} 窗口 / ¥{saved.LimitCny:F2} / 预警 {saved.WarnRatio:P0}";
+            await LoadQuotaAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            QuotaStatusLine = $"保存失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>拉最近定时任务执行（失败只影响这张卡）。</summary>
+    private async Task LoadExecutionsAsync()
+    {
+        try
+        {
+            var response = await _api
+                .CallAsync<ScheduleExecutionsResponseDto>("getScheduleExecutions", new { limit = 10 })
+                .ConfigureAwait(true);
+
+            Executions.Clear();
+            foreach (var item in response?.Executions ?? [])
+            {
+                Executions.Add(item);
+            }
+
+            ExecutionSummaryText = Executions.Count == 0 ? "暂无执行记录" : $"最近 {Executions.Count} 条";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"读取定时执行记录失败：{ex}");
+            ExecutionSummaryText = "执行记录读取失败";
         }
     }
 

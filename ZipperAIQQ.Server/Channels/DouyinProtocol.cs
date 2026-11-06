@@ -354,6 +354,22 @@ public static class DouyinProtocol
 
     // ─────────────────────────── 序列化：出站 / 查询 ───────────────────────────
 
+    /// <summary>
+    /// 从 <see cref="ImageSegment.FileId"/> 里取出服务器内联的 base64。
+    /// </summary>
+    /// <remarks>
+    /// 约定来自 <c>CommandRouter.ReplyAsync</c>：服务器生成的图（<c>/status</c>、<c>/help</c>）
+    /// 没有 URL，只有 <c>base64://&lt;数据&gt;</c>。QQ 侧直接把它交给 NapCat 的 file 参数，
+    /// 抖音侧要拆成独立的 <c>data</c> 字段。
+    /// </remarks>
+    private static string? TryInlineBase64(string? fileId)
+    {
+        const string prefix = "base64://";
+        return fileId is { Length: > 0 } && fileId.StartsWith(prefix, StringComparison.Ordinal)
+            ? fileId[prefix.Length..]
+            : null;
+    }
+
     /// <summary>拼一帧 <c>outbound</c>。</summary>
     /// <param name="session">目标会话（<c>ChatRef.SessionId</c>，形如 <c>douyin:g123</c>）。</param>
     /// <param name="segments">消息段（已按 <see cref="SplitText"/> 分过段）。</param>
@@ -392,13 +408,28 @@ public static class DouyinProtocol
                     array.Add(Segment("text", "text", "@" + mention.UserId));
                     break;
 
-                case ImageSegment image when !string.IsNullOrEmpty(image.Url):
-                    array.Add(Segment("image", "url", image.Url));
-                    break;
+                case ImageSegment image:
+                    if (!string.IsNullOrEmpty(image.Url))
+                    {
+                        array.Add(Segment("image", "url", image.Url));
+                    }
+                    else if (TryInlineBase64(image.FileId) is { Length: > 0 } inline)
+                    {
+                        // 服务器自己生成的图（/status、/help 等）没有 URL，只有 base64 ——
+                        // CommandRouter 把它放在 FileId 里（QQ 侧直接交给 NapCat 的 file 参数）。
+                        // 抖音这边要拆出来走 `data`，否则 sidecar 只会收到一句「[图片]」。
+                        array.Add(new JsonObject
+                        {
+                            ["type"] = "image",
+                            ["data"] = inline,
+                        });
+                    }
+                    else
+                    {
+                        // 只有 FileId 又没有 base64：sidecar 拿不到任何字节，明确降级而不是静默丢。
+                        array.Add(Segment("text", "text", "[图片]"));
+                    }
 
-                case ImageSegment:
-                    // 只有 FileId 没有 URL：sidecar 只能下载 URL，这里明确降级而不是静默丢。
-                    array.Add(Segment("text", "text", "[图片]"));
                     break;
 
                 case ReplySegment:

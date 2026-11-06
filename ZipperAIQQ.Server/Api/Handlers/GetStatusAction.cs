@@ -1,5 +1,7 @@
 using System.Text.Json;
 using ZipperAIQQ.Agent.Llm;
+using ZipperAIQQ.Channel.Reliability;
+using ZipperAIQQ.Server.Channels;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Schedules;
@@ -15,25 +17,33 @@ public sealed class GetStatusAction : IApiAction
     private readonly IScheduleStore _schedules;
     private readonly ServerOptions _options;
     private readonly IChatClientProvider _clients;
+    private readonly ChannelHealthRegistry _health;
+    private readonly IReadOnlyList<IRecoverableChannel> _channels;
 
     public GetStatusAction(
         IClientTransport transport,
         IMessageStore messages,
         IScheduleStore schedules,
         ServerOptions options,
-        IChatClientProvider clients)
+        IChatClientProvider clients,
+        ChannelHealthRegistry health,
+        IEnumerable<IRecoverableChannel> channels)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(schedules);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(clients);
+        ArgumentNullException.ThrowIfNull(health);
+        ArgumentNullException.ThrowIfNull(channels);
 
         _transport = transport;
         _messages = messages;
         _schedules = schedules;
         _options = options;
         _clients = clients;
+        _health = health;
+        _channels = channels.ToList();
     }
 
     public string Name => "getStatus";
@@ -53,6 +63,21 @@ public sealed class GetStatusAction : IApiAction
             sessions = sessions.Count,
             pendingTasks = pending,
             httpAddress = _options.HttpAddress,
+
+            // C-5：每个通道的健康快照（客户端/告警都读这一份，避免各自拼口径）
+            channels = _channels.Select(channel =>
+            {
+                var monitor = _health.Get(channel.Platform);
+                return new
+                {
+                    platform = channel.Platform,
+                    connected = channel.IsConnected,
+                    state = monitor.IsChannelDown ? "open" : "closed",
+                    consecutiveFailures = monitor.ConsecutiveFailures,
+                    disconnectCount = monitor.DisconnectCount,
+                    lastDowntimeSeconds = monitor.LastDowntime?.TotalSeconds,
+                };
+            }).ToList(),
         };
     }
 }

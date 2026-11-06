@@ -97,8 +97,24 @@ public sealed class MessageDto
     [JsonPropertyName("occurredAt")]
     public long OccurredAt { get; set; }
 
+    /// <summary>被名单拦下（H-5）：消息已留档，但到达时没有回复。</summary>
+    [JsonPropertyName("blocked")]
+    public bool Blocked { get; set; }
+
+    /// <summary>未回复（H-6）：仅在**没被拦**时才为 true —— 黑名单时期的沉默不算问题。</summary>
+    [JsonPropertyName("unanswered")]
+    public bool Unanswered { get; set; }
+
     public string TimeText =>
         DateTimeOffset.FromUnixTimeMilliseconds(OccurredAt).LocalDateTime.ToString("MM-dd HH:mm:ss");
+
+    /// <summary>未回复标记文案；空串表示不显示。</summary>
+    [JsonIgnore]
+    public string UnansweredText => Unanswered ? "未回复" : string.Empty;
+
+    /// <summary>留档标记文案（黑名单消息）。</summary>
+    [JsonIgnore]
+    public string BlockedText => Blocked ? "留档（未处理）" : string.Empty;
 
     /// <summary>发送人显示名（AI 统一显示「AI」）。</summary>
     [JsonIgnore]

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.AI;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Storage.Config;
 using ZipperAIQQ.Storage.Messages;
@@ -92,7 +93,8 @@ public static class SendToOtherSessionTool
                 }
                 catch (Exception ex)
                 {
-                    return $"发送失败：{ex.Message}";
+                    var kind = SendFailureClassifier.Classify(ex);
+                    return $"发送失败：{ex.Message}\n{FailureGuidance.Describe(kind)}";
                 }
 
                 await configs

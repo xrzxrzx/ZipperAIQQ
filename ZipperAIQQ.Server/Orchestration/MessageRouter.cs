@@ -30,6 +30,8 @@ public sealed class MessageRouter : BackgroundService
     private readonly External.ExternalWsHub _external;
     private readonly Configuration.ServerOptions _options;
     private readonly Identity.ISelfIdRegistry _selfIds;
+    private readonly IChatFilter _filter;
+    private readonly TurnCoordinator _turns;
     private readonly ILogger _logger;
 
     public MessageRouter(
@@ -44,6 +46,8 @@ public sealed class MessageRouter : BackgroundService
         External.ExternalWsHub external,
         Configuration.ServerOptions options,
         Identity.ISelfIdRegistry selfIds,
+        IChatFilter filter,
+        TurnCoordinator turns,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -57,6 +61,8 @@ public sealed class MessageRouter : BackgroundService
         ArgumentNullException.ThrowIfNull(external);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(selfIds);
+        ArgumentNullException.ThrowIfNull(filter);
+        ArgumentNullException.ThrowIfNull(turns);
         ArgumentNullException.ThrowIfNull(logger);
 
         _channel = channel;
@@ -70,6 +76,8 @@ public sealed class MessageRouter : BackgroundService
         _external = external;
         _options = options;
         _selfIds = selfIds;
+        _filter = filter;
+        _turns = turns;
         _logger = logger;
     }
 
@@ -145,6 +153,9 @@ public sealed class MessageRouter : BackgroundService
     private sealed class SessionBuffer
     {
         public readonly List<IncomingMessage> Messages = [];
+
+        /// <summary>判定为「应引导当前轮」的消息 id（K-3）。</summary>
+        public readonly HashSet<string> SteerIds = new(StringComparer.Ordinal);
         public bool Processing;
 
         /// <summary>已从字典摘除：拿到它的处理循环要让调用方重新取新缓冲。</summary>
@@ -155,8 +166,22 @@ public sealed class MessageRouter : BackgroundService
 
     private async Task HandleMessageAsync(IncomingMessage msg, CancellationToken ct)
     {
-        // ① 先落库（无论是否回复，历史都要留）
+        // ① 先落库（H-5：**一律入库**，被名单拦下的也留档，只是不处理）
+        var allowed = _filter.IsAllowed(msg.Chat);
+        if (!allowed)
+        {
+            msg = msg with { Blocked = true };
+        }
+
         var id = await _store.AppendAsync(msg, ct).ConfigureAwait(false);
+
+        if (!allowed)
+        {
+            _logger.Debug(
+                "会话 {Session} 未通过名单：消息 #{Id} 已留档，不处理（不回复 / 不执行命令）",
+                msg.Chat.SessionId, id);
+            return;
+        }
 
         // ② 命令优先（FR-9.1）：命中就执行并回复，**不进 agent**
         //    没命中（比如 "/foo" 这种普通文本）继续走原流程，用户无感知（9.2）
@@ -200,9 +225,10 @@ public sealed class MessageRouter : BackgroundService
             .GetModeAsync(msg.Chat.SessionId, ct)
             .ConfigureAwait(false);
 
-        if (!await _replyModes.ShouldReplyAsync(msg, selfId, ct).ConfigureAwait(false))
+        var verdict = await _replyModes.DecideAsync(msg, selfId, ct).ConfigureAwait(false);
+        if (!verdict.ShouldReply)
         {
-            _logger.Debug("回复模式 {Mode}：跳过 #{Id}（会话 {Session}）", mode, id, msg.Chat.SessionId);
+            _logger.Debug("会话 {Session} 按回复模式不需要响应（{Mode}）", msg.Chat.SessionId, mode);
             return;
         }
 
@@ -220,6 +246,11 @@ public sealed class MessageRouter : BackgroundService
                 }
 
                 buffer.Messages.Add(msg);
+
+                if (verdict.PreferSteer && !string.IsNullOrWhiteSpace(msg.EventId))
+                {
+                    buffer.SteerIds.Add(msg.EventId);
+                }
                 if (buffer.Processing)
                 {
                     return;
@@ -232,6 +263,31 @@ public sealed class MessageRouter : BackgroundService
         }
 
         _ = ProcessBatchAsync(msg.Chat, buffer, ct);
+    }
+
+    /// <summary>一轮里处理一批消息（由 <see cref="TurnCoordinator"/> 串行调度）。</summary>
+    private async Task RunTurnAsync(ChatRef chat, IReadOnlyList<IncomingMessage> batch, CancellationToken ct)
+    {
+        if (batch.Count == 0)
+        {
+            return;
+        }
+
+        var last = batch[^1];
+        var agent = _agents.GetOrCreate(chat);
+
+        var result = await agent.RunAsync(new AgentRunRequest
+        {
+            Chat = chat,
+            Sender = last.Sender,
+            Now = last.OccurredAt,
+            UserText = last.PlainText,
+            Segments = last.Segments,
+            Batch = batch,
+        }, ct).ConfigureAwait(false);
+
+        _logger.Information("会话 {Session} 合并 {Count} 条 → 发出 {Sent} 条",
+            chat.SessionId, batch.Count, result.MessagesSent);
     }
 
     /// <summary>
@@ -262,21 +318,16 @@ public sealed class MessageRouter : BackgroundService
                     break;
                 }
 
-                var last = batch[^1];
-                var agent = _agents.GetOrCreate(chat);
+                // K-2：交给轮次协调器 —— 同一会话串行；跑/挂起中到达的批次并入当前轮
+                var preferSteer = chat.Type == ChatType.Private ||
+                                  batch.Any(m => m.EventId is { } id && buffer.SteerIds.Remove(id));
 
-                var result = await agent.RunAsync(new AgentRunRequest
-                {
-                    Chat = chat,
-                    Sender = last.Sender,
-                    Now = last.OccurredAt,
-                    UserText = last.PlainText,
-                    Segments = last.Segments,
-                    Batch = batch,
-                }, ct).ConfigureAwait(false);
-
-                _logger.Information("会话 {Session} 合并 {Count} 条 → 发出 {Sent} 条",
-                    chat.SessionId, batch.Count, result.MessagesSent);
+                await _turns.SubmitAsync(
+                    chat,
+                    batch,
+                    (messages, token) => RunTurnAsync(chat, messages, token),
+                    ct,
+                    preferSteer).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

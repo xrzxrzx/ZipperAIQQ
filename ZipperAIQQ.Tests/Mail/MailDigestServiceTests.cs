@@ -1,5 +1,6 @@
 using Serilog;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Server.Mail;
 using ZipperAIQQ.Storage;
@@ -129,6 +130,24 @@ public sealed class MailDigestServiceTests : IAsyncLifetime
         var summary = Assert.IsType<MailSummaryRow>((await _repository.GetAsync(mailId))?.Summary);
         Assert.Null(summary.ForwardedAt);
         Assert.Single(await _repository.GetPendingDigestAsync(10));
+    }
+
+    [Fact]
+    public async Task Channel_down_skips_pointless_retries()
+    {
+        // 通道不可用时再等 1/2/4 秒也发不出去：只该试一次，然后交回上层冷却
+        var mailId = await SeedMailAsync("季度发票", "发票待报销。");
+        var settings = new FakeSettings().Set(MailDigestService.OwnerKey, "10001");
+        var channel = new FakeChannel().FailOnce(new ChannelUnavailableException("qq", "ws aborted"));
+
+        var result = await Service(channel, settings, Options(forwardRetryCount: 3)).FlushAsync(10);
+
+        Assert.False(result.Sent);
+        Assert.Equal(1, channel.Attempts);
+        Assert.Contains("通道不可用", result.Error);
+
+        var summary = Assert.IsType<MailSummaryRow>((await _repository.GetAsync(mailId))?.Summary);
+        Assert.Null(summary.ForwardedAt);
     }
 
     [Fact]

@@ -9,6 +9,10 @@ using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Transport.Client;
 
+using ZipperAIQQ.Channel.Failures;
+using ZipperAIQQ.Channel.Reliability;
+using ZipperAIQQ.Transport;
+
 namespace ZipperAIQQ.Channel.NapCat;
 
 /// <summary>
@@ -28,7 +32,7 @@ namespace ZipperAIQQ.Channel.NapCat;
 /// 两者**不能用同一条路**：事件是 1:N 广播，API 响应是 1:1 定向。
 /// </para>
 /// </remarks>
-public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechTranscriber
+public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechTranscriber, IRecoverableChannel
 {
     private readonly IClientTransport _transport;
     private readonly IChatFilter _filter;
@@ -45,6 +49,9 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
         });
 
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonObject>> _pending = new();
+
+    /// <summary>恢复串行化：看门狗和手工重连撞在一起时，只能有一个真的去重拨。</summary>
+    private readonly SemaphoreSlim _recoverGate = new(1, 1);
     private long _selfId;
 
     public NapCatChannel(
@@ -269,7 +276,22 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
                 ["echo"] = echo,
             };
 
-            await _transport.SendAsync(payload).ConfigureAwait(false);
+            try
+            {
+                await _transport.SendAsync(payload).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is System.Net.WebSockets.WebSocketException
+                                          or ObjectDisposedException
+                                          or System.Net.Sockets.SocketException
+                                          or IOException)
+            {
+                // 连接层明确坏了：包成语义异常，让上层**停下**而不是重新叫模型（问题记录 04 #7）。
+                throw new ChannelUnavailableException("qq", $"NapCat 连接不可用：{ex.Message}", ex);
+            }
 
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_options.ApiTimeoutSeconds));
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
@@ -333,8 +355,68 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
     /// <summary>首次发现 / 变更自身账号。</summary>
     public event Action<string>? SelfIdChanged;
 
-    /// <summary>建立连接并开始接收。</summary>
+    /// <summary>当前是否已连上 NapCat（供恢复循环判断）。</summary>
+    public bool IsConnected => _transport.IsConnected;
+
+    /// <summary>
+    /// 重连一次：先丢掉 Aborted 的旧 socket，再重拨。
+    /// </summary>
+    /// <remarks>
+    /// 顺序不能反：旧 socket 不置空时 <c>Attach</c> 会直接拒绝新连接，
+    /// 表面看「重连了」，实际一直连着旧的那个死连接。
+    /// </remarks>
+    public async Task<bool> TryRecoverAsync(CancellationToken ct)
+    {
+        if (IsConnected)
+        {
+            return true;
+        }
+
+        // 已有恢复在进行就交给它，避免两条 Connect 同时建连
+        if (!await _recoverGate.WaitAsync(0, ct).ConfigureAwait(false))
+        {
+            return IsConnected;
+        }
+
+        try
+        {
+            if (_transport is IResettableTransport resettable)
+            {
+                await resettable.ResetAsync(ct).ConfigureAwait(false);
+            }
+
+            await StartAsync(ct).ConfigureAwait(false);
+            return _transport.IsConnected;
+        }
+        finally
+        {
+            _recoverGate.Release();
+        }
+    }
+
+    /// <summary>建连闸：StartAsync 必须幂等（Program 与看门狗可能同时叫它）。</summary>
+    private readonly SemaphoreSlim _startGate = new(1, 1);
+
+    /// <summary>建立连接并开始接收；已连接时直接返回。</summary>
     public async Task StartAsync(CancellationToken ct = default)
+    {
+        await _startGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_transport.IsConnected)
+            {
+                return;
+            }
+
+            await StartCoreAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _startGate.Release();
+        }
+    }
+
+    private async Task StartCoreAsync(CancellationToken ct)
     {
         _transport.EventHandler = OnTransportFrame;
 
@@ -406,7 +488,9 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
             {
-                throw new TimeoutException($"发送消息超时（{_options.ApiTimeoutSeconds} 秒）");
+                // 连接在，但这一条没回来：可退避重试这一条，但会计入失败计数。
+                throw new ChannelSendFailedException(
+                    "qq", $"发送消息超时（{_options.ApiTimeoutSeconds} 秒）");
             }
 
             var status = response["status"]?.GetValue<string>();
@@ -414,7 +498,7 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
             {
                 // 失败要抛出，由上层转成「回填给模型的失败原因」（FR-2.3）
                 var detail = response["message"]?.ToString() ?? response.ToJsonString();
-                throw new InvalidOperationException($"发送失败：{detail}");
+                throw new ChannelSendFailedException("qq", $"发送失败：{detail}");
             }
         }
         finally
@@ -478,13 +562,8 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
             return;
         }
 
-        // 接收过滤（FR-17.3）：不在名单内 → 不落库、不进模型
-        if (!_filter.IsAllowed(evt.Chat))
-        {
-            return;
-        }
-
-        // 语音转写（FR-1.5，通道层完成）：放在过滤之后 —— 被过滤的聊天不必花一次转写
+        // H-5：名单判定已上移到路由层 —— 通道只负责收，是否处理由路由决定（消息一律入库留档）。
+        // 语音转写（FR-1.5，通道层完成）。
         if (evt is IncomingMessage message)
         {
             evt = await EnrichRecordsAsync(message).ConfigureAwait(false);

@@ -1,6 +1,7 @@
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Server.Contacts;
 using ZipperAIQQ.Storage.Config;
+using ZipperAIQQ.Storage.Owners;
 using ZipperAIQQ.Storage.Settings;
 
 namespace ZipperAIQQ.Server.Access;
@@ -19,12 +20,14 @@ public sealed class OwnerService
     private readonly IRoleResolver _roles;
     private readonly IOwnerScope _ownerScope;
     private readonly IConfigStore _configs;
+    private readonly IOwnerAccountStore? _accounts;
 
     public OwnerService(
         IRuntimeSettingsStore settings,
         IRoleResolver roles,
         IOwnerScope ownerScope,
-        IConfigStore configs)
+        IConfigStore configs,
+        IOwnerAccountStore? accounts = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(roles);
@@ -35,6 +38,7 @@ public sealed class OwnerService
         _roles = roles;
         _ownerScope = ownerScope;
         _configs = configs;
+        _accounts = accounts;
     }
 
     /// <summary>写入主人并立即生效。</summary>
@@ -65,6 +69,21 @@ public sealed class OwnerService
             await _settings
                 .SetAsync(AccessKeys.LegacyOwnerNameKey, nickname ?? string.Empty, ct)
                 .ConfigureAwait(false);
+        }
+
+        // D4-a：统一身份表是**主数据**，settings 是兼容镜像 —— 两边都写，读侧以身份表为准
+        if (_accounts is not null)
+        {
+            try
+            {
+                await _accounts
+                    .UpsertAsync([new OwnerAccount(platform, ownerId)], ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // 镜像写失败不阻塞设置主人（下次告警/启动会再补）
+            }
         }
 
         // 立即生效：权限解析器持有内存里的各平台 owner

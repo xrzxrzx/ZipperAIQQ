@@ -1,10 +1,12 @@
 using System.Text.Json;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Server.Access;
 using ZipperAIQQ.Server.Channels;
 using ZipperAIQQ.Server.Dto;
 using ZipperAIQQ.Server.Mail;
 using ZipperAIQQ.Storage.Config;
 using ZipperAIQQ.Storage.Mails;
+using ZipperAIQQ.Storage.Settings;
 
 namespace ZipperAIQQ.Server.Api.Handlers;
 
@@ -28,25 +30,29 @@ public sealed class GetPlatformsAction : IApiAction
     private readonly DouyinOptionsService _douyinOptions;
     private readonly IMailRepository _mailRepository;
     private readonly MailOptionsService _mailSwitch;
+    private readonly IRuntimeSettingsStore _settings;
 
     public GetPlatformsAction(
         IMessageChannel channel,
         IChannelLogin douyin,
         DouyinOptionsService douyinOptions,
         IMailRepository mailRepository,
-        MailOptionsService mailSwitch)
+        MailOptionsService mailSwitch,
+        IRuntimeSettingsStore settings)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(douyin);
         ArgumentNullException.ThrowIfNull(douyinOptions);
         ArgumentNullException.ThrowIfNull(mailRepository);
         ArgumentNullException.ThrowIfNull(mailSwitch);
+        ArgumentNullException.ThrowIfNull(settings);
 
         _channel = channel;
         _douyin = douyin;
         _douyinOptions = douyinOptions;
         _mailRepository = mailRepository;
         _mailSwitch = mailSwitch;
+        _settings = settings;
     }
 
     public string Name => "getPlatforms";
@@ -55,6 +61,15 @@ public sealed class GetPlatformsAction : IApiAction
     {
         var accounts = await _mailRepository.LoadAccountsAsync(ct).ConfigureAwait(false);
         var douyin = _douyinOptions.Current;
+
+        // I-4：每个平台的主人也一起给（客户端「平台接入」页直接展示，不必再跳名单页）
+        var owners = new Dictionary<string, (string? Id, string? Name)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var platform in _channel.Platforms)
+        {
+            owners[platform] = (
+                await AccessSettings.GetOwnerAsync(_settings, platform, ct).ConfigureAwait(false),
+                await AccessSettings.GetOwnerNameAsync(_settings, platform, ct).ConfigureAwait(false));
+        }
 
         return new
         {
@@ -72,6 +87,8 @@ public sealed class GetPlatformsAction : IApiAction
                     enabled = !string.Equals(platform, DouyinChannel.PlatformName, StringComparison.OrdinalIgnoreCase)
                         || douyin.Enabled,
                     features = FeaturesOf(_channel.Capabilities),
+                    ownerId = owners[platform].Id,
+                    ownerName = owners[platform].Name,
                 })
                 .ToList(),
 

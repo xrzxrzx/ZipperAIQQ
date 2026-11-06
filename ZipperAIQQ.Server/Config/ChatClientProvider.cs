@@ -1,6 +1,8 @@
 using Microsoft.Extensions.AI;
 using Serilog;
 using ZipperAIQQ.Agent.Llm;
+using ZipperAIQQ.Server.Alerts;
+using ZipperAIQQ.Server.Billing;
 using ZipperAIQQ.Storage.Config;
 
 namespace ZipperAIQQ.Server.Config;
@@ -19,19 +21,33 @@ public sealed class ChatClientProvider : IChatClientProvider
     private readonly IConfigStore _store;
     private readonly ISecretProtector _protector;
     private readonly ILogger _logger;
+    private readonly ISpendReader _spend;
+    private readonly IQuotaOptionsProvider _quota;
+    private readonly IAlertSink? _alerts;
 
     private volatile IChatClient? _current;
     private volatile string? _currentModel;
 
-    public ChatClientProvider(IConfigStore store, ISecretProtector protector, ILogger logger)
+    public ChatClientProvider(
+        IConfigStore store,
+        ISecretProtector protector,
+        ILogger logger,
+        ISpendReader spend,
+        IQuotaOptionsProvider quota,
+        IAlertSink? alerts = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(protector);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(spend);
+        ArgumentNullException.ThrowIfNull(quota);
 
         _store = store;
         _protector = protector;
         _logger = logger;
+        _spend = spend;
+        _quota = quota;
+        _alerts = alerts;
     }
 
     public bool HasClient => _current is not null;
@@ -72,6 +88,9 @@ public sealed class ChatClientProvider : IChatClientProvider
             client = ChatClientFactory.Create(
                 new LlmEndpoint(endpoint.Name, endpoint.BaseUrl, endpoint.Model, (LlmApiKind)endpoint.ApiKind),
                 key);
+
+            // 闸门包在最外层：工具循环里的每次调用都会经过它（额度到线时拦住非关键调用）
+            client = new SpendGuardChatClient(client, _spend, _quota, _logger, _alerts);
         }
         catch (Exception ex)
         {

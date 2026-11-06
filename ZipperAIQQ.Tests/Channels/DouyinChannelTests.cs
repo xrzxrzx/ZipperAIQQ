@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Serilog;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Server.Channels;
@@ -303,7 +304,8 @@ public sealed class DouyinChannelTests
         var connection = new FakeDouyinConnection(); // 不回 ack
         await channel.AttachAsync(connection);
 
-        var exception = await Assert.ThrowsAsync<TimeoutException>(
+        // 语义异常：连接在但这条没回 → ChannelSendFailed（可退避重试，不叫模型）
+        var exception = await Assert.ThrowsAsync<ChannelSendFailedException>(
             () => channel.SendAsync(Outgoing("没人应答"), CancellationToken.None));
 
         Assert.Contains("ack", exception.Message);
@@ -323,7 +325,7 @@ public sealed class DouyinChannelTests
         };
         await channel.AttachAsync(connection);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        var exception = await Assert.ThrowsAsync<ChannelSendFailedException>(
             () => channel.SendAsync(Outgoing("被风控拦住"), CancellationToken.None));
 
         Assert.Contains("conversation-risk", exception.Message);
@@ -334,7 +336,8 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+        // 未连接 = 通道不可用（语义异常），上层据此停手（问题记录 04 #7）
+        var exception = await Assert.ThrowsAsync<ChannelUnavailableException>(
             () => channel.SendAsync(Outgoing("没连上还发"), CancellationToken.None));
 
         Assert.Contains("未连接", exception.Message);

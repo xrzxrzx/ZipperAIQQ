@@ -27,6 +27,14 @@ public sealed record IncomingMessage : InboundEvent
     /// <summary>被回复的消息 ID（若这是一条引用回复）。</summary>
     public string? ReplyToMessageId { get; init; }
 
+    /// <summary>
+    /// 被名单拦下（H-5）：**消息仍入库留档，但不进模型、不执行命令、不回复**。
+    /// </summary>
+    /// <remarks>
+    /// 判定发生在路由层（过滤已从通道层上移）：通道只负责收，名单只决定"处不处理"。
+    /// </remarks>
+    public bool Blocked { get; init; }
+
     /// <summary>拼接后的纯文本（仅文本片段；用于检索与规则判定）。</summary>
     public string PlainText =>
         string.Concat(Segments.OfType<TextSegment>().Select(s => s.Text));

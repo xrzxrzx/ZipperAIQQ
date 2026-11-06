@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.Extensions.AI;
+using ZipperAIQQ.Agent.Cost;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Storage.Schedules;
@@ -27,6 +28,16 @@ public static class ScheduleTools
         "yyyy-MM-ddTHH:mm",
     ];
 
+    /// <summary>
+    /// 创建幂等的时间容差（问题记录 04 #6）。
+    /// </summary>
+    /// <remarks>
+    /// 实测的成对任务：同到期（#10/#11）、差 1 分钟（#7/#8）。
+    /// 取 2 分钟既能盖住「同一轮里重复调用」，又不会把「8 点吃药 / 8 点开会」
+    /// 这种真的两件事卡死 —— 后者还能用 <c>allowDuplicate</c> 显式放行。
+    /// </remarks>
+    internal static readonly TimeSpan DuplicateWindow = TimeSpan.FromMinutes(2);
+
     public static IReadOnlyList<AITool> Create(
         ToolCallContext context,
         IPermissionGate gate,
@@ -52,11 +63,17 @@ public static class ScheduleTools
     private static AIFunction CreateCreate(ToolCallContext context, IPermissionGate gate, IScheduleStore store)
     {
         return AIFunctionFactory.Create(
-            async (string when, string content, string? mentionUser, int? repeatMinutes, string? target) =>
+            async (string when, string content, string? mentionUser, int? repeatMinutes, string? target, bool? allowDuplicate) =>
             {
                 if (Deny(gate, context) is { } denied)
                 {
                     return denied;
+                }
+
+                // 防自我繁殖：正在执行定时任务时不许再创建（否则可能无限套娃）
+                if (ScheduleExecutionScope.IsActive)
+                {
+                    return "正在执行定时任务，不能在这里再创建新的定时任务。";
                 }
 
                 if (string.IsNullOrWhiteSpace(content))
@@ -111,6 +128,27 @@ public static class ScheduleTools
                     CreatedBy: context.Sender.UserId,
                     Status: ScheduleStatus.Pending);
 
+                // 幂等（问题记录 04 #6）：同一会话 + 同一时间窗 + 同重复方式 → 视为同一条。
+                // 判据不用正文：实测成对任务的文案各不相同（#10/#11 同到期、文案不同）。
+                if (allowDuplicate != true)
+                {
+                    var existing = await store
+                        .FindSimilarAsync(chat.SessionId, at, task.Repeat, task.IntervalMinutes, DuplicateWindow)
+                        .ConfigureAwait(false);
+                    if (existing is not null)
+                    {
+                        var preview = existing.Content.Length <= 30
+                            ? existing.Content
+                            : string.Concat(existing.Content.AsSpan(0, 30), "…");
+                        var existingKind = existing.Repeat == ScheduleRepeat.Interval
+                            ? $"每 {existing.IntervalMinutes} 分钟"
+                            : "一次性";
+                        return $"已存在同一时刻附近的定时任务 #{existing.Id}："
+                            + $"{BeijingTime.Format(existing.NextRunAt)}（{existingKind}），内容「{preview}」，**未重复创建**。"
+                            + "如果确实是另一件事（同一分钟的两个不同提醒），请带 `allowDuplicate=true` 再调一次。";
+                    }
+                }
+
                 var id = await store.CreateAsync(task).ConfigureAwait(false);
 
                 var kind = repeat ? $"每 {repeatMinutes} 分钟" : "一次性";
@@ -124,7 +162,9 @@ public static class ScheduleTools
             description:
                 "创建一个定时任务：到指定时间（**北京时间**，`yyyy-MM-dd HH:mm`）自动发一条消息。" +
                 "默认发到**当前会话**；`target` 可指定 `qq:p<QQ号>`（私聊）或 `qq:g<群号>`（群，需管理员/主人）。" +
-                "可选 repeatMinutes 表示每隔多少分钟重复一次；可选 mentionUser 在群聊里 @ 某人。");
+                "可选 repeatMinutes 表示每隔多少分钟重复一次；可选 mentionUser 在群聊里 @ 某人。" +
+                "**同一会话 ±2 分钟内已有待执行任务时不会重复创建**（返回「已存在 #id」）；" +
+                "确实要在同一时刻安排另一件事，再带 allowDuplicate=true 调一次。");
     }
 
     private static AIFunction CreateList(ToolCallContext context, IPermissionGate gate, IScheduleStore store)

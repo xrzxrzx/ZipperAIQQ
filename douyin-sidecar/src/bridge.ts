@@ -328,6 +328,13 @@ export interface OutboundPlan {
   chunks: string[];
   mentions: Mention[];
   imageUrls: string[];
+  /**
+   * 服务器内联的图片（base64，不带前缀）。
+   *
+   * 服务器自己生成的图（`/status`、`/help`）没有 URL —— 它把字节放在 `FileId` 里，
+   * 服务端拆出来后走这个字段（见 `DouyinProtocol.TryInlineBase64`）。
+   */
+  imageData: string[];
   replyTo: string | null;
 }
 
@@ -630,6 +637,7 @@ export function buildOutboundPlan(
   const texts: string[] = [];
   const mentions: Mention[] = [];
   const imageUrls: string[] = [];
+  const imageData: string[] = [];
   let replyTo = str(data.replyTo) ?? null;
 
   const segments = asArray(data.segments);
@@ -660,8 +668,13 @@ export function buildOutboundPlan(
       }
     } else if (type === "image") {
       const url = str(segment?.url);
+      const inline = str(segment?.data);
       if (url) {
         imageUrls.push(url);
+      } else if (inline) {
+        imageData.push(inline);
+      } else {
+        options.warn?.("出站图片既没有 url 也没有 data，已忽略该段");
       }
     } else if (type === "reply") {
       replyTo = str(segment?.referencedMessageId) ?? str(segment?.messageId) ?? replyTo;
@@ -677,6 +690,7 @@ export function buildOutboundPlan(
     chunks: chunkText(texts.join(""), options.maxTextLength),
     mentions,
     imageUrls,
+    imageData,
     replyTo,
   };
 }
@@ -1012,7 +1026,7 @@ export class DouyinImAdapter {
   async send(plan: OutboundPlan): Promise<void> {
     const client = this.requireClient();
 
-    if (plan.chunks.length === 0 && plan.imageUrls.length === 0) {
+    if (plan.chunks.length === 0 && plan.imageUrls.length === 0 && plan.imageData.length === 0) {
       throw new Error("出站内容为空（没有文本也没有图片）");
     }
 
@@ -1020,6 +1034,38 @@ export class DouyinImAdapter {
     const mentions = plan.mentions.map((mention) =>
       mention.name ? { uid: mention.uid, name: mention.name } : { uid: mention.uid },
     );
+
+    // 图片：douyin-im 1.1.0 的真实发送 API 是 `contact.sendMsg({ type: "image", data })`
+    // （ChatContact.sendMsg 接受 ImageInput = Uint8Array | string | ImageAsset）。
+    // 旧代码走 `client.sendMessage()` —— 实测该方法不存在，所以**任何图片都发不出去**，
+    // 服务端还会先把无 URL 的图降级成「[图片]」文字（2026-11-05 实测）。
+    if (plan.imageUrls.length > 0 || plan.imageData.length > 0) {
+      const contact = this.pickContact(plan);
+      const sendMsg = contact ? firstFunction(contact, ["sendMsg", "sendText", "send", "reply"]) : null;
+      if (!contact || !sendMsg) {
+        throw new Error("抖音图片发送需要联系人对象（pickFriend/pickGroup 取不到），已放弃发送");
+      }
+
+      for (const chunk of plan.chunks) {
+        await Promise.resolve((sendMsg as AnyFn).call(contact, chunk));
+      }
+
+      for (const url of plan.imageUrls) {
+        const buffer = await this.fetchImage(url);
+        await Promise.resolve((sendMsg as AnyFn).call(contact, { type: "image", data: buffer }));
+      }
+
+      for (const base64 of plan.imageData) {
+        const buffer = Buffer.from(base64, "base64");
+        await Promise.resolve((sendMsg as AnyFn).call(contact, { type: "image", data: buffer }));
+      }
+
+      if (plan.replyTo) {
+        this.log.warn("图片消息暂不支持在抖音里引用回复，已忽略 replyTo");
+      }
+
+      return;
+    }
 
     const plain = plan.imageUrls.length === 0 && plan.replyTo === null;
 
@@ -1054,30 +1100,10 @@ export class DouyinImAdapter {
       return;
     }
 
-    // 图片 / 引用：需要 sendMessage + segments（design §4.2）
-    const sendMessage = firstFunction(client, ["sendMessage"]);
-    if (!sendMessage) {
-      throw new Error("douyin-im 客户端没有 sendMessage()，无法发送图片 / 引用消息（未验收 API，见设计 §10 #1）");
-    }
-
-    const segments: Record<string, unknown>[] = plan.chunks.map((chunk) => ({ type: "text", text: chunk }));
-    for (const url of plan.imageUrls) {
-      segments.push(await this.uploadImage(client, url));
-    }
-
-    if (plan.replyTo) {
-      segments.push({ type: "reply", referencedMessageId: plan.replyTo });
-    }
-
-    await Promise.resolve(
-      sendMessage.call(client, {
-        threadId: plan.threadId,
-        conversationShortId,
-        segments,
-        mentions,
-        replyTo: plan.replyTo ?? undefined,
-      }),
-    );
+    // 走到这里只剩「引用回复」：douyin-im 1.1.0 的 reply 需要 referencedUid /
+    // referencedMessageType，我们的 outbound 帧只带 messageId，凑不出来 ——
+    // 明确报错，别静默发成一条普通消息。
+    throw new Error("抖音暂不支持引用回复（出站帧缺 referencedUid；未验收 API，见设计 §10 #1）");
   }
 
   /**
@@ -1383,25 +1409,17 @@ export class DouyinImAdapter {
     }
   }
 
-  /** 图片：sidecar 自己下载再上传（Server 只传 URL，设计 §4.2）。 */
-  private async uploadImage(client: DouyinClient, url: string): Promise<Record<string, unknown>> {
-    const upload = firstFunction(client, ["uploadImage", "uploadMedia", "upload"]);
-    if (!upload) {
-      throw new Error("douyin-im 客户端没有 uploadImage()，无法发送图片（未验收 API，见设计 §10 #1）");
-    }
-
+  /**
+   * 下载 URL 图片成字节：**上传交给 douyin-im 的 sendMsg**（它自己会走 uploadImage），
+   * sidecar 不再自己调 uploadImage（那条 API 在 1.1.0 上不存在）。
+   */
+  private async fetchImage(url: string): Promise<Buffer> {
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`下载图片失败：HTTP ${response.status}（${url}）`);
     }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const uploaded = asRecord(
-      await Promise.resolve(upload.call(client, { buffer, data: buffer, url, filename: path.basename(new URL(url).pathname) })),
-    );
-
-    const uri = str(uploaded?.uri) ?? str(uploaded?.url) ?? str(uploaded?.id);
-    return uri ? { type: "image", uri } : { type: "image" };
+    return Buffer.from(await response.arrayBuffer());
   }
 }
 

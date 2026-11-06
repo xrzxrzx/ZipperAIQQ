@@ -64,6 +64,29 @@ public sealed class SqliteMessageStoreTests : IAsyncLifetime
     // ─────────────────────────── 写入 / 读取 ───────────────────────────
 
     [Fact]
+    public async Task Blocked_message_is_stored_and_visible_to_model()
+    {
+        // H-5：消息一律入库；被名单拦下只影响"当时是否处理"，内容仍进历史（模型可见）
+        var msg = Message("陌生人的消息") with { Blocked = true };
+        await _store.AppendAsync(msg);
+
+        var recent = await _store.GetRecentAsync(msg.Chat.SessionId, 10);
+        var single = Assert.Single(recent);
+        Assert.True(single.Message.Blocked);
+        Assert.Equal(1, await _store.CountAsync(msg.Chat.SessionId));
+    }
+
+    [Fact]
+    public async Task Blocked_message_stays_searchable()
+    {
+        var msg = Message("暗号甲乙丙") with { Blocked = true };
+        await _store.AppendAsync(msg);
+
+        var hits = await _store.SearchAsync(msg.Chat.SessionId, "暗号", 10);
+        Assert.Single(hits);
+    }
+
+    [Fact]
     public async Task Append_then_recent_returns_message()
     {
         var msg = Message("你好");

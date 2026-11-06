@@ -123,6 +123,36 @@ public static class ServerConfigLoader
                 QueryTimeoutMs = s.Int("douyin", "queryTimeoutMs", o.Douyin.QueryTimeoutMs),
             },
 
+            // ── billing / quota ──
+            Billing = o.Billing with
+            {
+                BalanceEnabled = s.Bool("billing", "balanceEnabled", o.Billing.BalanceEnabled),
+                SampleMinutes = s.Int("billing", "sampleMinutes", o.Billing.SampleMinutes),
+            },
+            Quota = o.Quota with
+            {
+                Enabled = s.Bool("quota", "enabled", o.Quota.Enabled),
+                Window = s.Str("quota", "window", o.Quota.Window)!,
+                LimitCny = s.Decimal("quota", "limitCny", o.Quota.LimitCny),
+                WarnRatio = s.Decimal("quota", "warnRatio", o.Quota.WarnRatio),
+            },
+
+            // ── alerts（告警抑制窗口）──
+            Alerts = o.Alerts with
+            {
+                SuppressMinutes = s.Int("alerts", "suppressMinutes", o.Alerts.SuppressMinutes),
+            },
+
+            // ── channel（通道可靠性：巡检 / 退避 / 熔断）──
+            ChannelReliability = o.ChannelReliability with
+            {
+                PollSeconds = s.Int("channel", "pollSeconds", o.ChannelReliability.PollSeconds),
+                BackoffBaseSeconds = s.Int("channel", "backoffBaseSeconds", o.ChannelReliability.BackoffBaseSeconds),
+                BackoffMaxSeconds = s.Int("channel", "backoffMaxSeconds", o.ChannelReliability.BackoffMaxSeconds),
+                OpenAfterFailures = s.Int("channel", "openAfterFailures", o.ChannelReliability.OpenAfterFailures),
+                OpenCooldownSeconds = s.Int("channel", "openCooldownSeconds", o.ChannelReliability.OpenCooldownSeconds),
+            },
+
             // ── llm ──
             LlmApiKey = s.Str("llm", "apiKey", o.LlmApiKey)!,
             LlmBaseUrl = s.Str("llm", "baseUrl", o.LlmBaseUrl)!,
@@ -194,6 +224,13 @@ public static class ServerConfigLoader
             // 支持空字符串表示"清空"（比如 selfId 想留空）
             return v;
         }
+
+        /// <summary>小数（金额 / 比例）；解析失败回落默认值。</summary>
+        public decimal Decimal(string section, string key, decimal fallback) =>
+            Node(section, key) is YamlScalarNode s
+            && decimal.TryParse(s.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var v)
+                ? v
+                : fallback;
 
         public int Int(string section, string key, int fallback) =>
             Node(section, key) is YamlScalarNode s

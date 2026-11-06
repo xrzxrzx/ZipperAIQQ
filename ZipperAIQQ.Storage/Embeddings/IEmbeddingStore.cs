@@ -3,6 +3,9 @@ namespace ZipperAIQQ.Storage.Embeddings;
 /// <summary>一条检索结果：消息主键 + 相似度分数。</summary>
 public sealed record ScoredMessage(long MessageId, float Score);
 
+/// <summary>跨会话检索结果：会话 + 消息主键 + 相似度。</summary>
+public sealed record ScoredSessionMessage(string SessionId, long MessageId, float Score);
+
 /// <summary>一条待补算向量的消息。</summary>
 public sealed record PendingEmbedding(long MessageId, string Text);
 
@@ -42,6 +45,15 @@ public interface IEmbeddingStore
         string sessionId,
         ReadOnlyMemory<float> queryVector,
         int topK,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// 跨会话检索（R-09 评估结论：跨会话召回是真正缺口，不需要图）。
+    /// </summary>
+    Task<IReadOnlyList<ScoredSessionMessage>> SearchAcrossSessionsAsync(
+        ReadOnlyMemory<float> queryVector,
+        int topK,
+        string? excludeSessionId = null,
         CancellationToken ct = default);
 
     /// <summary>

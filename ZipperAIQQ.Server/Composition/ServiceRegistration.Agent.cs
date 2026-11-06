@@ -122,6 +122,10 @@ public static partial class ServiceRegistration
                 Schedules = sp.GetRequiredService<IScheduleStore>(),
                 // 平台专用工具（抖音）靠它按平台取联系人目录
                 PlatformContacts = sp.GetRequiredService<IPlatformContacts>(),
+                ChannelHealth = sp.GetRequiredService<ZipperAIQQ.Agent.IChannelHealthLookup>(),
+                ReplyLength = new ZipperAIQQ.Agent.Length.ReplyLengthOptions(),
+                ReplyModes = sp.GetRequiredService<ZipperAIQQ.Agent.IReplyModeDecider>(),
+                SteerQueues = sp.GetRequiredService<Orchestration.TurnCoordinator>().SteerQueueFor,
                 Options = BuildAgentOptions(options),
                 Logger = sp.GetRequiredService<ILogger>(),
             };
@@ -132,6 +136,11 @@ public static partial class ServiceRegistration
         });
 
         // ── 定时任务轮询（FR-14：数据库即队列，1 分钟精度，启动时补执行）──
+        // G 批：到点投 Agent + 执行审计（谁决定发/不发/失败）
+        services.AddSingleton<IScheduleExecutionStore, SqliteScheduleExecutionStore>();
+        services.AddSingleton<IScheduleExecutor, ScheduleAgentExecutor>();
+        services.AddSingleton<Api.IApiAction, Api.Handlers.GetScheduleExecutionsAction>();
+        services.AddSingleton<Api.IApiAction, Api.Handlers.GetTurnLogsAction>();
         services.AddHostedService<SchedulePoller>();
 
         // ── 消息路由 ──

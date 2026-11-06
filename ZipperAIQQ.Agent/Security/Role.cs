@@ -62,6 +62,14 @@ public enum ToolCapability
     /// </remarks>
     CrossSessionHistory,
 
+    /// <summary>
+    /// 跨平台查通讯录（好友 / 群，<c>query_contacts</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 好友列表能反推一个人的社交关系，且会一次铺开所有平台的数据 —— 默认只给管理员。
+    /// </remarks>
+    QueryContacts,
+
     /// <summary>改自己的资料（个性签名等）。</summary>
     /// <remarks>写的是**自己的账号**，对外可见，但影响面限于"我这个人看起来什么样"。</remarks>
     WriteProfile,

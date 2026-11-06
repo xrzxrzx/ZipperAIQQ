@@ -95,6 +95,39 @@ public sealed class MetricsStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Percentiles_use_nearest_rank()
+    {
+        foreach (var ms in new double[] { 100, 200, 300, 400, 500 })
+        {
+            await _store.RecordAsync(new MetricEntry("qq:p1", "llm.call", ms));
+        }
+
+        var llm = Assert.Single(await _store.GetSummaryAsync(0));
+
+        // 最近秩法：p50 → 第 ceil(5*0.5)=3 条；p95 → 第 ceil(5*0.95)=5 条
+        Assert.Equal(300, llm.P50Ms);
+        Assert.Equal(500, llm.P95Ms);
+    }
+
+    [Fact]
+    public async Task Frequent_kinds_come_before_long_tail()
+    {
+        // 旧排序（只按 AVG 倒序）会让「偶尔跑一次但很慢」的类别霸占表头（问题记录 04 #3）
+        for (var i = 0; i < 10; i++)
+        {
+            await _store.RecordAsync(new MetricEntry("qq:p1", "llm.call", 1000));
+        }
+
+        await _store.RecordAsync(new MetricEntry("qq:p1", "summary", 9000));
+        await _store.RecordAsync(new MetricEntry("qq:p1", "summary", 11000));
+
+        var rows = await _store.GetSummaryAsync(0);
+
+        Assert.Equal("llm.call", rows[0].Kind);
+        Assert.Equal(11000, rows.Single(r => r.Kind == "summary").P95Ms);
+    }
+
+    [Fact]
     public async Task List_sessions_returns_distinct_sessions_recent_first()
     {
         await _store.RecordAsync(new MetricEntry("qq:p1", "llm.call", 10, 1, 1));

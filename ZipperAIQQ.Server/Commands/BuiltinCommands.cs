@@ -6,8 +6,13 @@ using ZipperAIQQ.Agent.Memory;
 using ZipperAIQQ.Agent.Security;
 using ZipperAIQQ.Channel.Models;
 using ZipperAIQQ.Core.Time;
+using ZipperAIQQ.Server.Api.Handlers;
+using ZipperAIQQ.Server.Channels;
 using ZipperAIQQ.Server.Configuration;
+using ZipperAIQQ.Server.Billing;
 using ZipperAIQQ.Server.Metrics;
+using ZipperAIQQ.Storage.Billing;
+using ZipperAIQQ.Channel.Reliability;
 using ZipperAIQQ.Storage.Embeddings;
 using ZipperAIQQ.Storage.Messages;
 using ZipperAIQQ.Storage.Metrics;
@@ -111,22 +116,89 @@ public sealed class StatusCommand : ICommand, IImageCommand
     private readonly IMessageStore _messages;
     private readonly ServerOptions _options;
     private readonly IChatClientProvider _clients;
+    private readonly IReplyModeDecider _replyModes;
+    private readonly ChannelHealthRegistry _health;
+    private readonly IReadOnlyList<IRecoverableChannel> _channels;
+    private readonly IBalanceStore _balance;
 
     public StatusCommand(
         IMetricsStore metrics,
         IMessageStore messages,
         ServerOptions options,
-        IChatClientProvider clients)
+        IChatClientProvider clients,
+        IReplyModeDecider replyModes,
+        ChannelHealthRegistry health,
+        IEnumerable<IRecoverableChannel> channels,
+        IBalanceStore balance)
     {
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(clients);
+        ArgumentNullException.ThrowIfNull(replyModes);
+        ArgumentNullException.ThrowIfNull(health);
+        ArgumentNullException.ThrowIfNull(channels);
+        ArgumentNullException.ThrowIfNull(balance);
 
         _metrics = metrics;
         _messages = messages;
         _options = options;
         _clients = clients;
+        _replyModes = replyModes;
+        _health = health;
+        _channels = channels.ToList();
+        _balance = balance;
+    }
+
+    /// <summary>
+    /// 花费三行：24h 估算（token × 价目表）、当前余额、今日余额差。
+    /// </summary>
+    /// <remarks>
+    /// 「余额差」才是账实口径；token 估算是**保底**（余额接口不可用时仍能给个量级）。
+    /// 采样不足 2 条时明确写「采样不足」，不拿 0 冒充「没花钱」。
+    /// </remarks>
+    private async Task<List<string[]>> BuildSpendRowsAsync(MetricFacts facts, CancellationToken ct)
+    {
+        var rows = new List<string[]>();
+        var estimate = ModelPricing.DeepSeekChat.Estimate(
+            facts.InputTokens, facts.OutputTokens, facts.CachedInputTokens);
+        rows.Add(["花费估算（24h）", $"¥{estimate:F2}"]);
+
+        var latest = await _balance.LatestAsync(DeepSeekBalanceClient.Provider, ct).ConfigureAwait(false);
+        if (latest is not null)
+        {
+            rows.Add(["余额", $"{latest.Total:F2} {latest.Currency}{(latest.IsAvailable ? string.Empty : "（不足）")}"]);
+        }
+
+        var now = BeijingTime.Now;
+        var todayStart = new DateTimeOffset(now.Year, now.Month, now.Day, 0, 0, 0, now.Offset);
+        var samples = await _balance
+            .ListSinceAsync(DeepSeekBalanceClient.Provider, todayStart, ct)
+            .ConfigureAwait(false);
+
+        rows.Add(["今日花费（余额差）", SpendCalculator.HasEnoughSamples(samples)
+            ? $"¥{SpendCalculator.Window(samples):F2}"
+            : "采样不足"]);
+
+        return rows;
+    }
+
+    /// <summary>把通道健康压缩成一行（C-5：`/status` 要能看出「哪个通道断了」）。</summary>
+    private void AppendChannelRows(List<string[]> rows)
+    {
+        foreach (var channel in _channels)
+        {
+            var monitor = _health.Get(channel.Platform);
+            var state = monitor.IsChannelDown
+                ? $"熔断（连续失败 {monitor.ConsecutiveFailures} 次）"
+                : channel.IsConnected ? "正常" : "断开中";
+
+            var extra = monitor.LastDowntime is { } downtime
+                ? $"，上次断开 {downtime.TotalSeconds:F0}s（共 {monitor.DisconnectCount} 次）"
+                : string.Empty;
+
+            rows.Add([$"通道 · {channel.Platform}", state + extra]);
+        }
     }
 
     public string Name => "status";
@@ -142,26 +214,41 @@ public sealed class StatusCommand : ICommand, IImageCommand
     {
         var count = await _messages.CountAsync(context.Chat.SessionId, ct).ConfigureAwait(false);
         var metrics = await _metrics.GetSummaryAsync(24, ct: ct).ConfigureAwait(false);
+        var facts = metrics.Count > 0 ? MetricFacts.From(metrics) : null;
+        var jev = await ReadJevAsync(context.Chat.SessionId, facts, ct).ConfigureAwait(false);
 
         var summaryRows = new List<string[]>();
-        if (metrics.Count > 0)
+        if (facts is not null)
         {
-            var facts = MetricFacts.From(metrics);
-
             var hitRate = facts.RetrievalCount > 0
                 ? $"{(double)facts.RetrievalHits * 100 / facts.RetrievalCount:F0}%"
                 : "—";
 
-            var jevText = facts.JevCount > 0
-                ? $"{facts.JevCount} 次（回 {facts.JevReplies} / 不回 {facts.JevCount - facts.JevReplies}）"
-                : "未启用";
+            // 缓存命中率 = 命中缓存的输入 token / 输入 token 总数。
+            // 它既影响**费用**（缓存命中便宜一个量级）也影响**首字延迟**，所以单独一行。
+            var cacheText = facts.InputTokens > 0
+                ? $"{(double)facts.CachedInputTokens * 100 / facts.InputTokens:F0}%"
+                  + $"（缓存 {facts.CachedInputTokens:N0} / 输入 {facts.InputTokens:N0}）"
+                : "—";
 
             summaryRows.Add(["LLM 调用", $"{facts.LlmCalls} 次"]);
-            summaryRows.Add(["平均耗时", $"{facts.LlmAvgMs:F0} ms"]);
+            // 平均值 + p95：只有平均值会把长尾抹平，也看不出「偶尔很慢」还是「一半都慢」
+            summaryRows.Add(["单次耗时", $"{facts.LlmAvgMs:F0} ms（p95 {facts.LlmP95Ms:F0} ms）"]);
+            if (facts.TurnCalls > 0)
+            {
+                summaryRows.Add(["整轮耗时", $"{facts.TurnAvgMs:F0} ms（p95 {facts.TurnP95Ms:F0} ms）"]);
+            }
             summaryRows.Add(["Token 输入", $"{facts.InputTokens:N0}"]);
             summaryRows.Add(["Token 输出", $"{facts.OutputTokens:N0}"]);
+            summaryRows.Add(["缓存命中率", cacheText]);
+            summaryRows.AddRange(await BuildSpendRowsAsync(facts, ct).ConfigureAwait(false));
             summaryRows.Add(["检索命中率", hitRate]);
-            summaryRows.Add(["JEV 判断", jevText]);
+
+            AppendChannelRows(summaryRows);
+
+            // 「启用与否」看**配置**，调用次数单独陈述 —— 两件事合成一句会误导排障
+            // （问题记录 04 #2：24h 内 0 次调用 ≠ 未启用）。
+            summaryRows.Add(["JEV 判断", jev.ImageText]);
             if (facts.JevDegrade > 0)
             {
                 summaryRows.Add(["JEV 降级", $"{facts.JevDegrade} 次"]);
@@ -172,6 +259,9 @@ public sealed class StatusCommand : ICommand, IImageCommand
         else
         {
             summaryRows.Add(["近 24 小时", "无调用记录"]);
+            AppendChannelRows(summaryRows);
+            // 没有调用记录时也要能看出「配置里到底开没开」。
+            summaryRows.Add(["JEV 判断", jev.ImageText]);
         }
 
         var tables = new List<StatusImageRenderer.Table>
@@ -183,9 +273,15 @@ public sealed class StatusCommand : ICommand, IImageCommand
         {
             tables.Add(new StatusImageRenderer.Table(
                 "调用类别",
-                ["类别", "次数", "平均耗时"],
+                ["类别", "次数", "平均", "p95"],
                 metrics
-                    .Select(m => new[] { m.Kind, m.Count.ToString(), $"{m.AvgMs:F0} ms" })
+                    .Select(m => new[]
+                    {
+                        MetricKindCatalog.Label(m.Kind),
+                        m.Count.ToString(),
+                        $"{m.AvgMs:F0} ms",
+                        $"{m.P95Ms:F0} ms",
+                    })
                     .ToArray()));
         }
 
@@ -206,42 +302,143 @@ public sealed class StatusCommand : ICommand, IImageCommand
     {
         var count = await _messages.CountAsync(context.Chat.SessionId, ct).ConfigureAwait(false);
         var metrics = await _metrics.GetSummaryAsync(24, ct: ct).ConfigureAwait(false);
+        var facts = metrics.Count > 0 ? MetricFacts.From(metrics) : null;
+        var jev = await ReadJevAsync(context.Chat.SessionId, facts, ct).ConfigureAwait(false);
 
         var sb = new StringBuilder();
         sb.AppendLine($"**状态** · 模型 `{_clients.CurrentModel ?? _options.LlmModel}` · 本会话 {count} 条消息");
         sb.AppendLine();
 
-        if (metrics.Count == 0)
+        foreach (var channel in _channels)
         {
-            sb.Append("近 24 小时：无调用记录");
-            return sb.ToString();
+            var monitor = _health.Get(channel.Platform);
+            var state = monitor.IsChannelDown
+                ? $"熔断（连续失败 {monitor.ConsecutiveFailures} 次）"
+                : channel.IsConnected ? "正常" : "断开中";
+            var extra = monitor.LastDowntime is { } downtime
+                ? $"，上次断开 {downtime.TotalSeconds:F0}s（共 {monitor.DisconnectCount} 次）"
+                : string.Empty;
+            sb.AppendLine($"· 通道 {channel.Platform}：{state}{extra}");
         }
 
-        var facts = MetricFacts.From(metrics);
+        if (facts is null)
+        {
+            sb.AppendLine("近 24 小时：无调用记录");
+            // 同上：没有调用记录 ≠ 未启用，配置状态必须单独说。
+            sb.Append($"· JEV 判断：{jev.TextText}");
+            return sb.ToString();
+        }
 
         // ⚠️ QQ 不渲染 Markdown、框线在比例字体下也对不齐 —— 这里只用「键值行」
         var hitRate = facts.RetrievalCount > 0
             ? $"{(double)facts.RetrievalHits * 100 / facts.RetrievalCount:F0}%（{facts.RetrievalCount} 次检索里命中 {facts.RetrievalHits} 次）"
             : "—";
 
-        var jevText = facts.JevCount > 0
-            ? $"{facts.JevCount} 次 · 回 {facts.JevReplies} · 不回 {facts.JevCount - facts.JevReplies} · 降级 {facts.JevDegrade}"
-            : "未启用";
-
         sb.AppendLine("【近 24 小时】");
-        sb.AppendLine($"· LLM 调用：{facts.LlmCalls} 次（平均 {facts.LlmAvgMs:F0}ms）");
+        sb.AppendLine($"· LLM 调用：{facts.LlmCalls} 次（单次平均 {facts.LlmAvgMs:F0}ms · p95 {facts.LlmP95Ms:F0}ms）");
+        if (facts.TurnCalls > 0)
+        {
+            sb.AppendLine($"· 整轮耗时：{facts.TurnCalls} 轮（平均 {facts.TurnAvgMs:F0}ms · p95 {facts.TurnP95Ms:F0}ms）");
+        }
         sb.AppendLine($"· Token：输入 {facts.InputTokens:N0} / 输出 {facts.OutputTokens:N0}");
+
+        var cacheRate = facts.InputTokens > 0
+            ? $"{(double)facts.CachedInputTokens * 100 / facts.InputTokens:F0}%（缓存 {facts.CachedInputTokens:N0} / 输入 {facts.InputTokens:N0}）"
+            : "—";
+        sb.AppendLine($"· 缓存命中率：{cacheRate}");
+
+        foreach (var row in await BuildSpendRowsAsync(facts, ct).ConfigureAwait(false))
+        {
+            sb.AppendLine($"· {row[0]}：{row[1]}");
+        }
+
         sb.AppendLine($"· 检索命中率：{hitRate}");
-        sb.AppendLine($"· JEV 判断：{jevText}");
+        sb.AppendLine($"· JEV 判断：{jev.TextText}");
         sb.AppendLine($"· 上下文压缩：{facts.SummaryCount} 次");
         sb.AppendLine();
         sb.AppendLine("【调用类别 · 次数 / 平均耗时】");
         foreach (var m in metrics)
         {
-            sb.AppendLine($"· {m.Kind}：{m.Count} 次 / {m.AvgMs:F0} ms");
+            sb.AppendLine($"· {MetricKindCatalog.Label(m.Kind)}：{m.Count} 次 / 平均 {m.AvgMs:F0} ms / p95 {m.P95Ms:F0} ms");
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// JEV 的**配置状态** + 近 24 小时调用次数（两者分开，问题记录 04 #2）。
+    /// </summary>
+    /// <remarks>
+    /// 旧实现把「24 小时有没有调用过」当成「是否启用」，于是配置开着、只是没触发过一次，
+    /// 图上就写「未启用」—— 排障时会往完全错的方向查。这里改成读**当前生效模式**
+    /// （全局默认 + 本会话覆盖，与判定用的是同一个入口 `GetModeAsync`）。
+    /// </remarks>
+    private async Task<JevFacts> ReadJevAsync(
+        string sessionId,
+        MetricFacts? facts,
+        CancellationToken ct)
+    {
+        var count = facts?.JevCount ?? 0;
+        var replies = facts?.JevReplies ?? 0;
+        var degrades = facts?.JevDegrade ?? 0;
+
+        ReplyMode mode;
+        try
+        {
+            mode = await _replyModes.GetModeAsync(sessionId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // 配置读不出来是**第三种状态**：既不是启用也不是未启用，
+            // 混进「未启用」会让人去改一个本来没坏的配置。
+            return new JevFacts(false, true, string.Empty, count, replies, degrades);
+        }
+
+        return new JevFacts(
+            Enabled: mode == ReplyMode.Jev,
+            ReadFailed: false,
+            ModeLabel: ModeLabel(mode),
+            Count: count,
+            Replies: replies,
+            Degrades: degrades);
+    }
+
+    private static string ModeLabel(ReplyMode mode) => mode switch
+    {
+        ReplyMode.Every => "every",
+        ReplyMode.Mention => "mention",
+        ReplyMode.Jev => "jev",
+        _ => mode.ToString().ToLowerInvariant(),
+    };
+
+    /// <summary>JEV 的一行事实：配置状态 + 调用次数，两种排版（图 / 文本）各取一个。</summary>
+    private readonly record struct JevFacts(
+        bool Enabled,
+        bool ReadFailed,
+        string ModeLabel,
+        long Count,
+        long Replies,
+        long Degrades)
+    {
+        public string ImageText => ReadFailed
+            ? "读取失败"
+            : !Enabled
+                ? $"未启用（当前 {ModeLabel}）"
+                : Count > 0
+                    ? $"{Count} 次（回 {Replies} / 不回 {Count - Replies}）"
+                    : "0 次（已启用 · jev）";
+
+        public string TextText => ReadFailed
+            ? "读取失败"
+            : !Enabled
+                ? $"未启用（当前 {ModeLabel}）"
+                : Count > 0
+                    ? $"{Count} 次 · 回 {Replies} · 不回 {Count - Replies} · 降级 {Degrades}"
+                    : "0 次（已启用 · jev）";
     }
 }
 

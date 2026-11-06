@@ -97,6 +97,54 @@ public sealed class SqliteEmbeddingStore : IEmbeddingStore
         }, ct);
     }
 
+    public Task<IReadOnlyList<ScoredSessionMessage>> SearchAcrossSessionsAsync(
+        ReadOnlyMemory<float> queryVector,
+        int topK,
+        string? excludeSessionId = null,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(topK);
+
+        var query = queryVector.ToArray();
+
+        return _db.ReadAsync<IReadOnlyList<ScoredSessionMessage>>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT SessionId, MessageId, Vector
+                FROM MessageEmbeddings
+                WHERE (@exclude = '' OR SessionId <> @exclude)
+                ORDER BY MessageId DESC;
+                """;
+            cmd.Parameters.AddWithValue("@exclude", excludeSessionId ?? string.Empty);
+
+            var scored = new List<ScoredSessionMessage>();
+            await using var reader = await cmd.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                var vector = (byte[])reader.GetValue(2);
+                var stored = MemoryMarshal.Cast<byte, float>(vector);
+                if (stored.Length != query.Length)
+                {
+                    continue;   // 换过模型：维度不一致的旧向量直接跳过
+                }
+
+                double dot = 0;
+                for (var i = 0; i < query.Length; i++)
+                {
+                    dot += query[i] * stored[i];
+                }
+
+                scored.Add(new ScoredSessionMessage(reader.GetString(0), reader.GetInt64(1), (float)dot));
+            }
+
+            return scored
+                .OrderByDescending(s => s.Score)
+                .Take(topK)
+                .ToList();
+        }, ct);
+    }
+
     public Task<IReadOnlyList<PendingEmbedding>> GetPendingAsync(
         string sessionId,
         int limit,
