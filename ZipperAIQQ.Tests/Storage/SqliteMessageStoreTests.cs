@@ -64,25 +64,26 @@ public sealed class SqliteMessageStoreTests : IAsyncLifetime
     // ─────────────────────────── 写入 / 读取 ───────────────────────────
 
     [Fact]
-    public async Task Blocked_message_is_stored_but_hidden_from_history()
+    public async Task Blocked_message_is_stored_and_visible_to_model()
     {
-        // H-5：消息一律入库；被名单拦下的标记 Blocked，读路径不返回（不进模型）
+        // H-5：消息一律入库；被名单拦下只影响"当时是否处理"，内容仍进历史（模型可见）
         var msg = Message("陌生人的消息") with { Blocked = true };
         await _store.AppendAsync(msg);
 
-        Assert.Empty(await _store.GetRecentAsync(msg.Chat.SessionId, 10));
-        Assert.Empty(await _store.GetRangeAsync(
-            msg.Chat.SessionId, null, null, 10));
+        var recent = await _store.GetRecentAsync(msg.Chat.SessionId, 10);
+        var single = Assert.Single(recent);
+        Assert.True(single.Message.Blocked);
         Assert.Equal(1, await _store.CountAsync(msg.Chat.SessionId));
     }
 
     [Fact]
-    public async Task Blocked_message_does_not_appear_in_keyword_search()
+    public async Task Blocked_message_stays_searchable()
     {
         var msg = Message("暗号甲乙丙") with { Blocked = true };
         await _store.AppendAsync(msg);
 
-        Assert.Empty(await _store.SearchAsync(msg.Chat.SessionId, "暗号", 10));
+        var hits = await _store.SearchAsync(msg.Chat.SessionId, "暗号", 10);
+        Assert.Single(hits);
     }
 
     [Fact]

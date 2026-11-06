@@ -152,7 +152,6 @@ public sealed class SqliteMessageStore : IMessageStore
                 SELECT {SelectColumnsSql}
                 FROM Messages
                 WHERE SessionId = @sessionId
-                  AND Blocked = 0
                   AND (@from IS NULL OR SentAtMs >= @from)
                   AND (@to IS NULL OR SentAtMs <= @to)
                 ORDER BY SentAtMs ASC, Id ASC
@@ -186,7 +185,7 @@ public sealed class SqliteMessageStore : IMessageStore
             cmd.CommandText = $"""
                 SELECT {SelectColumnsSql}
                 FROM Messages
-                WHERE SessionId = @sessionId AND MessageId = @messageId AND Blocked = 0
+                WHERE SessionId = @sessionId AND MessageId = @messageId
                 ORDER BY Id DESC
                 LIMIT 1;
                 """;
@@ -218,7 +217,7 @@ public sealed class SqliteMessageStore : IMessageStore
             cmd.CommandText = $"""
                 SELECT {SelectColumnsSql}
                 FROM Messages
-                WHERE SessionId = @sessionId AND Id IN ({placeholders}) AND Blocked = 0
+                WHERE SessionId = @sessionId AND Id IN ({placeholders})
                 ORDER BY SentAtMs ASC, Id ASC;
                 """;
             cmd.Parameters.AddWithValue("@sessionId", sessionId);
@@ -378,7 +377,6 @@ public sealed class SqliteMessageStore : IMessageStore
                 SELECT {SelectColumnsSql}
                 FROM Messages
                 WHERE SessionId = @sessionId
-                  AND Blocked = 0
                   AND PlainText LIKE @pattern
                   AND (@from IS NULL OR SentAtMs >= @from)
                   AND (@to IS NULL OR SentAtMs <= @to)
@@ -445,7 +443,6 @@ public sealed class SqliteMessageStore : IMessageStore
                ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction, Blocked
         FROM Messages
         WHERE PlainText LIKE @pattern
-          AND Blocked = 0
           AND (@exclude = '' OR SessionId <> @exclude)
           AND (@platform = '' OR Platform = @platform)
         ORDER BY SentAtMs DESC, Id DESC
@@ -458,7 +455,6 @@ public sealed class SqliteMessageStore : IMessageStore
                ReceivedAtMs, SentAtMs, SegmentsJson, ReplyToMessageId, Direction, Blocked
         FROM Messages
         WHERE SessionId = @sessionId
-          AND Blocked = 0
         ORDER BY SentAtMs DESC, Id DESC
         LIMIT @limit;
         """;

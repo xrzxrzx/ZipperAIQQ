@@ -113,7 +113,6 @@ public sealed class SqliteEmbeddingStore : IEmbeddingStore
                 FROM Messages m
                 LEFT JOIN MessageEmbeddings e ON e.MessageId = m.Id
                 WHERE m.SessionId = @sid
-                  AND m.Blocked = 0
                   AND e.MessageId IS NULL
                   AND m.PlainText <> ''
                 ORDER BY m.Id ASC
