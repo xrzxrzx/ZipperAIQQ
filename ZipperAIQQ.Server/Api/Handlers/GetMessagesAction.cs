@@ -42,14 +42,29 @@ public sealed class GetMessagesAction : IApiAction
             ? await _messages.GetRecentAsync(sessionId, Math.Min(limit, 200), ct).ConfigureAwait(false)
             : await _messages.GetRangeAsync(sessionId, from, to, limit, ct).ConfigureAwait(false);
 
+        // 「未回复」只在**没被名单拦下**时才值得标：黑名单时期的沉默是预期，不是问题
+        var lastOutgoingMs = rows
+            .Where(r => r.IsOutgoing)
+            .Select(r => r.Message.OccurredAt.ToUnixTimeMilliseconds())
+            .DefaultIfEmpty(long.MinValue)
+            .Max();
+
         return rows
-            .Select(r => new
+            .Select(r =>
             {
-                id = r.Id,
-                isOutgoing = r.IsOutgoing,
-                sender = r.Message.Sender.DisplayName,
-                text = r.Message.PlainText,
-                occurredAt = r.Message.OccurredAt.ToUnixTimeMilliseconds(),
+                var occurredAt = r.Message.OccurredAt.ToUnixTimeMilliseconds();
+                var blocked = r.Message.Blocked;
+
+                return new
+                {
+                    id = r.Id,
+                    isOutgoing = r.IsOutgoing,
+                    sender = r.Message.Sender.DisplayName,
+                    text = r.Message.PlainText,
+                    occurredAt,
+                    blocked,
+                    unanswered = !r.IsOutgoing && !blocked && occurredAt > lastOutgoingMs,
+                };
             })
             .ToList();
     }
