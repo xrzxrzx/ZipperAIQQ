@@ -687,6 +687,9 @@ public sealed class ChatAgent : IChatAgent
         if (_platformContacts is not null)
         {
             tools.AddRange(DouyinTools.Create(_platformContacts, context, _policy));
+
+            // I-2：跨平台通讯录（所有平台的人/群汇总，带平台标签）
+            tools.AddRange(CrossPlatformTools.Create(_platformContacts, context, _policy));
         }
 
         var allowed = new List<AITool>(tools.Count);

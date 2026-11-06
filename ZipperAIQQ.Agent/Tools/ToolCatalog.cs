@@ -41,6 +41,7 @@ public static class ToolCatalog
         Item(MessageTools.RecentToolName, "读取近期历史", null),
         Item(MessageTools.CrossSessionSearchToolName, "跨会话检索", ToolCapability.CrossSessionHistory),
         Item(SendToOtherSessionTool.ToolName, "跨会话发消息", ToolCapability.SendToOtherSession),
+        Item(CrossPlatformTools.ToolName, "跨平台通讯录", ToolCapability.QueryContacts),
 
         // ── 平台专用：这三样是 OneBot / NapCat 语义，别的平台根本不懂 ──
         Item(ContactTools.ToolName, "查询 NapCat API", null, ToolPlatform.Qq),
@@ -114,6 +115,7 @@ public static class ToolCatalog
         SendToOtherSessionTool.ToolName => ToolCapability.SendToOtherSession,
         ProfileTools.SetSignatureToolName => ToolCapability.WriteProfile,
         ProfileTools.PokeToolName => ToolCapability.SendPoke,
+        CrossPlatformTools.ToolName => ToolCapability.QueryContacts,
         _ => null,
     };
 }

@@ -40,6 +40,7 @@ public sealed class PermissionGateTests
 
     [Theory]
     [InlineData(ToolCapability.CrossSessionHistory)]
+    [InlineData(ToolCapability.QueryContacts)]
     [InlineData(ToolCapability.WriteProfile)]
     [InlineData(ToolCapability.SendPoke)]
     [InlineData(ToolCapability.SendToOtherSession)]
@@ -79,6 +80,7 @@ public sealed class PermissionGateTests
             [ToolCapability.DeleteFile] = Role.Admin,
             [ToolCapability.Schedule] = Role.Whitelist,
             [ToolCapability.CrossSessionHistory] = Role.Admin,
+            [ToolCapability.QueryContacts] = Role.Admin,
             [ToolCapability.WriteProfile] = Role.Admin,
             [ToolCapability.SendPoke] = Role.Admin,
             [ToolCapability.SendToOtherSession] = Role.Admin,
@@ -115,6 +117,7 @@ public sealed class PermissionGateTests
         var relaxed = new Dictionary<ToolCapability, Role>
         {
             [ToolCapability.CrossSessionHistory] = Role.Whitelist,
+            [ToolCapability.QueryContacts] = Role.Admin,
         };
 
         Assert.Throws<InvalidOperationException>(() => PermissionGate.ValidateHardFloor(relaxed));

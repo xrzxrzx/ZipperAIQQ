@@ -21,6 +21,7 @@ public sealed class PermissionGate : IPermissionGate
             // 定时任务：默认仅管理员，但**允许**配置给白名单（需求 14.6 明确要求可显式开启）
             [ToolCapability.Schedule] = Role.Whitelist,
             [ToolCapability.CrossSessionHistory] = Role.Admin,
+            [ToolCapability.QueryContacts] = Role.Admin,
             // 写操作：改自己签名 / 戳别人 —— 都是**对外可见**的动作，硬底线管理员
             [ToolCapability.WriteProfile] = Role.Admin,
             [ToolCapability.SendPoke] = Role.Admin,
@@ -38,6 +39,7 @@ public sealed class PermissionGate : IPermissionGate
             // 需求 14.6：默认仅管理员；白名单需要显式开启（这里改这一行即可）
             [ToolCapability.Schedule] = Role.Admin,
             [ToolCapability.CrossSessionHistory] = Role.Admin,
+            [ToolCapability.QueryContacts] = Role.Admin,
             // 写操作：改自己签名 / 戳别人 —— 都是**对外可见**的动作，硬底线管理员
             [ToolCapability.WriteProfile] = Role.Admin,
             [ToolCapability.SendPoke] = Role.Admin,
@@ -112,6 +114,8 @@ public sealed class PermissionGate : IPermissionGate
         ToolCapability.WriteFile => "写文件",
         ToolCapability.DeleteFile => "删除文件",
         ToolCapability.Schedule => "定时任务",
+        ToolCapability.CrossSessionHistory => "跨会话检索",
+        ToolCapability.QueryContacts => "跨平台通讯录",
         _ => capability.ToString(),
     };
 }
