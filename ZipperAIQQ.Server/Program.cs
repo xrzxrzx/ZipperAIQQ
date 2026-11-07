@@ -150,6 +150,23 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
                 Log.Logger.Information(
                     "{Platform} 名单已加载：{Mode} 模式，{Count} 条",
                     platform, listMode, entries.Count);
+
+                // 白名单严格模式下的自锁提醒（2026-11-07）：主人私聊不在名单里会收不到自己的消息
+                if (listMode == ZipperAIQQ.Channel.Filtering.ChatListMode.Whitelist)
+                {
+                    var ownerForWhitelist = await ZipperAIQQ.Server.Access.AccessSettings
+                        .GetOwnerAsync(settingsStore, platform, CancellationToken.None);
+                    var ownerSession = string.IsNullOrWhiteSpace(ownerForWhitelist)
+                        ? null
+                        : $"{platform}:p{ownerForWhitelist}";
+                    if (ownerSession is not null &&
+                        !entries.Any(e => ZipperAIQQ.Channel.Filtering.ChatFilter.IsMatch(e, ownerSession)))
+                    {
+                        Log.Logger.Warning(
+                            "{Platform} 白名单里没有主人私聊 {Session} —— 严格模式下你将收不到自己的私聊，请把它加进名单",
+                            platform, ownerSession);
+                    }
+                }
             }
         }
 
