@@ -109,7 +109,7 @@ public interface IChatFilter
 /// <para>判定顺序（问题记录 #20 / #22 定稿；2026-10-29 修正）：</para>
 /// <list type="number">
 ///   <item>在黑名单里 → **拒绝**（**黑名单优先于一切自动放行**）</item>
-///   <item>在 <c>AlwaysAllow</c> 里 → **放行**（主人私聊 / 主人所在群，只用于绕过白名单）</item>
+///   <item><c>AlwaysAllow</c>（主人放行）**不再豁免显式白名单**（2026-11-07 修正）</item>
 ///   <item>白名单非空且不在白名单 → **拒绝**</item>
 ///   <item>其余 → **放行**</item>
 /// </list>
@@ -188,8 +188,11 @@ public sealed class ChatFilter : IChatFilter
                 return !Matches(bucket.Entries, id);   // 黑名单模式：名单内拒，其余放行
             }
 
-            // 白名单模式：名单内放行；空名单 = 全不收；主人放行仍然豁免（D75 只约束黑名单）
-            return Matches(bucket.Entries, id) || Matches(bucket.AlwaysAllow, id);
+            // 白名单模式：**严格只收名单内**；空名单 = 全不收。
+            // 2026-11-07 修正：主人放行（AlwaysAllow）不再豁免白名单 —— 否则「拉黑/放行」的自动逻辑
+            // 会让非白名单的群（主人所在的群）照样被处理，用户看到的就是「白名单没生效」。
+            // 主人需要收自己的私聊/群，就把它们加进名单（私聊通常在 onboarding 时已写入）。
+            return Matches(bucket.Entries, id);
         }
 
         if (Matches(bucket.Blacklist, id))

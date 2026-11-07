@@ -60,7 +60,7 @@
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="12">
                     <TextBlock Text="名单" Style="{StaticResource SectionHeaderStyle}" />
-                    <TextBlock Text="白名单模式：只收名单内的会话，**空名单 = 全不收**；黑名单模式：排除名单内的会话，**空名单 = 全收**。"
+                    <TextBlock Text="白名单模式：**严格**只收名单内的会话（主人放行也不豁免，请把主人私聊加进名单），空名单 = 全不收；黑名单模式：排除名单内的会话，空名单 = 全收。"
                                Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
                     <ComboBox Width="140" Header="模式"

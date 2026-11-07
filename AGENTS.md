@@ -112,7 +112,8 @@
 ## 六、Git 约定
 
 - 提交信息用**约定式提交**格式（`feat:` / `fix:` / `docs:` / `chore:` 等）
-- **禁止** `rebase` / `force-push` 改写已推送历史；合并一律 Squash Merge
+- **禁止** `rebase` / `force-push` 改写已推送历史；**合并用真实 Merge（`--no-ff`），不要 Squash** ——
+  squash 会让 main 的提交与 dev 失去父子关系，SourceTree 里出现两条互不相连的线（2026-11-06 实测）
 - **阶段成果收尾即提交**，不等"验收通过"
 
 ### 6.1 推送权限：**分类常设许可**（2026-09-22 定，取代原"一律要先问"）
@@ -144,7 +145,7 @@ git status --porcelain -uall      # ← -uall 不能省
 
 ### 6.3 分支约定（2026-10-20 定）
 
-- **AI 编写的代码只提交到 `dev` 分支**；`main` 由用户合并（Squash Merge）。
+- **AI 编写的代码只提交到 `dev` 分支**；`main` 由用户合并（**真实 Merge `--no-ff`**，不要 Squash）。
 - 提交前**必须**确认当前分支：
 
   ```powershell
