@@ -276,9 +276,9 @@ public sealed class ChatFilterModeTests
             AlwaysAllow = ["qq:p1"],
         });
 
-        // 白名单模式严格：主人放行也不能绕过（2026-11-07 修正）
+        // 白名单模式严格：群聊不放行；但主人**私聊**保留放行（否则主人收不到自己私聊）
         Assert.False(filter.IsAllowed(Chat("1")));
-        Assert.False(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Private, Id = "1" }));
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Private, Id = "1" }));
     }
 
     [Fact]
