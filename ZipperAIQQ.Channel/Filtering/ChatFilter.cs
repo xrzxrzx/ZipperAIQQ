@@ -192,7 +192,14 @@ public sealed class ChatFilter : IChatFilter
             // 2026-11-07 修正：主人放行（AlwaysAllow）不再豁免白名单 —— 否则「拉黑/放行」的自动逻辑
             // 会让非白名单的群（主人所在的群）照样被处理，用户看到的就是「白名单没生效」。
             // 主人需要收自己的私聊/群，就把它们加进名单（私聊通常在 onboarding 时已写入）。
-            return Matches(bucket.Entries, id);
+            if (Matches(bucket.Entries, id))
+            {
+                return true;
+            }
+
+            // 唯一例外：主人**私聊**永远放行（否则严格白名单会把主人自己的私聊挡掉，
+            // 实测 douyin 主人私聊不在名单里 → 收不到）。群聊不豁免：那正是「白名单没生效」的来源。
+            return IsPrivateSessionId(id) && Matches(bucket.AlwaysAllow, id);
         }
 
         if (Matches(bucket.Blacklist, id))
@@ -223,6 +230,15 @@ public sealed class ChatFilter : IChatFilter
     /// 通配太自由反而容易写出"以为收窄了其实放开了"的规则。
     /// </para>
     /// </remarks>
+    /// <summary>会话 id 是否是私聊（<c>platform:p...</c>）。</summary>
+    private static bool IsPrivateSessionId(string sessionId)
+    {
+        var colon = sessionId.IndexOf(':');
+        return colon >= 0 &&
+               sessionId.Length > colon + 2 &&
+               sessionId[colon + 1] == 'p';
+    }
+
     private static bool Matches(IReadOnlyCollection<string> entries, string sessionId) =>
         entries.Any(entry => IsMatch(entry, sessionId));
 
