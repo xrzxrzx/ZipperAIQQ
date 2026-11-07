@@ -154,9 +154,11 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
                 // 白名单严格模式下的自锁提醒（2026-11-07）：主人私聊不在名单里会收不到自己的消息
                 if (listMode == ZipperAIQQ.Channel.Filtering.ChatListMode.Whitelist)
                 {
-                    var ownerId = await ZipperAIQQ.Server.Access.AccessSettings
+                    var ownerForWhitelist = await ZipperAIQQ.Server.Access.AccessSettings
                         .GetOwnerAsync(settingsStore, platform, CancellationToken.None);
-                    var ownerSession = string.IsNullOrWhiteSpace(ownerId) ? null : $"{platform}:p{ownerId}";
+                    var ownerSession = string.IsNullOrWhiteSpace(ownerForWhitelist)
+                        ? null
+                        : $"{platform}:p{ownerForWhitelist}";
                     if (ownerSession is not null &&
                         !entries.Any(e => ZipperAIQQ.Channel.Filtering.ChatFilter.IsMatch(e, ownerSession)))
                     {
