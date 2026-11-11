@@ -2,6 +2,9 @@ using Serilog;
 using ZipperAIQQ.Agent;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Channel.Failures;
+using ZipperAIQQ.Server.Channels;
+using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Scheduler;
 using ZipperAIQQ.Storage.Schedules;
 
@@ -98,7 +101,7 @@ public sealed class ScheduleAgentExecutorTests
         Status: ScheduleStatus.Pending);
 
     private static (ScheduleAgentExecutor Executor, FakeChannel Channel, FakeExecutions Executions) Create(
-        FakeAgent agent, int timeoutSeconds = 60)
+        FakeAgent agent, int timeoutSeconds = 60, ChannelHealthRegistry? health = null)
     {
         var channel = new FakeChannel();
         var executions = new FakeExecutions();
@@ -106,12 +109,33 @@ public sealed class ScheduleAgentExecutorTests
             new FakePool(agent),
             channel,
             executions,
-            new LoggerConfiguration().CreateLogger())
+            new LoggerConfiguration().CreateLogger(),
+            health)
         {
             DecisionTimeout = TimeSpan.FromSeconds(timeoutSeconds),
         };
 
         return (executor, channel, executions);
+    }
+
+    [Fact]
+    public async Task Channel_circuit_open_skips_without_calling_agent()
+    {
+        var health = new ChannelHealthRegistry(new ChannelReliabilityOptions
+        {
+            OpenAfterFailures = 1,
+            OpenCooldownSeconds = 300,
+        });
+        health.Get("qq").RecordFailure(FailureKind.ChannelUnavailable, DateTimeOffset.UtcNow);
+
+        var agent = new FakeAgent { Result = () => new AgentRunResult("不该被调用", 1) };
+        var (executor, channel, executions) = Create(agent, health: health);
+
+        var result = await executor.ExecuteAsync(SampleTask, CancellationToken.None);
+
+        Assert.Equal(ScheduleExecutionOutcome.ChannelDownSkipped, result.Outcome);
+        Assert.Empty(channel.Sent);
+        Assert.Equal("ChannelDownSkipped", Assert.Single(executions.Rows).Outcome);
     }
 
     [Fact]

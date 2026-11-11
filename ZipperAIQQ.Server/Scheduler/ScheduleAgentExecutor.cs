@@ -22,6 +22,9 @@ public enum ScheduleExecutionOutcome
 
     /// <summary>执行失败（由轮询器走重试/上限）。</summary>
     Failed = 3,
+
+    /// <summary>目标通道熔断中，本轮直接跳过（不算失败、不触发提醒）。</summary>
+    ChannelDownSkipped = 4,
 }
 
 public sealed record ScheduleExecutionResult(ScheduleExecutionOutcome Outcome, string? Detail);
@@ -51,12 +54,14 @@ public sealed class ScheduleAgentExecutor : IScheduleExecutor
     private readonly IMessageChannel _channel;
     private readonly IScheduleExecutionStore _executions;
     private readonly ILogger _logger;
+    private readonly ZipperAIQQ.Server.Channels.ChannelHealthRegistry? _health;
 
     public ScheduleAgentExecutor(
         IChatAgentPool agents,
         IMessageChannel channel,
         IScheduleExecutionStore executions,
-        ILogger logger)
+        ILogger logger,
+        ZipperAIQQ.Server.Channels.ChannelHealthRegistry? health = null)
     {
         ArgumentNullException.ThrowIfNull(agents);
         ArgumentNullException.ThrowIfNull(channel);
@@ -67,6 +72,7 @@ public sealed class ScheduleAgentExecutor : IScheduleExecutor
         _channel = channel;
         _executions = executions;
         _logger = logger;
+        _health = health;
     }
 
     /// <summary>等 Agent 决策的上限。</summary>
@@ -75,6 +81,20 @@ public sealed class ScheduleAgentExecutor : IScheduleExecutor
     public async Task<ScheduleExecutionResult> ExecuteAsync(ScheduledTask task, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(task);
+
+        // 通道熔断时**别再撞墙**：定时任务每分钟一次地失败，既没有意义又会拖慢服务
+        if (_health is not null && _health.Get(task.Chat.Platform).IsChannelDown)
+        {
+            _logger.Warning(
+                "定时任务 #{Id} 跳过：通道 {Platform} 熔断中（会话 {SessionId}）",
+                task.Id, task.Chat.Platform, task.Chat.SessionId);
+
+            return await RecordAsync(
+                task,
+                ScheduleExecutionOutcome.ChannelDownSkipped,
+                $"通道 {task.Chat.Platform} 熔断中，本轮跳过",
+                ct).ConfigureAwait(false);
+        }
 
         using var scheduleScope = ScheduleExecutionScope.Begin();
         using var purposeScope = CallPurposeScope.Begin(CallPurpose.SchedulePolish);
