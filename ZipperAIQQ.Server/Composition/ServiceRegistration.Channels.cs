@@ -118,6 +118,9 @@ public static partial class ServiceRegistration
         services.AddSingleton<ZipperAIQQ.Agent.IChannelHealthLookup, ChannelHealthLookup>();
         services.AddHostedService<ChannelSupervisor>();
 
+        // sidecar 卡死看护（进程活着但 /ws/channel 迟迟连不回来）
+        services.AddHostedService<SidecarHealthMonitor>();
+
         // ── 抖音通道（S3-E / 决策二）：sidecar 连入后由 /ws/channel 调 AttachAsync ──
         // 关掉时也注册（端点会 404），只是不进复合通道、不进联系人注册表。
         // 配置走 DouyinOptionsService（S3-F）：客户端可改、立即生效；启动值来自 ServerOptions.Douyin。
