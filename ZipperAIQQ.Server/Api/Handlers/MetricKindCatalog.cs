@@ -19,6 +19,7 @@ public static class MetricKindCatalog
     {
         ["llm.call"] = "LLM 调用",
         ["llm.retry"] = "LLM 重试（漂移纠正）",
+        ["llm.timeout"] = "LLM 调用超时中止",
         ["llm.fail"] = "LLM 调用失败",
         ["agent.shortcircuit"] = "闸门短路（通道熔断）",
         ["retrieval"] = "记忆检索",
