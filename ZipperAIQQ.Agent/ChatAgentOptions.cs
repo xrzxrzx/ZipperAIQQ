@@ -23,4 +23,13 @@ public sealed record ChatAgentOptions
 
     /// <summary>上下文里保留多少条历史消息（热窗，FR-3）。</summary>
     public int HotWindowMessages { get; init; } = 20;
+
+    /// <summary>
+    /// 单次模型调用上限（秒）。超过就中止本轮，避免一轮跑 5~20 分钟。
+    /// </summary>
+    /// <remarks>
+    /// 2026-11-11 事故：指标里 turn.duration 平均 302 秒、最长 1316 秒，
+    /// 线程池被长调用拖到饥饿，HTTP 全部变慢。给每次调用加硬上限是最直接的止血。
+    /// </remarks>
+    public int LlmTimeoutSeconds { get; init; } = 180;
 }

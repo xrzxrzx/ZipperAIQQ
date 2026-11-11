@@ -26,6 +26,9 @@ namespace ZipperAIQQ.Server.Scheduler;
 /// </remarks>
 public sealed class SchedulePoller : BackgroundService
 {
+    /// <summary>通道熔断时，定时任务推后多少分钟再试。</summary>
+    private const int ChannelDownRetryMinutes = 5;
+
     /// <summary>轮询间隔（FR-14.2：1 分钟，精度到分钟）。</summary>
     private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
 
@@ -109,6 +112,16 @@ public sealed class SchedulePoller : BackgroundService
             _logger.Information(
                 "定时任务 #{Id} 执行完成：{Outcome}（会话 {SessionId}）",
                 task.Id, result.Outcome, task.Chat.SessionId);
+
+            if (result.Outcome == ScheduleExecutionOutcome.ChannelDownSkipped)
+            {
+                // 熔断期间不消耗重试次数，也不每分钟重试：推后 5 分钟再看
+                await _store
+                    .RescheduleAsync(task.Id, now.AddMinutes(ChannelDownRetryMinutes), ct)
+                    .ConfigureAwait(false);
+                _retry.TryRemove(task.Id, out _);
+                return;
+            }
         }
         catch (Exception ex)
         {

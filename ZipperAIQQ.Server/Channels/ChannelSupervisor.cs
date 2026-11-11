@@ -59,6 +59,10 @@ public sealed class ChannelSupervisor : BackgroundService
 
         _logger.Information("通道看门狗启动：{Channels}", string.Join("、", _channels.Select(c => c.Platform)));
 
+        // 告警节流：熔断抖动时同一状态只提醒一次（库内还有一层跨重启抑制）
+        var throttle = new ZipperAIQQ.Server.Alerts.AlertThrottle(
+            TimeSpan.FromMinutes(Math.Max(1, _options.AlertSuppressMinutes)));
+
         var loops = _channels
             .Select(channel =>
             {
@@ -73,6 +77,15 @@ public sealed class ChannelSupervisor : BackgroundService
                     PollInterval = TimeSpan.FromSeconds(_options.PollSeconds),
                     OnAlert = alert =>
                     {
+                        var state = alert.Opened ? "down" : "up";
+                        if (!throttle.TryAcquire($"{alert.Platform}:{state}"))
+                        {
+                            _logger.Debug(
+                                "通道 {Platform} {State} 告警被节流（{Minutes} 分钟内已提醒过）",
+                                alert.Platform, state, _options.AlertSuppressMinutes);
+                            return;
+                        }
+
                         // 告警投递是 IO，不能拖住恢复循环
                         _ = Task.Run(async () =>
                         {

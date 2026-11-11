@@ -13,6 +13,9 @@ namespace ZipperAIQQ.Server.Configuration;
 /// </remarks>
 public sealed record ChannelReliabilityOptions
 {
+    /// <summary>同一通道同一状态的告警最短间隔（分钟）。熔断抖动时不再每 30 秒刷屏。</summary>
+    public int AlertSuppressMinutes { get; init; } = 10;
+
     /// <summary>健康时的巡检间隔（秒）。</summary>
     public int PollSeconds { get; init; } = 5;
 

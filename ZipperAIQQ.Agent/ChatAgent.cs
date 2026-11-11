@@ -482,6 +482,15 @@ public sealed class ChatAgent : IChatAgent
             // 取消是调用方的决定，不算失败 —— 否则会污染失败计数
             throw;
         }
+        catch (LlmTimeoutException ex)
+        {
+            _logger.Warning(
+                "模型调用超时（{Seconds}s，会话 {SessionId}），已中止本轮",
+                ex.TimeoutSeconds, SessionId);
+            await RecordLlmFailureAsync(ex).ConfigureAwait(false);
+            await RecordMetricAsync("llm.timeout", ex.TimeoutSeconds * 1000.0).ConfigureAwait(false);
+            return new AgentRunResult(null, 0);
+        }
         catch (Exception ex)
         {
             _logger.Error(ex, "调用模型失败（会话 {SessionId}）", SessionId);
@@ -1021,7 +1030,21 @@ public sealed class ChatAgent : IChatAgent
         llmActivity?.SetTag("llm.kind", metricKind);
 
         var sw = Stopwatch.StartNew();
-        var response = await _clients.Current.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Max(10, _options.LlmTimeoutSeconds)));
+
+        ChatResponse response;
+        try
+        {
+            response = await _clients.Current.GetResponseAsync(messages, options, timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+        {
+            sw.Stop();
+            throw new LlmTimeoutException(Math.Max(10, _options.LlmTimeoutSeconds));
+        }
+
         sw.Stop();
 
         llmActivity?.SetTag("llm.elapsed.ms", sw.ElapsedMilliseconds);
@@ -1049,6 +1072,21 @@ public sealed class ChatAgent : IChatAgent
     /// 事故复盘只能翻日志。分类结果（<see cref="FailureKind"/>）也一并写日志，
     /// 方便区分「模型 5xx」和「报文被拒」。
     /// </remarks>
+    /// <summary>记一条无 token 的指标（观测失败不影响功能）。</summary>
+    private async Task RecordMetricAsync(string kind, double value)
+    {
+        try
+        {
+            await _metrics
+                .RecordAsync(new MetricEntry(SessionId, kind, value))
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // 指标是观测
+        }
+    }
+
     private async Task RecordLlmFailureAsync(Exception exception)
     {
         var kind = SendFailureClassifier.Classify(exception);
