@@ -78,6 +78,9 @@ public static partial class ServiceRegistration
         // ── 事件总线（Agent 事件：漂移 / 降级；M2 客户端接 WS 后订阅同一批事件）──
         services.AddSingleton<IEventBus>(sp => new EventBus(sp.GetRequiredService<ILogger>()));
 
+        // 启动指标报告：后台跑，别阻塞端口就绪（2026-11-11 重启事故）
+        services.AddHostedService<ZipperAIQQ.Server.Metrics.StartupMetricsReport>();
+
         // K-2：会话轮次协调器（同一会话串行 + 挂起等待 + 静默收轮）
         services.AddSingleton<ZipperAIQQ.Storage.Turns.ITurnLogStore, ZipperAIQQ.Storage.Turns.SqliteTurnLogStore>();
         services.AddSingleton(sp => new Orchestration.TurnCoordinator(

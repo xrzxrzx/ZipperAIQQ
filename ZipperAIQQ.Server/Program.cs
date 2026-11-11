@@ -283,20 +283,5 @@ static async Task LogStartupSummaryAsync(
         Path.GetFullPath(options.DataProtectionKeysPath));
     Log.Information("向量模型目录={Dir}", options.EmbeddingModelDirectory);
 
-    // 历史指标：让「上次跑得快不快」一开机就能看见，而不用等客户端接上
-    var metrics = services.GetRequiredService<IMetricsStore>();
-    var summary = await metrics.GetSummaryAsync(windowHours: 0).ConfigureAwait(false);
-    if (summary.Count == 0)
-    {
-        Log.Information("调用指标：暂无数据");
-        return;
-    }
-
-    Log.Information("调用指标（按平均耗时降序）：");
-    foreach (var item in summary)
-    {
-        Log.Information("  {Kind,-22} {Count,6} 次  平均 {Avg,8:F1}ms  范围 {Min:F1}~{Max:F1}ms  token {In}/{Out}",
-            item.Kind, item.Count, item.AvgMs, item.MinMs, item.MaxMs,
-            item.TotalInputTokens, item.TotalOutputTokens);
-    }
+    // 历史指标已移到后台（StartupMetricsReport）：全量汇总曾让启动卡 75 秒
 }
