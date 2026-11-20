@@ -55,8 +55,11 @@ message Response {
 }
 
 message ResponseBody {
-  // 500 = 新消息推送（私信在 service=5 的这条上）；其余 body 分支本子集用不到。
+  // 500 = 新消息推送（私信在 service=5 的这条上）
   optional NewMessageNotify has_new_message_notify = 500;
+  // 503 = 陌生人盒新消息（第一版不响应，但**要能认出来并记录**：
+  //       静默丢会让人以为"协议没通"，排障时白查一轮）
+  optional NewMessageNotify stranger_has_new_message_notify = 503;
 }
 
 message NewMessageNotify {

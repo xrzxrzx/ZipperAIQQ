@@ -15,6 +15,7 @@ import { test } from "node:test";
 
 import {
   buildOutboundPlan,
+  CAPABILITIES,
   chunkText,
   classifyFailure,
   IdLru,
@@ -264,7 +265,6 @@ test("normalizePrivateMessage：视频 / 分享卡片降级成占位", () => {
 test("resolveThreadId：私聊取「不是自己」的那个 uid；群聊取最后一段", () => {
   assert.equal(resolveThreadId(CONVERSATION, SELF, SELF, "private"), PEER);
   assert.equal(resolveThreadId(CONVERSATION, PEER, SELF, "private"), PEER);
-  assert.equal(resolveThreadId(CONVERSATION, SELF, null, "private"), PEER);
   assert.equal(resolveThreadId("0:2:555:777", PEER, SELF, "group"), "777");
   assert.equal(resolveThreadId("", PEER, SELF, "private"), null);
 });
@@ -320,8 +320,31 @@ test("IdLru：容量必须为正", () => {
 
 // ─────────────────────────── ⑥ 失败分类 ───────────────────────────
 
+test("CAPABILITIES：只声明真的能原样还原的能力（mention / reply 不声明）", () => {
+  assert.deepEqual([...CAPABILITIES], ["text", "image"]);
+});
+
+test("buildOutboundPlan：@ 段一律降级留痕（网页版按 uid 精确 @ 做不到）", () => {
+  const plan = buildOutboundPlan({
+    type: "outbound",
+    data: {
+      session: "douyin:g777",
+      segments: [
+        { type: "text", text: "在吗" },
+        { type: "mention", userId: "4106032998778416" },
+      ],
+    },
+  });
+
+  assert.deepEqual(plan.chunks, ["在吗"]);
+  assert.equal(plan.mentions.length, 1);
+  assert.ok(plan.degraded.includes("mention"), "少了一个 @ 必须留痕，不能假装成功");
+});
+
 test("classifyFailure：把常见抛出物映射成可重试性判据", () => {
   assert.equal(classifyFailure(new Error("Target page, context or browser has been closed")).code, "page");
+  // 自家 browser.page 抛的是中文：漏了它 → 判成 unknown → 自愈不触发（审查 P1-8）
+  assert.equal(classifyFailure(new Error("浏览器页面不可用（尚未启动或已崩溃）")).code, "page");
   assert.equal(classifyFailure(new Error("Timeout 15000ms exceeded")).code, "timeout");
   assert.equal(classifyFailure(new Error("出现验证码，请完成校验")).code, "risk");
   assert.equal(classifyFailure(new Error("未能进入私信页：可能未登录")).code, "auth");

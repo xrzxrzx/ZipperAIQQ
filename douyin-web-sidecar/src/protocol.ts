@@ -25,8 +25,14 @@ export const PLATFORM = "douyin";
 /** 驱动标识：本 sidecar 走浏览器底座（Server 用它在 `douyin.driver` 上做闸门）。 */
 export const DRIVER = "web";
 
-/** 能力集（`hello` 帧）。引用（reply）浏览器侧只能降级，但仍声明 —— 见 {@link OutboundPlan.degraded}。 */
-export const CAPABILITIES = ["text", "image", "mention", "reply"] as const;
+/**
+ * 能力集（`hello` 帧里对服务端声明的「能原样还原」的能力）。
+ *
+ * ⚠️ **只声明真的做得到的**：网页版按 id 引用消息、按 uid 精确 @ 都不稳定（要跟 DOM 与风控缠），
+ * 所以 `mention` / `reply` **不声明**；收到这两类段一律降级并写进 `degraded`（见 `buildOutboundPlan`）。
+ * 声明一套做不到的能力，只会让模型以为 @ 成功了。
+ */
+export const CAPABILITIES = ["text", "image"] as const;
 
 /** 私信单条文本上限：网页版输入框没有硬截断，这里按服务端同一口径切段，保证两边一致。 */
 export const DEFAULT_MAX_TEXT_LENGTH = 16_000;
@@ -171,13 +177,15 @@ export function buildOutboundPlan(
 
       case "mention": {
         const userId = str(segment.userId) ?? str(segment.uid);
-        if (userId && isNumericUid(userId)) {
-          mentions.push({ userId, label: `@${userId}` });
-        } else if (userId) {
-          // 群 @ 要求数字 uid；拿不到就退化成文本，别把整条消息赔进去（与既有 sidecar 同口径）。
-          degraded.push("mention");
-          chunks.push(...chunkText(`@${userId}`, maxTextLength));
+        if (!userId) {
+          break;
         }
+
+        // 网页版的「@」是在输入框里敲 @ 再从弹出列表选人，**按 uid 精确 @ 做不到**
+        // （选人列表里没有稳定可编程的 uid 入口）。这里只保留记录 + 降级留痕：
+        // 谁也不许在"少了一个 @"的情况下回 ack.ok=true 而不说一声。
+        mentions.push({ userId, label: `@${userId}` });
+        degraded.push("mention");
         break;
       }
 
@@ -501,21 +509,20 @@ export function resolveThreadId(
   }
 
   const uids = parts.slice(2);
-  if (selfUid) {
-    const other = uids.find((uid) => uid !== selfUid);
-    if (other) {
-      return other;
-    }
+
+  // 只能靠「不是我」来定位对方 —— 不知道自己是谁时**必须放弃**：
+  // 用发送者反推的话，对方发消息时会把"对方"算成自己，消息直接挂到错误的会话上。
+  if (!selfUid) {
+    return null;
   }
 
-  if (sender && uids.includes(sender)) {
-    const other = uids.find((uid) => uid !== sender);
-    if (other) {
-      return other;
-    }
+  const other = uids.find((uid) => uid !== selfUid);
+  if (other) {
+    return other;
   }
 
-  return uids[0] ?? null;
+  // 群聊之外的兜底：会话里只有自己（自己给自己发），就当对方是自己 —— 这种情况极少
+  return uids.includes(sender) && uids.length === 1 ? uids[0] ?? null : null;
 }
 
 // ═══════════════════════════ ④ 幂等 LRU ═══════════════════════════
@@ -609,7 +616,13 @@ export function classifyFailure(error: unknown): FailureInfo {
 
   const lower = message.toLowerCase();
 
-  if (/target (page|closed)|browser has been closed|has been closed|crash/i.test(lower)) {
+  // ⚠️ 中文分支不能少：本 sidecar 自己的 `DouyinBrowser.page` 抛的就是中文
+  // （「浏览器页面不可用（尚未启动或已崩溃）」）—— 漏了它，页面死了会被判成 unknown，
+  // 自愈（只认 code=page）就永远不触发。
+  if (
+    /target (page|closed)|browser has been closed|has been closed|crash/i.test(lower) ||
+    /页面不可用|页面被关闭|浏览器.*(不可用|已关闭|崩溃)|context 关闭/i.test(message)
+  ) {
     return { code: "page", message: `页面不可用：${message}` };
   }
 

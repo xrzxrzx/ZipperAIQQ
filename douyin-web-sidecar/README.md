@@ -55,7 +55,7 @@ test/             node:test 单测（不联网、不开浏览器）
   "workDir": "data/tmp-media",   // 出站图片临时目录（发完即删）
   "headless": true,              // SYSTEM 计划任务没有交互桌面 → 只能 true
   "recycleHours": 6,             // 每 6 小时重建一次 context（profile 保留）
-  "maxHeapMb": 1200,             // 渲染堆超过 1.2 GB 提前重建
+  "maxJsHeapMb": 600,            // 渲染进程 JS 堆超过 600 MB 提前重建（≠ 进程内存）
   "maxTextLength": 16000,
   "heartbeatIntervalMs": 30000,
   "deadAfterMs": 90000,
@@ -97,7 +97,8 @@ npm start
 |---|---|
 | 客户端一直「未连入」 | `serverUrl` / `token` 对不对；服务端 `douyin.enabled` 是否打开（关着时 `/ws/channel` 返回 404） |
 | 能连上但发不出去 | 日志里 `code=` 是什么：`auth` 要重扫、`risk` 要冷却、`not_found` 是选择器或会话名不匹配、`readback` 是被静默吞了 |
-| 收不到消息 | 日志里有没有「已旁听入站 WS」；页面是否还停在 `/chat`（切走会断流） |
+| 收不到消息 | 日志里有没有「已旁听入站 WS」；页面是否还停在 `/chat`（切走会断流）。WS 静默 5 分钟后会走 DOM 兜底并打 `DOM 兜底转发`；兜底认不出会话时会明说「放弃」而不是挂到假会话上 |
+| 日志里「陌生人盒消息」 | 陌生人私信第一版不响应（与旧底座同口径），但**会记录**，不是坏了 |
 
 `site.ts` 是 DOM 选择器的唯一入口 —— 页面改版时**只改那一个文件**，改完按下面的清单自检：
 

@@ -24,7 +24,7 @@ import {
   type Frame as ChannelFrame,
   type ProtoMessageBody,
 } from "./protocol.js";
-import { readTail, type ConversationNameCache } from "./site.js";
+import { currentConversationName, readTail, type ConversationNameCache } from "./site.js";
 
 /** `Frame.service` 取值（T0.8 实测）。 */
 const SERVICE = {
@@ -73,7 +73,7 @@ export class InboundListener {
   private lastFrameAt = 0;
 
   /** 统计（`browser.state` 与排障用）。 */
-  private stats = { frames: 0, messages: 0, interactions: 0, dropped: 0 };
+  private stats = { frames: 0, messages: 0, interactions: 0, strangers: 0, dropped: 0 };
 
   constructor(options: InboundListenerOptions) {
     this.log = options.log;
@@ -84,7 +84,13 @@ export class InboundListener {
   }
 
   /** 当前统计快照。 */
-  get counters(): { frames: number; messages: number; interactions: number; dropped: number } {
+  get counters(): {
+    frames: number;
+    messages: number;
+    interactions: number;
+    strangers: number;
+    dropped: number;
+  } {
     return { ...this.stats };
   }
 
@@ -146,6 +152,17 @@ export class InboundListener {
       return; // L1 还活着，不需要兜底
     }
 
+    // 兜底也要知道"这条属于哪个会话"：只有标题没有 id 时用名字缓存反查，
+    // 反查不到就**不发**（挂到假会话 `douyin:pcurrent` 上比丢一条更糟：数据脏了）。
+    const title = await currentConversationName(page).catch(() => null);
+    const threadId = this.names.idForName(title);
+    if (!threadId) {
+      this.log.warn(
+        `DOM 兜底放弃：认不出当前会话（标题=${title ?? "未知"}）；等 WS 恢复或先打开该会话`,
+      );
+      return;
+    }
+
     const bubbles = await readTail(page, limit).catch(() => []);
     for (const bubble of bubbles) {
       const text = bubble.text.trim();
@@ -153,26 +170,34 @@ export class InboundListener {
         continue;
       }
 
-      const id = `dom:${hash(text)}`;
+      // 幂等键带时间桶：同一句话过几分钟再发一次是**正常**的，不能被去重吃掉
+      const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
+      const id = `dom:${threadId}:${hash(text)}:${bucket}`;
       if (!this.seen.admit(id)) {
         continue;
       }
 
-      this.log.warn(`DOM 兜底转发一条入站消息（WS 静默 ${Math.round(this.silenceMs / 1000)}s）：${text.slice(0, 30)}`);
-      this.emit(
-        toInboundFrame({
-          chatType: "private",
-          threadId: this.names.get("__current__") ?? "current",
-          messageId: id,
-          senderUid: "unknown",
-          text,
-          placeholders: [],
-          imageUrls: [],
-          mentions: [],
-          occurredAtMs: Date.now(),
-          timeFromPlatform: false,
-        }),
+      this.log.warn(
+        `DOM 兜底转发一条入站消息（WS 静默 ${Math.round(this.silenceMs / 1000)}s，会话 ${threadId}）：${text.slice(0, 30)}`,
       );
+
+      const frame = toInboundFrame({
+        chatType: "private",
+        threadId,
+        messageId: id,
+        senderUid: "unknown",
+        senderNickname: title ?? undefined,
+        text,
+        placeholders: [],
+        imageUrls: [],
+        mentions: [],
+        occurredAtMs: Date.now(),
+        timeFromPlatform: false,
+      });
+
+      // G9 的 L3 要求：**标记来源与不完整风险**（服务端据此留档，别当正常消息用）
+      frame.data = { ...frame.data, source: "dom", incomplete: true };
+      this.emit(frame);
     }
   }
 
@@ -238,7 +263,10 @@ export class InboundListener {
     let response: {
       cmd?: number;
       statusCode?: number;
-      body?: { hasNewMessageNotify?: { message?: ProtoMessageBody } };
+      body?: {
+        hasNewMessageNotify?: { message?: ProtoMessageBody };
+        strangerHasNewMessageNotify?: { message?: ProtoMessageBody };
+      };
     };
 
     try {
@@ -253,18 +281,46 @@ export class InboundListener {
     }
 
     if (Number(response.cmd ?? 0) !== CMD_NEW_MESSAGE) {
+      this.log.debug(`service=5 但 cmd=${response.cmd ?? 0}（不是新消息推送），已忽略`);
       return;
     }
 
-    const message = response.body?.hasNewMessageNotify?.message;
+    const normalMessage = response.body?.hasNewMessageNotify?.message;
+    const strangerMessage = response.body?.strangerHasNewMessageNotify?.message;
+
+    if (strangerMessage) {
+      // 陌生人盒：第一版不响应（与既有 sidecar 同口径），但**要记录**——
+      // 静默丢会让人以为"协议没通"，排障时白查一轮。
+      this.stats.strangers += 1;
+      this.log.info(
+        `陌生人盒消息（第一版不响应）：conv=${strangerMessage.conversationId ?? "-"} ` +
+          `type=${strangerMessage.messageType ?? "-"} sender=${strangerMessage.sender ?? "-"}`,
+      );
+      return;
+    }
+
+    const message = normalMessage;
     if (!message) {
+      this.log.warn(
+        `service=5 cmd=500 但 body 里没有 message（可能有新的 notify 分支未解出）：${Object.keys(response.body ?? {}).join(",") || "空"}`,
+      );
       return;
     }
 
-    const normalized = normalizePrivateMessage(message, this.selfUid());
+    const selfUid = this.selfUid();
+    const normalized = normalizePrivateMessage(message, selfUid);
     if (!normalized) {
       this.stats.dropped += 1;
-      this.log.debug(`入站消息被丢弃（命令型 / 缺会话）：type=${message.messageType} conv=${message.conversationId ?? "-"}`);
+
+      if (!selfUid && Number(message.messageType ?? 0) !== 50001) {
+        // 自己是谁都不知道 → 分不清"对方" → 这条只能丢；但必须**明说**，否则像丢消息的鬼
+        this.log.warn(
+          `入站消息被丢弃：还没探测到自身 uid（等登录探测完成），conv=${message.conversationId ?? "-"}`,
+        );
+      } else {
+        this.log.debug(`入站消息被丢弃（命令型 / 缺会话）：type=${message.messageType} conv=${message.conversationId ?? "-"}`);
+      }
+
       return;
     }
 

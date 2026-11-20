@@ -198,7 +198,13 @@ public sealed class DouyinOptionsService
     /// <param name="sendTimeoutMs"><c>null</c> = 不改。</param>
     /// <param name="maxTextLength"><c>null</c> = 不改。</param>
     /// <param name="queryTimeoutMs"><c>null</c> = 不改。</param>
-    /// <param name="driver">底座驱动（<c>web</c> / <c>im</c>）；<c>null</c> = 不改，认不出的值抛错。</param>
+    /// <param name="driver">
+    /// 底座驱动（<c>web</c> / <c>im</c>）；<c>null</c> = 不改，认不出的值抛 <see cref="ArgumentException"/>。
+    /// </param>
+    /// <remarks>
+    /// ⚠️ <paramref name="driver"/> 插在 <paramref name="ct"/> 之前（位置参数时代的老调用方会错位），
+    /// 因此**调用点必须用具名参数** —— 见 <c>SaveDouyinAction</c>。
+    /// </remarks>
     /// <param name="ct">取消令牌。</param>
     /// <returns>实际改动的键（供审计与回显）。</returns>
     public async Task<IReadOnlyList<string>> UpdateAsync(

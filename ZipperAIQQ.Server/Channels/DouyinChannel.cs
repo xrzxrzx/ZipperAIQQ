@@ -494,6 +494,14 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         {
             await foreach (var json in connection.ReceiveAsync(ct).ConfigureAwait(false))
             {
+                // 只认「当前连接」的帧：被替换 / 被拒绝的旧连接在收尾期仍可能把已入队的帧吐出来
+                // （`WsDouyinTransport.CloseAsync` 里的 TryComplete 只是"不再写"，不清理队列）。
+                if (!ReferenceEquals(Volatile.Read(ref _connection), connection))
+                {
+                    _logger.Debug("丢弃非当前连接的帧（旧连接收尾期）");
+                    continue;
+                }
+
                 await HandleFrameAsync(json, connection, ct).ConfigureAwait(false);
             }
 
@@ -988,6 +996,10 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         if (ReferenceEquals(Volatile.Read(ref _connection), connection))
         {
             _connection = null;
+            // 状态位跟着清：否则状态页会一直显示上一任的 driver / 页面体征，
+            // 与实际（此刻没连上）不一致 —— 这种"看起来还活着"的假象最耽误排查。
+            _driver = null;
+            _browserState = null;
         }
 
         await CloseQuietlyAsync(connection, CancellationToken.None).ConfigureAwait(false);

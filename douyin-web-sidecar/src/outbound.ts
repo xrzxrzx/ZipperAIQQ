@@ -35,6 +35,12 @@ const READBACK_TIMEOUT_MS = 8_000;
 /** 回读轮询间隔。 */
 const READBACK_POLL_MS = 500;
 
+/** 图片下载超时：CDN 挂住时不能把整条发送拖死。 */
+const IMAGE_FETCH_TIMEOUT_MS = 20_000;
+
+/** 单张图片体积上限（与 /ws/channel 单帧 1 MB 的口径分开：入站帧才是 1 MB）。 */
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
 /** 出站结果（进 `ack` 的附加字段）。 */
 export interface OutboundResult {
   /** 真正发出去的文本块数。 */
@@ -87,26 +93,38 @@ export class OutboundSender {
 
     let chunks = 0;
     for (const chunk of plan.chunks) {
+      // 发送前先记基线：判「新增」而不是「附近有像的东西」
+      const before = await snapshotTail(page);
       await sendText(page, chunk);
-      await expectBubble(page, chunk, false);
+      await expectNewBubble(page, before, chunk, false);
       chunks += 1;
     }
 
     let images = 0;
-    const media = [...plan.imageData.map((data) => ({ kind: "data" as const, data })), ...plan.imageUrls.map((url) => ({ kind: "url" as const, url }))];
+    const media = [
+      ...plan.imageData.map((data) => ({ kind: "data" as const, data })),
+      ...plan.imageUrls.map((url) => ({ kind: "url" as const, url })),
+    ];
 
     for (const item of media) {
+      const before = await snapshotTail(page);
       const file = await this.materialize(item);
       try {
         await sendImage(page, file);
-        await expectBubble(page, "", true);
+        await expectNewBubble(page, before, "", true);
         images += 1;
       } finally {
         await rm(file, { force: true }).catch(() => undefined);
       }
     }
 
-    return { chunks, images, degraded: plan.degraded };
+    // @ 没能还原：**必须**让服务端与模型知道（不是"发成功了"）
+    const degraded = [...plan.degraded];
+    if (plan.mentions.length > 0 && !degraded.includes("mention")) {
+      degraded.push("mention");
+    }
+
+    return { chunks, images, degraded };
   }
 
   /** 把 base64 / URL 落成临时文件（网页版上传只吃本地文件）。 */
@@ -121,14 +139,43 @@ export class OutboundSender {
       return file;
     }
 
-    const response = await fetch(item.url);
-    if (!response.ok) {
-      throw new OutboundError("upload", `图片下载失败：HTTP ${response.status}`);
+    // 超时与体积上限都要有：抖音的 CDN 偶发挂住，不能把整个发送卡死
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+    let response: Response;
+    let buffer: Buffer;
+
+    try {
+      response = await fetch(item.url, { signal: controller.signal });
+      if (!response.ok) {
+        throw new OutboundError("upload", `图片下载失败：HTTP ${response.status}`);
+      }
+
+      const declared = Number(response.headers.get("content-length") ?? 0);
+      if (declared > MAX_IMAGE_BYTES) {
+        throw new OutboundError("upload", `图片过大：${declared} 字节（上限 ${MAX_IMAGE_BYTES}）`);
+      }
+
+      buffer = Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      if (error instanceof OutboundError) {
+        throw error;
+      }
+
+      throw new OutboundError(
+        "upload",
+        `图片下载失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      clearTimeout(timer);
     }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.length === 0) {
       throw new OutboundError("upload", "图片下载回来是 0 字节");
+    }
+
+    if (buffer.length > MAX_IMAGE_BYTES) {
+      throw new OutboundError("upload", `图片过大：${buffer.length} 字节（上限 ${MAX_IMAGE_BYTES}）`);
     }
 
     const contentType = response.headers.get("content-type") ?? "image/jpeg";
@@ -156,36 +203,58 @@ async function waitForList(page: Page): Promise<void> {
 }
 
 /**
- * 回读校验：等到末尾出现「刚发的那条」。
+ * 发送前的气泡基线（判「新增」用）。
  *
+ * 为什么必须记基线：只判「末尾有像的东西」时，
+ * ① 同一句话重发一次会命中上一条 → 假成功 ② 上一条本来就是图 → 图片失败也判成功。
+ */
+interface TailSnapshot {
+  count: number;
+  images: number;
+  texts: string[];
+}
+
+async function snapshotTail(page: Page): Promise<TailSnapshot> {
+  const tail = await readTail(page, 12).catch(() => []);
+  return {
+    count: tail.length,
+    images: tail.filter((bubble) => bubble.hasImage).length,
+    texts: tail.map((bubble) => normalize(bubble.text)),
+  };
+}
+
+/**
+ * 回读校验：等到「**新增**的那条」出现。
+ *
+ * @param before 发送前基线
  * @param text 期望文本（图片时为 `""`）
  * @param expectImage 期望是图片气泡
  */
-async function expectBubble(page: Page, text: string, expectImage: boolean): Promise<void> {
+async function expectNewBubble(
+  page: Page,
+  before: TailSnapshot,
+  text: string,
+  expectImage: boolean,
+): Promise<void> {
   const deadline = Date.now() + READBACK_TIMEOUT_MS;
   const expected = normalize(text);
+  const probe = expected.slice(0, Math.min(60, expected.length));
 
   while (Date.now() < deadline) {
-    const tail = await readTail(page, 8).catch(() => []);
+    const tail = await readTail(page, 12).catch(() => []);
 
     if (expectImage) {
-      const last = tail[tail.length - 1];
-      if (last && last.hasImage) {
+      const images = tail.filter((bubble) => bubble.hasImage).length;
+      if (images > before.images) {
         return;
       }
-    } else if (expected.length > 0) {
-      const hit = tail.some((bubble) => {
-        const value = normalize(bubble.text);
-        if (!value) {
-          return false;
-        }
+    } else if (probe.length > 0) {
+      const texts = tail.map((bubble) => normalize(bubble.text));
+      // 「末尾那段里出现次数变多」才算新增：先用基线里已有的次数减掉
+      const beforeHits = before.texts.filter((value) => matches(value, probe)).length;
+      const afterHits = texts.filter((value) => matches(value, probe)).length;
 
-        // 长文本按前 60 字比对（气泡里可能被折行 / 加省略）
-        const probe = expected.slice(0, Math.min(60, expected.length));
-        return value.includes(probe) || expected.includes(value);
-      });
-
-      if (hit) {
+      if (afterHits > beforeHits) {
         return;
       }
     }
@@ -197,8 +266,16 @@ async function expectBubble(page: Page, text: string, expectImage: boolean): Pro
     "readback",
     expectImage
       ? "图片发送后回读不到新气泡（可能被风控拦截或上传未完成）"
-      : `发送后回读不到刚发出的内容（前 40 字：${text.slice(0, 40)}）`,
+      : `发送后回读不到新出现的内容（前 40 字：${text.slice(0, 40)}）`,
   );
+}
+
+function matches(value: string, probe: string): boolean {
+  if (!value || !probe) {
+    return false;
+  }
+
+  return value.includes(probe) || probe.includes(value);
 }
 
 function normalize(text: string): string {

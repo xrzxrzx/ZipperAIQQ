@@ -26,8 +26,15 @@ export interface BrowserOptions {
   viewport: { width: number; height: number };
   /** 多久回收一次 context（小时）。0 = 不按时间回收。 */
   recycleHours: number;
-  /** 渲染堆超过这个值就提前回收（MB）。0 = 不按内存回收。 */
-  maxHeapMb: number;
+  /**
+   * **渲染进程 JS 堆**超过这个值就提前回收（MB）。0 = 不按内存回收。
+   *
+   * ⚠️ 这是 `Performance.getMetrics → JSHeapUsedSize`，**不是**进程总内存
+   * （PoC 测的「单实例 ≈800 MB」是 5 个子进程的 RSS 之和）。
+   * 两者量级不同，所以阈值不能照抄 800 —— 实测一个私信页的 JS 堆通常 100~300 MB。
+   * 主守卫是 `recycleHours`（6h 定时），这个只是"某天页面吃爆了"的兜底。
+   */
+  maxJsHeapMb: number;
   /** 用户代理（默认伪装成常规桌面 Chrome；网页版对非常规 UA 更敏感）。 */
   userAgent: string;
 }
@@ -342,7 +349,7 @@ export class DouyinBrowser {
     this.stopRecycleTimer();
 
     const hours = this.options.recycleHours;
-    const maxHeap = this.options.maxHeapMb;
+    const maxHeap = this.options.maxJsHeapMb;
     if (hours <= 0 && maxHeap <= 0) {
       return;
     }
@@ -366,7 +373,7 @@ export class DouyinBrowser {
     }
 
     const hours = this.options.recycleHours;
-    const maxHeap = this.options.maxHeapMb;
+    const maxHeap = this.options.maxJsHeapMb;
     const ageHours = (Date.now() - this.startedAt) / 3_600_000;
     const heap = maxHeap > 0 ? await this.heapMb() : 0;
 

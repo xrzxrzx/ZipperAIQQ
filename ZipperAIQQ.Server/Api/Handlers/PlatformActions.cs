@@ -241,14 +241,15 @@ public sealed class SaveDouyinAction : IApiAction
         IReadOnlyList<string> changed;
         try
         {
+            // 具名参数：UpdateAsync 里 driver 插在 ct 之前，位置传参一旦错位会静默写错键
             changed = await _options.UpdateAsync(
-                enabled,
-                token,
-                ReadPositiveInt(payload, "sendTimeoutMs"),
-                ReadPositiveInt(payload, "maxTextLength"),
-                ReadPositiveInt(payload, "queryTimeoutMs"),
-                driver,
-                ct).ConfigureAwait(false);
+                enabled: enabled,
+                token: token,
+                sendTimeoutMs: ReadPositiveInt(payload, "sendTimeoutMs"),
+                maxTextLength: ReadPositiveInt(payload, "maxTextLength"),
+                queryTimeoutMs: ReadPositiveInt(payload, "queryTimeoutMs"),
+                driver: driver,
+                ct: ct).ConfigureAwait(false);
         }
         catch (ArgumentException ex)
         {

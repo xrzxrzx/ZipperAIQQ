@@ -13,10 +13,14 @@
 
 import type { DouyinBrowser } from "./browser.js";
 import type { BrowserLogger } from "./browser.js";
+import { createHash } from "node:crypto";
 import {
   detectChallenge,
   dragSlider,
   findQrBox,
+  findSmsInput,
+  openLoginDialog,
+  readPageNickname,
   SITE,
   type ChallengeDetection,
 } from "./site.js";
@@ -61,8 +65,8 @@ export class LoginFlow {
     | { kind: "sms" | "slider"; resolve: (value: string) => void; reject: (err: Error) => void }
     | null = null;
 
-  /** 上一次发给服务端的二维码字节长度（内容变才重发）。 */
-  private lastQrBytes = -1;
+  /** 上一次发给服务端的二维码内容哈希（内容变才重发；比字节长度可靠）。 */
+  private lastQrHash = "";
 
   constructor(options: LoginFlowOptions) {
     this.browser = options.browser;
@@ -95,10 +99,19 @@ export class LoginFlow {
    * 已登录则只补报 `online`，**不会**把用户踢下线。
    */
   async startLogin(): Promise<void> {
-    await this.browser.start();
+    try {
+      await this.browser.start();
 
-    if (await this.browser.isLoggedIn()) {
-      await this.markOnline();
+      if (await this.browser.isLoggedIn()) {
+        await this.markOnline();
+        return;
+      }
+    } catch (error) {
+      // 浏览器起不来 = 用户永远等不到二维码：**必须**把错误报回去，
+      // 否则服务端一直显示「等待扫码」，界面上一条信息都没有。
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.error(`发起登录失败（浏览器启动阶段）：${message}`);
+      this.setState("error", `浏览器底座不可用：${message}`);
       return;
     }
 
@@ -121,7 +134,7 @@ export class LoginFlow {
     this.cancel?.abort();
     this.pendingAnswer?.reject(new Error("登录已退出"));
     this.pendingAnswer = null;
-    this.lastQrBytes = -1;
+    this.lastQrHash = "";
     this.selfId = null;
     this.nickname = null;
     this.setState("loggedOut", null);
@@ -164,6 +177,7 @@ export class LoginFlow {
 
     try {
       const page = await this.browser.ensureChatPage(SITE.homeUrl);
+      let qrMisses = 0;
 
       while (!signal.aborted && Date.now() < deadline) {
         if (await this.browser.isLoggedIn()) {
@@ -180,15 +194,28 @@ export class LoginFlow {
         const box = await findQrBox(page).catch(() => null);
         if (box) {
           const png = await this.browser.captureQrPng(box);
-          if (png && png.length !== this.lastQrBytes) {
-            this.lastQrBytes = png.length;
-            this.emit(frame("login.qr", { qrcodeBase64: png.toString("base64") }));
-            this.log.info(`已推送登录二维码（${png.length} 字节）`);
+          if (png) {
+            const hash = createHash("sha1").update(png).digest("hex");
+            if (hash !== this.lastQrHash) {
+              this.lastQrHash = hash;
+              this.emit(frame("login.qr", { qrcodeBase64: png.toString("base64") }));
+              this.log.info(`已推送登录二维码（${png.length} 字节）`);
+            }
           }
+
           this.setState("waitingQr", null);
-        } else if (this.state === "unknown") {
-          // 首页可能还没弹登录框：轻点一下"登录"入口再找
-          await this.tryOpenLoginDialog(page);
+          qrMisses = 0;
+        } else if (qrMisses >= 1) {
+          // 连续两轮都没找到二维码 → 首页大概没自动弹登录框，点一次「登录」入口
+          // （原实现判 `state === "unknown"`，而进循环时状态已经是 waitingQr，那段是死代码）
+          const opened = await openLoginDialog(page);
+          this.log.info(opened ? "已点击登录入口，等扫码弹窗" : "没找到登录入口，继续等待弹窗");
+
+          if (!opened) {
+            qrMisses = 0; // 别每轮都点一遍，等一个周期再来
+          }
+        } else {
+          qrMisses += 1;
         }
 
         await sleep(QR_REFRESH_MS, signal);
@@ -208,31 +235,6 @@ export class LoginFlow {
     }
   }
 
-  /** 首页没自动弹登录框时，点一下右上角「登录」。 */
-  private async tryOpenLoginDialog(page: import("playwright").Page): Promise<void> {
-    const candidates = [
-      page.locator('button:has-text("登录")').first(),
-      page.locator('text=登录').first(),
-    ];
-
-    for (const candidate of candidates) {
-      try {
-        if ((await candidate.count()) === 0) {
-          continue;
-        }
-
-        await candidate.click({ timeout: 3_000 });
-        await page.waitForTimeout(1_500);
-        this.log.info("已点击登录入口，等待扫码弹窗");
-        return;
-      } catch {
-        // 换下一个候选
-      }
-    }
-
-    this.log.debug("首页上没找到登录入口（可能已经在扫码弹窗里）");
-  }
-
   private async handleChallenge(
     page: import("playwright").Page,
     challenge: NonNullable<ChallengeDetection>,
@@ -245,12 +247,7 @@ export class LoginFlow {
         return;
       }
 
-      const input = page.locator('input[autocomplete="one-time-code"], input').filter({
-        has: undefined,
-      });
-      // 填第一个可见的验证码输入框
-      const target = page.locator('input[placeholder*="验证码"], input[autocomplete="one-time-code"]').first();
-      const box = (await target.count()) > 0 ? target : input.first();
+      const box = await findSmsInput(page);
       await box.click({ timeout: 10_000 });
       await page.keyboard.type(value, { delay: 60 });
       await page.waitForTimeout(300);
@@ -261,13 +258,18 @@ export class LoginFlow {
 
     const anchor = challenge.bgBox;
     if (anchor) {
-      // 把背景图与拼图块推给用户看一眼，再让他给偏移
+      // 背景图 + 拼图块都给：只有背景图时用户还得自己找缺口在哪
       const bg = await this.browser.captureQrPng(anchor).catch(() => null);
+      const piece = challenge.pieceBox
+        ? await this.browser.captureQrPng(challenge.pieceBox).catch(() => null)
+        : null;
+
       this.emit(
         frame("login.challenge", {
           kind: "slider",
           hint: challenge.hint,
           bgBase64: bg ? bg.toString("base64") : null,
+          pieceBase64: piece ? piece.toString("base64") : null,
         }),
       );
     } else {
@@ -334,14 +336,9 @@ export class LoginFlow {
     this.onOnline(selfId, nickname);
   }
 
-  /** 昵称：从私信页/首页的自身入口读；读不到就 `null`（不编）。 */
+  /** 昵称：从页面 meta 读；读不到就 `null`（不编）。 */
   private async readNickname(): Promise<string | null> {
-    const page = this.browser.page;
-    return page.evaluate(() => {
-      const meta = document.querySelector('meta[name="author"], meta[property="og:title"]');
-      const value = meta?.getAttribute("content") ?? null;
-      return value && value.length <= 40 ? value : null;
-    });
+    return readPageNickname(this.browser.page);
   }
 
   private setState(state: LoginState, message: string | null): void {

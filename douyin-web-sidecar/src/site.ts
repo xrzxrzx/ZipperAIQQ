@@ -117,7 +117,8 @@ export async function listConversations(page: Page): Promise<ConversationRow[]> 
       }
 
       rows.push({
-        name: text.split("\n")[0] ?? text,
+        // 上面已把空白折叠成一个空格，这里不再按换行切（原本 split("\n") 永远拿全长）
+        name: text,
         ids: Array.from(new Set(ids)),
         x: Math.round(rect.x),
         y: Math.round(rect.y),
@@ -169,6 +170,61 @@ export async function openConversation(
   await page.mouse.click(hit.x + hit.width / 2, hit.y + hit.height / 2);
   await page.waitForTimeout(1_500);
   return hit;
+}
+
+/**
+ * 找「登录」入口并点开（首页不自动弹登录框时用）。
+ *
+ * @returns 点到了返回 `true`
+ */
+export async function openLoginDialog(page: Page): Promise<boolean> {
+  const candidates = [
+    page.locator('button:has-text("登录")').first(),
+    page.locator('[role="button"]:has-text("登录")').first(),
+    page.locator("text=登录").first(),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      if ((await candidate.count()) === 0) {
+        continue;
+      }
+
+      await candidate.click({ timeout: 3_000 });
+      await page.waitForTimeout(1_500);
+      return true;
+    } catch {
+      // 换下一个候选
+    }
+  }
+
+  return false;
+}
+
+/**
+ * 短信验证码输入框。
+ *
+ * @throws 页面上找不到（**不许**退回到"页面第一个 input"——那会把验证码打进搜索框）
+ */
+export async function findSmsInput(page: Page) {
+  const locator = page.locator(
+    'input[placeholder*="验证码"], input[aria-label*="验证码"], input[autocomplete="one-time-code"]',
+  );
+
+  if ((await locator.count()) === 0) {
+    throw new Error("找不到短信验证码输入框（页面可能已换版式）");
+  }
+
+  return locator.first();
+}
+
+/** 读当前页的昵称（`meta` 里能拿到就返回，拿不到 `null` —— 不编）。 */
+export async function readPageNickname(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const meta = document.querySelector('meta[name="author"], meta[property="og:title"]');
+    const value = meta?.getAttribute("content") ?? null;
+    return value && value.length <= 40 ? value : null;
+  });
 }
 
 /** 当前会话的标题（用于给入站消息补昵称；拿不到返回 `null`）。 */
@@ -500,5 +556,19 @@ export class ConversationNameCache {
 
   get size(): number {
     return this.names.size;
+  }
+
+  /**
+   * 名字 → id 反查（DOM 兜底用：只能看到会话标题，看不到 id）。
+   *
+   * @returns 找不到 / 同名多条时返回 `null`（宁可丢一条消息，也不要挂到错的会话上）
+   */
+  idForName(name: string | null | undefined): string | null {
+    if (!name) {
+      return null;
+    }
+
+    const hits = [...this.names.entries()].filter(([, value]) => value === name);
+    return hits.length === 1 ? hits[0]?.[0] ?? null : null;
   }
 }

@@ -49,7 +49,7 @@ interface SidecarConfig {
   workDir: string;
   headless: boolean;
   recycleHours: number;
-  maxHeapMb: number;
+  maxJsHeapMb: number;
   maxTextLength: number;
   heartbeatIntervalMs: number;
   deadAfterMs: number;
@@ -64,7 +64,7 @@ const DEFAULT_MAX_TEXT_LENGTH = 16_000;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const DEFAULT_DEAD_AFTER_MS = 90_000;
 const DEFAULT_RECYCLE_HOURS = 6;
-const DEFAULT_MAX_HEAP_MB = 1_200;
+const DEFAULT_MAX_JS_HEAP_MB = 600;
 
 /** WebSocket.OPEN 的字面值（不引 DOM lib）。 */
 const SOCKET_OPEN = 1;
@@ -108,7 +108,7 @@ async function loadConfig(log: Logger): Promise<SidecarConfig> {
     workDir: str(fileConfig.workDir) ?? DEFAULT_WORK_DIR,
     headless: fileConfig.headless === undefined ? true : fileConfig.headless !== false,
     recycleHours: positiveInt(fileConfig.recycleHours, DEFAULT_RECYCLE_HOURS),
-    maxHeapMb: positiveInt(fileConfig.maxHeapMb, DEFAULT_MAX_HEAP_MB),
+    maxJsHeapMb: positiveInt(fileConfig.maxJsHeapMb, DEFAULT_MAX_JS_HEAP_MB),
     maxTextLength: positiveInt(fileConfig.maxTextLength, DEFAULT_MAX_TEXT_LENGTH),
     heartbeatIntervalMs: positiveInt(fileConfig.heartbeatIntervalMs, DEFAULT_HEARTBEAT_MS),
     deadAfterMs: positiveInt(fileConfig.deadAfterMs, DEFAULT_DEAD_AFTER_MS),
@@ -403,13 +403,45 @@ async function main(): Promise<void> {
 
   const names = new ConversationNameCache();
   let selfUid: string | null = null;
+  let selfUidProbeAt = 0;
   let link: ChannelLink | null = null;
 
+  /** 拿自己的 uid；没有就顺手起一次探测（每 60 秒最多一次，别把页面打爆）。 */
+  const currentSelfUid = (): string | null => {
+    if (selfUid) {
+      return selfUid;
+    }
+
+    if (Date.now() - selfUidProbeAt > 60_000) {
+      selfUidProbeAt = Date.now();
+      void browser
+        .selfUid()
+        .then((value) => {
+          if (value) {
+            selfUid = value;
+            log.info(`自身 uid 补探测成功：${value}`);
+          }
+        })
+        .catch(() => undefined);
+    }
+
+    return null;
+  };
+
+  // 发帧失败计数：偶发一次是断线重连的正常噪声，连着失败就是"通道不可用"（要响亮）
+  let sendFailures = 0;
   const send = (outFrame: Frame): void => {
     try {
       link?.send(outFrame);
+      sendFailures = 0;
     } catch (error) {
-      log.debug(`帧发送失败（连接可能已断，type=${outFrame.type}）：${error instanceof Error ? error.message : String(error)}`);
+      sendFailures += 1;
+      const message = error instanceof Error ? error.message : String(error);
+      if (sendFailures >= 3) {
+        log.warn(`帧发送连续失败 ${sendFailures} 次（type=${outFrame.type}）：${message}`);
+      } else {
+        log.debug(`帧发送失败（连接可能已断，type=${outFrame.type}）：${message}`);
+      }
     }
   };
 
@@ -420,7 +452,7 @@ async function main(): Promise<void> {
       headless: config.headless,
       viewport: { width: 1400, height: 950 },
       recycleHours: config.recycleHours,
-      maxHeapMb: config.maxHeapMb,
+      maxJsHeapMb: config.maxJsHeapMb,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/159.0.0.0 Safari/537.36",
     },
@@ -454,7 +486,7 @@ async function main(): Promise<void> {
     protoPath,
     emit: send,
     names,
-    selfUid: () => selfUid,
+    selfUid: currentSelfUid,
   });
 
   browser.onPage((page) => {
@@ -580,7 +612,9 @@ async function main(): Promise<void> {
   const handleContacts = async (inFrame: Frame): Promise<void> => {
     try {
       const page = await browser.ensureChatPage(SITE.chatUrl);
-      await openChatPage(page).catch(() => undefined);
+      await openChatPage(page).catch((error: unknown) => {
+        log.debug(`刷新私信页失败（继续用当前页）：${error instanceof Error ? error.message : String(error)}`);
+      });
       const rows = await listConversations(page);
       names.refreshFromRows(rows);
 
