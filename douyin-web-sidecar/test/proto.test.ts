@@ -25,6 +25,9 @@ test("关键 message 存在", () => {
   for (const name of [
     "im_proto.Frame",
     "im_proto.StrangerNewMessageNotify",
+    "im_proto.Request",
+    "im_proto.RequestBody",
+    "im_proto.SendMessageRequestBody",
     "im_proto.Response",
     "im_proto.ResponseBody",
     "im_proto.NewMessageNotify",
@@ -116,6 +119,17 @@ test("帧编解码闭环：service=5 的私信帧 → 归一化出文本", () =>
     cmd: number;
     body?: { hasNewMessageNotify?: { message?: Record<string, unknown> } };
   };
+
+  // 出站请求的关键字段号（抄错就发不出去，而且不会报错）
+  const sendType = root.lookupType("im_proto.SendMessageRequestBody");
+  assert.equal(sendType.fields.conversationId?.id, 1);
+  assert.equal(sendType.fields.conversationType?.id, 2);
+  assert.equal(sendType.fields.content?.id, 4);
+  assert.equal(sendType.fields.ext?.id, 5);
+  assert.equal(sendType.fields.messageType?.id, 6);
+  assert.equal(sendType.fields.clientMessageId?.id, 8);
+  assert.equal(root.lookupType("im_proto.RequestBody").fields.sendMessageBody?.id, 100);
+  assert.equal(root.lookupType("im_proto.Request").fields.cmd?.id, 1);
 
   // StrangerNewMessageNotify.message 必须在 field 2（抄错类型不会报错，只会永远解不出消息）
   const strangerType = root.lookupType("im_proto.StrangerNewMessageNotify");

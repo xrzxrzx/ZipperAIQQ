@@ -101,3 +101,44 @@ message ReferenceInfo {
   required int64 ref_message_type = 3;
   optional int64 root_message_id = 5;
 }
+
+// ---- 出站（发送）：`POST imapi.douyin.com/v1/message/send` 的请求体 ----
+// 来源：2026-11-20 真机抓包 + 上游 `im.proto` 的字段号；**只用发送所需的最小子集**。
+
+message ReferencedMessageInfo {
+  required int64 referenced_message_id = 1;
+  required string hint = 2;
+  optional int64 root_message_id = 3;
+  optional int64 root_message_conv_index = 4;
+}
+
+message SendMessageRequestBody {
+  optional string conversation_id = 1;
+  optional int32 conversation_type = 2;
+  optional int64 conversation_short_id = 3;
+  optional string content = 4;
+  map<string, string> ext = 5;
+  optional int32 message_type = 6;
+  optional string ticket = 7;
+  optional string client_message_id = 8;
+  repeated int64 mentioned_users = 9;
+  optional bool ignore_badge_count = 10;
+  optional ReferencedMessageInfo ref_msg_info = 11;
+  map<string, string> client_ext = 12;
+}
+
+message RequestBody {
+  // 100 = 发消息
+  optional SendMessageRequestBody send_message_body = 100;
+}
+
+message Request {
+  optional int32 cmd = 1;              // 100 = SEND_MESSAGE
+  optional int64 sequence_id = 2;
+  optional string sdk_version = 3;      // 实测 "0.1.8"
+  optional string token = 4;            // 实测为空（靠 cookie 鉴权）
+  optional int32 refer = 5;             // 实测 3
+  optional string build_number = 7;     // 实测 "0d50935:feat/pc-im-group"
+  optional RequestBody body = 8;
+  map<string, string> headers = 15;
+}

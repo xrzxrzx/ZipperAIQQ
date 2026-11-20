@@ -24,6 +24,7 @@ import {
   type Frame as ChannelFrame,
   type ProtoMessageBody,
 } from "./protocol.js";
+import type { ConversationRegistry } from "./send-api.js";
 import { currentConversationName, readTail, type ConversationNameCache } from "./site.js";
 
 /** `Frame.service` 取值（T0.8 实测）。 */
@@ -47,6 +48,8 @@ export interface InboundListenerOptions {
   emit: (frame: ChannelFrame) => void;
   /** 会话名缓存（给入站事件补昵称）。 */
   names: ConversationNameCache;
+  /** 会话坐标登记表：出站 API 只用它，不需要 DOM 列表。 */
+  conversations: ConversationRegistry;
   /** 取自己的 uid（拿到之前返回 null）。 */
   selfUid: () => string | null;
   /** 学到「自己」的 IM uid 时回调（web 侧探测值与 IM uid 不一致时靠它纠正）。 */
@@ -58,6 +61,7 @@ export class InboundListener {
   private readonly log: BrowserLogger;
   private readonly emit: (frame: ChannelFrame) => void;
   private readonly names: ConversationNameCache;
+  private readonly conversations: ConversationRegistry;
   private readonly selfUid: () => string | null;
   private readonly onSelfLearned?: (selfUid: string) => void;
   private readonly protoPath: string;
@@ -85,6 +89,7 @@ export class InboundListener {
     this.log = options.log;
     this.emit = options.emit;
     this.names = options.names;
+    this.conversations = options.conversations;
     this.selfUid = options.selfUid;
     this.onSelfLearned = options.onSelfLearned;
     this.protoPath = options.protoPath;
@@ -349,6 +354,13 @@ export class InboundListener {
     if (!normalized.senderNickname && known) {
       normalized.senderNickname = known;
     }
+
+    // 记下「这个会话怎么发」：conversation_id 只出现在入站帧里，出站全靠它
+    this.conversations.remember(normalized.threadId, {
+      conversationId: message.conversationId ?? "",
+      conversationShortId: message.conversationShortId,
+      conversationType: Number(message.conversationType ?? 1),
+    });
 
     this.stats.messages += 1;
     this.log.info(

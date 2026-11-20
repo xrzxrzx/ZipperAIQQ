@@ -25,6 +25,7 @@ import { DouyinBrowser, type BrowserLogger, type BrowserStateSnapshot } from "./
 import { InboundListener } from "./inbound.js";
 import { LoginFlow } from "./login.js";
 import { OutboundSender } from "./outbound.js";
+import { ConversationRegistry, DouyinSendApi } from "./send-api.js";
 import {
   buildOutboundPlan,
   CAPABILITIES,
@@ -504,13 +505,20 @@ async function main(): Promise<void> {
     },
   });
 
-  // ── 入站 ──
+  // ── 会话坐标（入站帧里学，出站 API 用）──
+  const conversations = new ConversationRegistry();
+
+  // ── 出站 API（页面上下文里 fetch）──
   const protoPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "proto", "im.proto");
+  const sendApi = new DouyinSendApi({ log, protoPath });
+
+  // ── 入站 ──
   const inbound = new InboundListener({
     log,
     protoPath,
     emit: send,
     names,
+    conversations,
     selfUid: currentSelfUid,
     onSelfLearned: (learned) => {
       // 探测值（如 self-profile 的短 uid）与 IM uid 不一致时，以会话反推的为准
@@ -541,6 +549,8 @@ async function main(): Promise<void> {
     browser,
     log,
     names,
+    conversations,
+    api: sendApi,
     workDir: config.workDir,
   });
 

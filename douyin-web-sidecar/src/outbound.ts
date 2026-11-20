@@ -1,5 +1,8 @@
 /**
- * 出站执行（帧 `outbound` → 页面动作 → `ack`）。
+ * 出站执行（帧 `outbound` → **HTTP API** → `ack`）。
+ *
+ * 2026-11-20 真机起，出站改走 `send-api.ts` 的 HTTP 接口（不再点 DOM）：
+ * 会话列表虚拟滚动、首屏延迟导致"找不到会话"，消息全退回 —— 而页面自己发消息本就是一条 HTTP 请求。
  *
  * 三条硬规则（都是踩过的）：
  *   ① **回读校验**：点回车不等于发出去了。只有「回读到刚发的那条」才算成功，
@@ -10,30 +13,14 @@
 
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
 import type { BrowserLogger, DouyinBrowser } from "./browser.js";
 import {
   OutboundError,
   type OutboundPlan,
   sessionIdFor,
 } from "./protocol.js";
-import {
-  currentConversationName,
-  listConversations,
-  openChatPage,
-  openConversation,
-  readTail,
-  sendImage,
-  sendText,
-  SITE,
-  type ConversationNameCache,
-} from "./site.js";
-
-/** 回读等待上限：页面渲染 + 网络往返，8 秒还没出现就判失败。 */
-const READBACK_TIMEOUT_MS = 8_000;
-
-/** 回读轮询间隔。 */
-const READBACK_POLL_MS = 500;
+import type { ConversationRegistry, DouyinSendApi } from "./send-api.js";
+import { sendImage, SITE, type ConversationNameCache } from "./site.js";
 
 /** 图片下载超时：CDN 挂住时不能把整条发送拖死。 */
 const IMAGE_FETCH_TIMEOUT_MS = 20_000;
@@ -55,6 +42,10 @@ export interface OutboundSenderOptions {
   browser: DouyinBrowser;
   log: BrowserLogger;
   names: ConversationNameCache;
+  /** 会话坐标登记表（来自入站帧）：API 发送只需要它，不需要 DOM 会话列表 */
+  conversations: ConversationRegistry;
+  /** HTTP API 出站器（页面上下文里 fetch，自动带 cookie） */
+  api: DouyinSendApi;
   /** 临时媒体目录（发完即删）。 */
   workDir: string;
 }
@@ -64,68 +55,72 @@ export class OutboundSender {
   private readonly browser: DouyinBrowser;
   private readonly log: BrowserLogger;
   private readonly names: ConversationNameCache;
+  private readonly conversations: ConversationRegistry;
+  private readonly api: DouyinSendApi;
   private readonly workDir: string;
 
   constructor(options: OutboundSenderOptions) {
     this.browser = options.browser;
     this.log = options.log;
     this.names = options.names;
+    this.conversations = options.conversations;
+    this.api = options.api;
     this.workDir = options.workDir;
   }
 
   /** 按计划发送；失败抛异常（由调用方转 `ack.ok=false`）。 */
+  /**
+   * 按计划发送：**走 HTTP API**（`POST /v1/message/send`），不点 DOM。
+   *
+   * 为什么改：真机实测 DOM 找会话行极不稳定（列表虚拟滚动 + 首屏延迟），
+   * 而页面自己发消息本来就是一条 HTTP 请求 —— 复刻它就是「API 方式」。
+   * 失败一律抛异常（由调用方转 `ack.ok=false`），**不伪装成功**。
+   */
   async send(plan: OutboundPlan): Promise<OutboundResult> {
     const session = sessionIdFor(plan.chatType, plan.threadId);
-    const page = await this.browser.ensureChatPage(SITE.chatUrl);
+    const target = this.conversations.get(plan.threadId);
 
-    if (!page.url().includes("/chat")) {
-      throw new OutboundError("auth", `私信页打不开（当前 ${page.url()}）：登录态可能已失效`);
+    if (!target) {
+      // 发送只需要 conversation_id，而它只出现在入站帧里 —— 没收到过对方的消息就拿不到
+      throw new OutboundError(
+        "not_found",
+        `还没有这个会话的坐标（threadId=${plan.threadId}）：先让对方发一条消息，` +
+          "入站帧里才会带 conversation_id",
+      );
     }
 
-    // 私信页刚打开时列表要一会儿才渲染出来
-    await waitForList(page);
-
-    const nameHint = this.names.get(plan.threadId);
-    const row = await openConversation(page, { threadId: plan.threadId, nameHint });
-    this.names.remember(plan.threadId, (await currentConversationName(page)) ?? row.name);
-
-    this.log.info(`已打开会话：${session}（列表名=${row.name}）`);
+    const page = await this.browser.page;
 
     let chunks = 0;
     for (const chunk of plan.chunks) {
-      // 发送前先记基线：判「新增」而不是「附近有像的东西」
-      const before = await snapshotTail(page);
-      await sendText(page, chunk);
-      await expectNewBubble(page, before, chunk, false);
+      const clientMessageId = crypto.randomUUID();
+      const result = await this.api.sendText(page, target, chunk, clientMessageId);
+
+      if (!result.ok) {
+        throw new OutboundError(
+          result.statusCode === 10509 ? "risk" : "unknown",
+          `抖音发送失败：status=${result.statusCode} ${result.errorDesc ?? ""}`.trim(),
+        );
+      }
+
       chunks += 1;
     }
 
+    // 图片：API 需要先上传拿 key，本期未适配 —— **明确降级**（不假装发了）
     let images = 0;
-    const media = [
-      ...plan.imageData.map((data) => ({ kind: "data" as const, data })),
-      ...plan.imageUrls.map((url) => ({ kind: "url" as const, url })),
-    ];
-
-    for (const item of media) {
-      const file = await this.materialize(item);
-      // 基线必须在**下载之后**取：下载最多 20 秒，这期间对方发来的图会把基线推高
-      // （否则发送失败时"图片数变多"也成立 → 又一次假成功，审查 N-4）
-      const before = await snapshotTail(page);
-      try {
-        await sendImage(page, file);
-        await expectNewBubble(page, before, "", true);
-        images += 1;
-      } finally {
-        await rm(file, { force: true }).catch(() => undefined);
-      }
+    const degraded = [...plan.degraded];
+    const mediaCount = plan.imageData.length + plan.imageUrls.length;
+    if (mediaCount > 0) {
+      degraded.push("image");
+      this.log.warn(`图片发送未适配 API（${mediaCount} 张已跳过，等待上传通道）`);
     }
 
-    // @ 没能还原：**必须**让服务端与模型知道（不是"发成功了"）
-    const degraded = [...plan.degraded];
+    // @ 没能还原：同样必须让服务端与模型知道
     if (plan.mentions.length > 0 && !degraded.includes("mention")) {
       degraded.push("mention");
     }
 
+    this.log.info(`API 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
     return { chunks, images, degraded };
   }
 
@@ -188,101 +183,6 @@ export class OutboundSender {
   }
 }
 
-/** 等会话列表渲染出来（最多 15 秒）。 */
-async function waitForList(page: Page): Promise<void> {
-  const deadline = Date.now() + 15_000;
-
-  while (Date.now() < deadline) {
-    const rows = await listConversations(page).catch(() => []);
-    if (rows.length > 0) {
-      return;
-    }
-
-    await page.waitForTimeout(1_000);
-  }
-
-  throw new OutboundError("not_found", "私信页会话列表 15 秒内没有渲染出来（页面可能未登录 / 前端异常）");
-}
-
-/**
- * 发送前的气泡基线（判「新增」用）。
- *
- * 为什么必须记基线：只判「末尾有像的东西」时，
- * ① 同一句话重发一次会命中上一条 → 假成功 ② 上一条本来就是图 → 图片失败也判成功。
- */
-interface TailSnapshot {
-  count: number;
-  images: number;
-  texts: string[];
-}
-
-async function snapshotTail(page: Page): Promise<TailSnapshot> {
-  const tail = await readTail(page, 12).catch(() => []);
-  return {
-    count: tail.length,
-    images: tail.filter((bubble) => bubble.hasImage).length,
-    texts: tail.map((bubble) => normalize(bubble.text)),
-  };
-}
-
-/**
- * 回读校验：等到「**新增**的那条」出现。
- *
- * @param before 发送前基线
- * @param text 期望文本（图片时为 `""`）
- * @param expectImage 期望是图片气泡
- */
-async function expectNewBubble(
-  page: Page,
-  before: TailSnapshot,
-  text: string,
-  expectImage: boolean,
-): Promise<void> {
-  const deadline = Date.now() + READBACK_TIMEOUT_MS;
-  const expected = normalize(text);
-  const probe = expected.slice(0, Math.min(60, expected.length));
-
-  while (Date.now() < deadline) {
-    const tail = await readTail(page, 12).catch(() => []);
-
-    if (expectImage) {
-      const images = tail.filter((bubble) => bubble.hasImage).length;
-      if (images > before.images) {
-        return;
-      }
-    } else if (probe.length > 0) {
-      const texts = tail.map((bubble) => normalize(bubble.text));
-      // 「末尾那段里出现次数变多」才算新增：先用基线里已有的次数减掉
-      const beforeHits = before.texts.filter((value) => matches(value, probe)).length;
-      const afterHits = texts.filter((value) => matches(value, probe)).length;
-
-      if (afterHits > beforeHits) {
-        return;
-      }
-    }
-
-    await page.waitForTimeout(READBACK_POLL_MS);
-  }
-
-  throw new OutboundError(
-    "readback",
-    expectImage
-      ? "图片发送后回读不到新气泡（可能被风控拦截或上传未完成）"
-      : `发送后回读不到新出现的内容（前 40 字：${text.slice(0, 40)}）`,
-  );
-}
-
-function matches(value: string, probe: string): boolean {
-  if (!value || !probe) {
-    return false;
-  }
-
-  return value.includes(probe) || probe.includes(value);
-}
-
-function normalize(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
 
 function stripDataUrl(data: string): string {
   const index = data.indexOf("base64,");
