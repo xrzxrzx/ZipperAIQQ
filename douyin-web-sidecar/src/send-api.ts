@@ -49,6 +49,8 @@ export interface ConversationRef {
    * 抖音的会话行预览里就有这条文本，用它定位比用昵称稳（昵称可能重名/为空）。
    */
   lastText?: string;
+  /** 我们**最后一次成功发出去**的文本（截断）：再发下一条时会话行预览已经变成它了 */
+  lastSent?: string;
 }
 
 /**
@@ -70,6 +72,16 @@ export class ConversationRegistry {
 
   get(threadId: string): ConversationRef | undefined {
     return this.map.get(threadId);
+  }
+
+  /** 记下「刚发出去的那条」——多段发送时下一段靠它定位（预览已被它覆盖）。 */
+  noteSent(threadId: string, text: string): void {
+    const current = this.map.get(threadId);
+    if (!current || !text) {
+      return;
+    }
+
+    this.map.set(threadId, { ...current, lastSent: text.trim().slice(0, 40) });
   }
 
   get size(): number {

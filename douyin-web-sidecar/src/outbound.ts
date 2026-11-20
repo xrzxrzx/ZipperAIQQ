@@ -22,7 +22,8 @@ import {
 import type { ConversationRegistry, DouyinSendApi } from "./send-api.js";
 import {
   clickConversationRow,
-  findConversationRowByPreview,
+  findConversationRowByAny,
+  isConversationOpen,
   reloadChatPage,
   sendTextInOpenConversation,
   SITE,
@@ -96,39 +97,41 @@ export class OutboundSender {
 
     const page = await this.browser.page;
 
-    // ① 首选：HTTP API（页面上下文 fetch）。签名头/msToken 由页面提供，我们只复刻请求体。
+    // ① 先用 DOM（**已真机验证可用**）：重载 → 按线索定位会话 → 点开 → 输入 → 回读
+    //    为什么不是 API 优先：imapi 的 ticket-guard 签名要 SDK 初始化上下文，
+    //    直接调 signers 拿到的是空头（2026-11-21 逆向结论），硬试只会多一次必然失败的网络请求。
     try {
-      let chunks = 0;
-      for (const chunk of plan.chunks) {
-        const result = await this.api.sendText(page, target, chunk, crypto.randomUUID());
-        if (!result.ok) {
-          throw new OutboundError(
-            result.statusCode === 10509 ? "risk" : "unknown",
-            `抖音发送失败：status=${result.statusCode} ${result.errorDesc ?? ""}`.trim(),
-          );
-        }
-
-        chunks += 1;
-      }
-
+      const chunks = await this.sendByDom(page, plan, target);
       const degraded = this.collectDegraded(plan);
-      this.log.info(`API 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
+      this.log.info(`DOM 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
       return { chunks, images: 0, degraded };
     } catch (error) {
-      // ② 回落：DOM（重载 → 按刚收到的消息预览定位会话行 → 点开 → 输入 → 回读）
-      //    API 的失败原因**不吞**：写日志并在两条路都失败时一起报给上层。
-      const apiFailure = error instanceof Error ? error.message : String(error);
-      this.log.warn(`API 出站失败，改用 DOM 兜底：${apiFailure}`);
+      const domFailure = error instanceof Error ? error.message : String(error);
+      this.log.warn(`DOM 出站失败，尝试 API：${domFailure}`);
+
+      // ② 备用：HTTP API（等 ticket-guard 签名方案落地后可改回首选）
       try {
-        const chunks = await this.sendByDom(page, plan, target);
+        let chunks = 0;
+        for (const chunk of plan.chunks) {
+          const result = await this.api.sendText(page, target, chunk, crypto.randomUUID());
+          if (!result.ok) {
+            throw new OutboundError(
+              result.statusCode === 10509 ? "risk" : "unknown",
+              `抖音发送失败：status=${result.statusCode} ${result.errorDesc ?? ""}`.trim(),
+            );
+          }
+
+          chunks += 1;
+        }
+
         const degraded = this.collectDegraded(plan);
-        this.log.info(`DOM 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
+        this.log.info(`API 出站完成（备用路径）：${session} 文本=${chunks}`);
         return { chunks, images: 0, degraded };
-      } catch (domError) {
-        const domFailure = domError instanceof Error ? domError.message : String(domError);
+      } catch (apiError) {
+        const apiFailure = apiError instanceof Error ? apiError.message : String(apiError);
         throw new OutboundError(
-          domError instanceof OutboundError ? domError.code : "unknown",
-          `抖音发送失败（API：${apiFailure}；DOM：${domFailure}）`,
+          apiError instanceof OutboundError ? apiError.code : "unknown",
+          `抖音发送失败（DOM：${domFailure}；API：${apiFailure}）`,
         );
       }
     }
@@ -158,30 +161,39 @@ export class OutboundSender {
   private async sendByDom(
     page: Awaited<ReturnType<DouyinBrowser["ensureChatPage"]>>,
     plan: OutboundPlan,
-    target: { lastText?: string },
+    target: { lastText?: string; lastSent?: string },
   ): Promise<number> {
     await this.browser.ensureChatPage(SITE.chatUrl);
-    await reloadChatPage(page);
 
-    const needle = target.lastText ?? this.names.get(plan.threadId) ?? "";
-    let row = await findConversationRowByPreview(page, needle);
-    if (!row) {
-      // 预览文本可能被截断/换行：退一步按昵称找
-      const nameHint = this.names.get(plan.threadId);
-      if (nameHint) {
+    const nameHint = this.names.get(plan.threadId);
+    // 线索从「最新」到「最旧」：刚发的那条 → 入站那条 → 昵称
+    const needles = [target.lastSent, target.lastText, nameHint].filter(
+      (value): value is string => Boolean(value && value.trim().length > 0),
+    );
+
+    // 已经停在目标会话里就直接发（多段发送时**不要 reload**：会把会话关掉，
+    // 而此刻行的预览已经变成我们刚发的那条，重载后再按旧线索找不到 —— 2026-11-21 真机）
+    const alreadyOpen = await isConversationOpen(page, needles);
+
+    if (!alreadyOpen) {
+      await reloadChatPage(page);
+      let row = await findConversationRowByAny(page, needles);
+
+      if (!row) {
+        // 列表可能还没渲染完：再重载一次（实测这一下最有效）
         await reloadChatPage(page);
-        row = await findConversationRowByPreview(page, nameHint);
+        row = await findConversationRowByAny(page, needles);
       }
-    }
 
-    if (!row) {
-      throw new OutboundError(
-        "not_found",
-        `DOM 兜底也找不到会话（threadId=${plan.threadId}，预览线索=${needle.slice(0, 12) || "无"}）`,
-      );
-    }
+      if (!row) {
+        throw new OutboundError(
+          "not_found",
+          `DOM 兜底找不到会话（threadId=${plan.threadId}，线索=${needles.map((n) => n.slice(0, 10)).join("/") || "无"}）`,
+        );
+      }
 
-    await clickConversationRow(page, row);
+      await clickConversationRow(page, row);
+    }
 
     let sent = 0;
     for (const chunk of plan.chunks) {
@@ -190,6 +202,8 @@ export class OutboundSender {
         throw new OutboundError("readback", `DOM 发送后没在会话里看到刚发的那条（前 20 字：${chunk.slice(0, 20)}）`);
       }
 
+      // 发出去之后，行的预览就变成它了 —— 记下来给下一段用
+      this.conversations.noteSent(plan.threadId, chunk);
       sent += 1;
     }
 

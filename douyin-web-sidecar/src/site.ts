@@ -679,3 +679,42 @@ export async function sendTextInOpenConversation(page: Page, text: string): Prom
 
   return false;
 }
+
+/**
+ * 当前页面是不是已经停在某个会话里（判断依据：页面里出现了给定的线索文本）。
+ *
+ * 用途：多段发送时不要每次都 `reload` —— 重载会把已经打开的会话关掉，
+ * 而第二次发送的定位线索（会话行预览）此刻已经变成「我们刚发出去的那条」。
+ */
+export async function isConversationOpen(page: Page, needles: string[]): Promise<boolean> {
+  const hasInput = (await page.locator('textarea, [contenteditable="true"]').count()) > 0;
+  if (!hasInput) {
+    return false;
+  }
+
+  const body = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+  return needles.some((needle) => {
+    const probe = needle.replace(/\s+/g, "").slice(0, 12);
+    return probe.length > 0 && body.includes(probe);
+  });
+}
+
+/**
+ * 在会话行里按**多个线索**逐个尝试（入站预览 → 我们刚发的那条 → 昵称）。
+ *
+ * 为什么要多个：发出去一条之后，行的预览就变成我们发的那条了 ——
+ * 只用入站预览会导致"第二条发不出去"（2026-11-21 真机）。
+ */
+export async function findConversationRowByAny(
+  page: Page,
+  needles: string[],
+): Promise<ConversationRow | null> {
+  for (const needle of needles) {
+    const row = await findConversationRowByPreview(page, needle);
+    if (row) {
+      return row;
+    }
+  }
+
+  return null;
+}
