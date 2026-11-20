@@ -639,8 +639,9 @@ export class DouyinSendApi {
 
   /** 签名 + `context.request` 发送（文本与图片共用）。 */
   private async postSigned(context: BrowserContext, page: Page, payload: Buffer): Promise<SendApiResult> {
-    // 页面可能还没加载完 SDK：等签名器就绪（最多 15 秒）
-    for (let i = 0; i < 15; i += 1) {
+    // 签名器是**可选**的：真机上有的会话/版本根本不强制 ticket-guard
+    // （2026-11-21 实测：新号会话下不带任何签名头，/v1/message/send 直接 status_code=0）
+    for (let i = 0; i < 5; i += 1) {
       const ready = await page
         .evaluate((name) => {
           const signer = (window as unknown as Record<string, unknown>)[name] as { sign?: unknown } | undefined;
@@ -676,13 +677,14 @@ export class DouyinSendApi {
       { url: SEND_URL, path: SEND_PATH, b64: bodyB64, signerGlobal: SIGNER_GLOBAL },
     );
 
+    let signHeaders: Record<string, string> = {};
     if ("error" in signed && signed.error) {
-      throw new OutboundError("page", `签名失败：${String(signed.error)}`);
-    }
-
-    const signHeaders = "headers" in signed ? (signed.headers ?? {}) : {};
-    if (Object.keys(signHeaders).length === 0) {
-      throw new OutboundError("page", "签名返回空头");
+      this.log.warn(`签名器不可用，按纯 cookie 发送：${String(signed.error)}`);
+    } else {
+      signHeaders = ("headers" in signed ? (signed.headers as Record<string, string> | undefined) : undefined) ?? {};
+      if (Object.keys(signHeaders).length === 0) {
+        this.log.info("签名头为空，按纯 cookie 发送（真机验证该接口接受）");
+      }
     }
 
     const response = await context.request.post(SEND_URL, {
