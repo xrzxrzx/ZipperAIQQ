@@ -1,0 +1,93 @@
+// ───────────────────────────────────────────────────────────────────────────
+// ./im.proto —— **本项目自用的最小协议子集**（只用反序列化，不自己造签名）
+//
+// 来源：抖音聊天桌面端 native descriptors 生成的 IM schema（协议结构本身），
+//       经 `douyin-im@1.1.0` 包内的 `lib/services/im/proto/im.proto`（92 KB 全量）裁剪而来。
+// 为什么裁剪：这里只需要「收私信 + 读互动消息」两级结构，全量文件带 40+ 枚举与数百 message，
+//       既读不动也维护不动。字段号（= 线上 wire 契约）**逐字照抄，一个都不能改**。
+// 未知字段：proto2 解码遇未知字段直接跳过，所以裁剪**不会**让解析失败。
+//
+// 改动纪律：只能从上游文件**增加**字段，不得改动已有字段号/类型；
+//          增删前先跑 `npm test`（fixtures 里有真实抓包样本）。
+// ───────────────────────────────────────────────────────────────────────────
+
+syntax = "proto2";
+
+package im_proto;
+
+// ---- frame.proto：`wss://frontier-im.douyin.com/ws/v2` 每一帧的外框 ----
+
+message Frame {
+  message ExtendedEntry {
+    required string key = 1;
+    required string value = 2;
+  }
+
+  required uint64 seqid = 1;
+  required uint64 logid = 2;
+  required int32 service = 3;
+  required int32 method = 4;
+  repeated ExtendedEntry headers = 5;
+  optional string payload_encoding = 6;
+  optional string payload_type = 7;
+  optional bytes payload = 8;
+  optional string log_id_new = 9;
+  optional string server_timing = 10;
+  optional string msg_id = 11;
+  optional int32 frame_type = 12;
+}
+
+// ---- im_api.proto：`service=5` 的 payload 是这一层 ----
+
+message Response {
+  optional int32 cmd = 1;
+  optional int64 sequence_id = 2;
+  optional int32 status_code = 3;
+  optional string error_desc = 4;
+  optional int32 inbox_type = 5;
+  optional ResponseBody body = 6;
+  optional string log_id = 7;
+  map<string, string> headers = 8;
+  optional int64 start_time_stamp = 9;
+  optional int64 request_arrived_time = 10;
+  optional int64 server_execution_end_time = 11;
+  optional int32 retry_count = 12;
+}
+
+message ResponseBody {
+  // 500 = 新消息推送（私信在 service=5 的这条上）；其余 body 分支本子集用不到。
+  optional NewMessageNotify has_new_message_notify = 500;
+}
+
+message NewMessageNotify {
+  optional string conversation_id = 2;
+  optional int32 conversation_type = 3;
+  optional int32 notify_type = 4;
+  optional MessageBody message = 5;
+  optional int64 previous_cursor = 6;
+  optional int64 next_cursor = 7;
+  optional int64 index_in_conversation = 8;
+  optional int64 index_in_conversation_v2 = 9;
+}
+
+message MessageBody {
+  optional string conversation_id = 1;
+  optional int32 conversation_type = 2;
+  optional int64 server_message_id = 3;
+  optional int64 index_in_conversation = 4;
+  optional int64 conversation_short_id = 5;
+  optional int32 message_type = 6;
+  optional int64 sender = 7;
+  optional string content = 8;
+  optional int64 create_time = 10;
+  optional int32 status = 12;
+  optional string sec_sender = 14;
+  optional ReferenceInfo reference_info = 18;
+}
+
+message ReferenceInfo {
+  required int64 referenced_message_id = 1;
+  required string hint = 2;
+  required int64 ref_message_type = 3;
+  optional int64 root_message_id = 5;
+}

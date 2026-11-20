@@ -1,0 +1,12 @@
+# 依赖与产物
+node_modules/
+dist/
+
+# 运行期目录（**含登录态 profile，绝不入库**）
+data/
+
+# 本地配置（可能含 token）
+config.json
+
+# 临时媒体（发完即删，万一残留也不许进库）
+tmp-media/
