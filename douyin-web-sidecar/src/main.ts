@@ -622,6 +622,12 @@ async function main(): Promise<void> {
           return;
         }
 
+        // 崩了没人管就一直哑着：体检里顺手自愈（不依赖"下一条消息发失败"来触发）
+        if (browser.current.page === "crashed") {
+          log.warn("浏览器处于崩溃状态，自动重建");
+          await browser.recycle("体检发现页面崩溃", SITE.chatUrl).catch(() => undefined);
+        }
+
         const memoryMb = await browser.heapMb();
         send(makeFrame("browser.state", { ...browser.current, memoryMb, lastAction: "体检" }));
 

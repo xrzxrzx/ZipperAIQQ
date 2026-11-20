@@ -150,6 +150,9 @@ public sealed partial class PlatformsViewModel : ObservableObject
     /// <summary>当前二维码的图片流：换码 / 清码时释放，避免每次登录泄漏一个流。</summary>
     private Windows.Storage.Streams.InMemoryRandomAccessStream? _qrStream;
 
+    /// <summary>滑块背景图的图片流（与二维码各自独立，别互相顶掉）。</summary>
+    private Windows.Storage.Streams.InMemoryRandomAccessStream? _challengeStream;
+
     public PlatformsViewModel(ServerApiClient api)
     {
         ArgumentNullException.ThrowIfNull(api);
@@ -228,6 +231,16 @@ public sealed partial class PlatformsViewModel : ObservableObject
     [ObservableProperty]
     public partial string DouyinStatus { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 是否用浏览器底座（<c>douyin.driver = web</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 界面上只有一个开关而不是文本框：取值只有两个，写错的代价是"sidecar 连上了但不收发"
+    /// （驱动闸门会拒），比任何自由输入都难查。
+    /// </remarks>
+    [ObservableProperty]
+    public partial bool DouyinUseWebDriver { get; set; }
+
     // ── 抖音状态卡 ────────────────────────────────────────────────
     [ObservableProperty]
     public partial bool DouyinConnected { get; set; }
@@ -268,6 +281,40 @@ public sealed partial class PlatformsViewModel : ObservableObject
     /// <summary>有二维码才显示那块白底容器（x:Load 用；VM 不碰 Visibility）。</summary>
     [ObservableProperty]
     public partial bool DouyinHasQr { get; set; }
+
+    // ── 抖音底座 / 浏览器体征（B1）────────────────────────────────
+    /// <summary>底座驱动（<c>web</c> / <c>im</c>）的中文文案。</summary>
+    [ObservableProperty]
+    public partial string DouyinDriverText { get; set; } = "底座未知（还没握手）";
+
+    /// <summary>浏览器体征文案（页面可用性 / 内存 / 上次动作）；im 底座时说明"不适用"。</summary>
+    [ObservableProperty]
+    public partial string DouyinBrowserText { get; set; } = string.Empty;
+
+    // ── 登录挑战（短信 / 滑块）────────────────────────────────────
+    /// <summary>当前挑战类型（<c>sms</c> / <c>slider</c>）；空 = 没有挑战。</summary>
+    [ObservableProperty]
+    public partial string DouyinChallengeKind { get; set; } = string.Empty;
+
+    /// <summary>有挑战才显示那块面板（x:Load 用）。</summary>
+    [ObservableProperty]
+    public partial bool DouyinHasChallenge { get; set; }
+
+    /// <summary>挑战说明（服务端给的人话 + 我们自己补的操作提示）。</summary>
+    [ObservableProperty]
+    public partial string DouyinChallengeHint { get; set; } = string.Empty;
+
+    /// <summary>短信验证码输入（只对 sms 有意义）。</summary>
+    [ObservableProperty]
+    public partial string DouyinChallengeInput { get; set; } = string.Empty;
+
+    /// <summary>滑块背景图（只对 slider 有意义）。</summary>
+    [ObservableProperty]
+    public partial ImageSource? DouyinChallengeImage { get; set; }
+
+    /// <summary>挑战提交结果（成功 / 失败原因）。</summary>
+    [ObservableProperty]
+    public partial string DouyinChallengeStatus { get; set; } = string.Empty;
 
     /// <summary>刷新页面（两个 Tab 一起刷）。</summary>
     [RelayCommand]
@@ -592,6 +639,27 @@ public sealed partial class PlatformsViewModel : ObservableObject
             : douyin.Endpoint;
 
         // 登录态：**旧服务端的 douyin 块里没有 loginState（空串）** → 登录/退出按钮禁用
+        DouyinUseWebDriver = string.Equals(douyin.Driver?.Trim(), "web", StringComparison.OrdinalIgnoreCase);
+        DouyinDriverText = douyin.Driver?.Trim().ToLowerInvariant() switch
+        {
+            "web" => "web（浏览器底座）",
+            "im" => "im（douyin-im 底座）",
+            _ => "底座未知（sidecar 还没握手）",
+        };
+
+        DouyinBrowserText = douyin.Browser is { } browser
+            ? $"页面 {BrowserPageLabel(browser.Page)}｜渲染堆 {browser.MemoryMb} MB｜上次动作：{browser.LastAction ?? "-"}"
+              + (string.IsNullOrWhiteSpace(browser.Note) ? string.Empty : $"｜备注：{browser.Note}")
+            : (string.Equals(douyin.Driver, "web", StringComparison.OrdinalIgnoreCase)
+                ? "浏览器体征还没上报（sidecar 刚起或页面没起来）"
+                : "浏览器体征仅 web 底座有（当前不是 web）");
+
+        // 被拒的说明必须显示：否则用户只看到"连不上"，根本想不到是 driver 配错了
+        if (!string.IsNullOrWhiteSpace(douyin.DriverRejectNote))
+        {
+            DouyinStateText = $"已拒绝一条 sidecar 连接：{douyin.DriverRejectNote}";
+        }
+
         DouyinLoginStateText = LoginStateLabel(douyin.LoginState);
         DouyinLoginAvailable = !string.IsNullOrWhiteSpace(douyin.LoginState);
         if (!DouyinLoginAvailable)
@@ -767,9 +835,12 @@ public sealed partial class PlatformsViewModel : ObservableObject
             DouyinLoginStatus = $"登录出错：{info.Message}";
         }
 
+        await ApplyChallengeAsync(info.Challenge).ConfigureAwait(true);
+
         if (string.Equals(info.State, "loggedOut", StringComparison.OrdinalIgnoreCase))
         {
             ClearQr();
+            ClearChallenge();
             return;
         }
 
@@ -778,6 +849,7 @@ public sealed partial class PlatformsViewModel : ObservableObject
         if (string.Equals(info.State, "online", StringComparison.OrdinalIgnoreCase))
         {
             ClearQr();
+            ClearChallenge();
             return;
         }
 
@@ -835,6 +907,146 @@ public sealed partial class PlatformsViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 把服务端给的挑战铺到界面：短信弹输入框、滑块显示背景图。
+    /// 没有挑战就收起面板（**不残留上一次的提示**，否则用户会以为是新问题）。
+    /// </summary>
+    private async Task ApplyChallengeAsync(DouyinChallengeDto? challenge)
+    {
+        if (challenge is null || string.IsNullOrWhiteSpace(challenge.Kind))
+        {
+            ClearChallenge();
+            return;
+        }
+
+        var kind = challenge.Kind.Trim().ToLowerInvariant();
+        DouyinChallengeKind = kind;
+        DouyinHasChallenge = true;
+        DouyinChallengeHint = kind switch
+        {
+            "sms" => challenge.Hint ?? "输入手机收到的验证码",
+            "slider" => $"给缺口水平偏移（像素）：{challenge.Hint ?? "拖到缺口位置"}",
+            _ => challenge.Hint ?? "按提示完成人机校验",
+        };
+
+        if (kind == "slider" && !string.IsNullOrWhiteSpace(challenge.BgBase64))
+        {
+            await SetChallengeImageAsync(challenge.BgBase64!).ConfigureAwait(true);
+        }
+        else if (kind == "sms")
+        {
+            // 短信挑战不需要图：把上一张滑块图释放掉，别留着占内存
+            ClearChallengeImage();
+        }
+    }
+
+    private void ClearChallenge()
+    {
+        DouyinHasChallenge = false;
+        DouyinChallengeKind = string.Empty;
+        DouyinChallengeHint = string.Empty;
+        DouyinChallengeInput = string.Empty;
+        ClearChallengeImage();
+    }
+
+    private void ClearChallengeImage()
+    {
+        _challengeStream?.Dispose();
+        _challengeStream = null;
+        DouyinChallengeImage = null;
+    }
+
+    /// <summary>滑块背景图 base64 → BitmapImage（WinUI3 不支持 data: URI，必须走流）。</summary>
+    private async Task SetChallengeImageAsync(string base64)
+    {
+        var stream = new InMemoryRandomAccessStream();
+        try
+        {
+            var bytes = Convert.FromBase64String(base64);
+            var writer = new DataWriter(stream);
+            writer.WriteBytes(bytes);
+            await writer.StoreAsync();
+            await writer.FlushAsync();
+            writer.DetachStream();
+            writer.Dispose();
+
+            stream.Seek(0);
+            var image = new BitmapImage();
+            await image.SetSourceAsync(stream);
+
+            _challengeStream?.Dispose();
+            _challengeStream = stream;
+            DouyinChallengeImage = image;
+        }
+        catch (Exception ex)
+        {
+            stream.Dispose();
+            DouyinChallengeStatus = $"挑战图片显示失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>提交挑战答案（短信码 / 滑块偏移）；成功后按返回的登录态刷新界面。</summary>
+    [RelayCommand]
+    private async Task SubmitDouyinChallengeAsync()
+    {
+        var kind = DouyinChallengeKind;
+        var value = DouyinChallengeInput.Trim();
+        if (kind.Length == 0)
+        {
+            DouyinChallengeStatus = "当前没有等待回填的挑战";
+            return;
+        }
+
+        if (value.Length == 0)
+        {
+            DouyinChallengeStatus = kind == "slider" ? "请先填缺口偏移（像素）" : "请先填验证码";
+            return;
+        }
+
+        try
+        {
+            DouyinChallengeStatus = "提交中…";
+            var payload = new Dictionary<string, object?>
+            {
+                ["kind"] = kind,
+                ["value"] = value,
+            };
+
+            var info = await _api.CallAsync<DouyinLoginDto>("submitDouyinChallenge", payload)
+                .ConfigureAwait(true);
+
+            DouyinChallengeInput = string.Empty;
+            await ApplyLoginAsync(info).ConfigureAwait(true);
+
+            DouyinChallengeStatus = IsOnline(info)
+                ? "已登录"
+                : "已提交（若仍未通过，等服务端给出新的挑战）";
+
+            if (IsOnline(info))
+            {
+                await LoadPlatformsAsync().ConfigureAwait(true);
+            }
+        }
+        catch (ApiCallException ex) when (IsUnknownAction(ex))
+        {
+            DouyinChallengeStatus = "服务端不支持挑战回填（旧版本）";
+        }
+        catch (Exception ex)
+        {
+            DouyinChallengeStatus = $"提交失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>浏览器页面状态 → 中文。</summary>
+    private static string BrowserPageLabel(string? page) => page?.Trim().ToLowerInvariant() switch
+    {
+        "ok" => "可用",
+        "recycling" => "正在回收重建",
+        "crashed" => "已崩溃（会自动重建）",
+        "closed" => "已关闭",
+        _ => "未知",
+    };
+
     private void ClearQr()
     {
         _qrStream?.Dispose();
@@ -877,6 +1089,8 @@ public sealed partial class PlatformsViewModel : ObservableObject
                 ["sendTimeoutMs"] = ToPositiveInt(DouyinSendTimeoutMs, DefaultSendTimeoutMs),
                 ["maxTextLength"] = ToPositiveInt(DouyinMaxTextLength, DefaultMaxTextLength),
                 ["queryTimeoutMs"] = ToPositiveInt(DouyinQueryTimeoutMs, DefaultQueryTimeoutMs),
+                // 底座驱动：web（浏览器 sidecar）/ im（douyin-im sidecar）
+                ["driver"] = DouyinUseWebDriver ? "web" : "im",
             };
 
             var token = DouyinTokenInput.Trim();

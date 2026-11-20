@@ -203,6 +203,10 @@
                                 </StackPanel>
                                 <TextBlock Text="{x:Bind Vm.DouyinEndpointText, Mode=OneWay}"
                                            Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                                <TextBlock Text="{x:Bind Vm.DouyinDriverText, Mode=OneWay}"
+                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                                <TextBlock Text="{x:Bind Vm.DouyinBrowserText, Mode=OneWay}"
+                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
 
                                 <!-- 登录态 + 登录/退出（二维码由 sidecar 生成，这边只负责显示） -->
                                 <StackPanel Spacing="8">
@@ -234,6 +238,27 @@
                                         <Image Source="{x:Bind Vm.DouyinQrImage, Mode=OneWay}"
                                                Width="220" Height="220" Stretch="Uniform" />
                                     </Border>
+
+                                    <!-- 登录挑战（短信 / 滑块）：服务端说"卡在哪一步"，这里负责让人回答 -->
+                                    <StackPanel x:Name="DouyinChallengePanel" Spacing="6"
+                                                x:Load="{x:Bind Vm.DouyinHasChallenge, Mode=OneWay}">
+                                        <TextBlock Text="登录需要人工校验" FontWeight="SemiBold" />
+                                        <TextBlock Text="{x:Bind Vm.DouyinChallengeHint, Mode=OneWay}"
+                                                   Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                                        <Image Source="{x:Bind Vm.DouyinChallengeImage, Mode=OneWay}"
+                                               MaxWidth="320" Stretch="Uniform" HorizontalAlignment="Left" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBox Width="200"
+                                                     PlaceholderText="验证码 / 偏移像素"
+                                                     Text="{x:Bind Vm.DouyinChallengeInput, Mode=TwoWay}" />
+                                            <Button Content="提交"
+                                                    Style="{StaticResource JpAccentButtonStyle}"
+                                                    Command="{x:Bind Vm.SubmitDouyinChallengeCommand}" />
+                                            <TextBlock Text="{x:Bind Vm.DouyinChallengeStatus, Mode=OneWay}"
+                                                       Style="{StaticResource CaptionStyle}" VerticalAlignment="Center"
+                                                       TextWrapping="Wrap" MaxWidth="320" />
+                                        </StackPanel>
+                                    </StackPanel>
                                 </StackPanel>
 
                                 <TextBlock Text="sidecar 是独立的 Node 进程（douyin-sidecar/），要单独部署并主动连入 /ws/channel —— 本页只改配置，不负责拉起它。"
@@ -247,6 +272,11 @@
                                 <TextBlock Text="抖音配置" Style="{StaticResource SectionHeaderStyle}" />
                                 <ToggleSwitch Header="启用抖音通道（关掉后 /ws/channel 返回 404）"
                                               IsOn="{x:Bind Vm.DouyinEnabled, Mode=TwoWay}" />
+
+                                <ToggleSwitch Header="使用浏览器底座（douyin-web-sidecar；关 = 旧 douyin-im 底座）"
+                                              IsOn="{x:Bind Vm.DouyinUseWebDriver, Mode=TwoWay}" />
+                                <TextBlock Style="{StaticResource CaptionStyle}" TextWrapping="Wrap"
+                                           Text="切换后要保存；底座不一致的 sidecar 会被拒（日志与上方状态卡会写明原因）。" />
 
                                 <StackPanel Spacing="4">
                                     <PasswordBox Header="Sidecar Token"

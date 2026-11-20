@@ -160,6 +160,62 @@ public sealed class DouyinPlatformDto
     /// </summary>
     [JsonPropertyName("loginState")]
     public string LoginState { get; set; } = string.Empty;
+
+    /// <summary>已接受 sidecar 的底座驱动：<c>web</c>（浏览器）/ <c>im</c>（douyin-im）；未握手为空。</summary>
+    [JsonPropertyName("driver")]
+    public string? Driver { get; set; }
+
+    /// <summary>连接被拒的原因（驱动不匹配时有值）——**要显示出来**，否则用户只看到"连不上"。</summary>
+    [JsonPropertyName("driverRejectNote")]
+    public string? DriverRejectNote { get; set; }
+
+    /// <summary>浏览器体征（<c>browser.state</c>）；旧 sidecar / im 底座时为 null。</summary>
+    [JsonPropertyName("browser")]
+    public DouyinBrowserDto? Browser { get; set; }
+}
+
+/// <summary>浏览器体征（<c>getPlatforms.douyin.browser</c>）。</summary>
+public sealed class DouyinBrowserDto
+{
+    /// <summary><c>ok</c> / <c>recycling</c> / <c>crashed</c> / <c>closed</c> / <c>unknown</c>。</summary>
+    [JsonPropertyName("page")]
+    public string? Page { get; set; }
+
+    /// <summary>渲染堆占用（MB）；0 = 没测到。</summary>
+    [JsonPropertyName("memoryMb")]
+    public int MemoryMb { get; set; }
+
+    /// <summary>上一个动作（人话）。</summary>
+    [JsonPropertyName("lastAction")]
+    public string? LastAction { get; set; }
+
+    /// <summary>回收 / 崩溃原因。</summary>
+    [JsonPropertyName("note")]
+    public string? Note { get; set; }
+}
+
+/// <summary>登录挑战（短信 / 滑块）：<c>getDouyinLogin.challenge</c>。</summary>
+/// <remarks>
+/// 浏览器底座的登录除扫码外还可能被要求过验证码 / 滑块；服务端把这个"卡在哪一步"透出来，
+/// 客户端据此弹输入框或拖滑块，**不再让用户对着静态二维码干等**。
+/// </remarks>
+public sealed class DouyinChallengeDto
+{
+    /// <summary><c>sms</c> / <c>slider</c>。</summary>
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = string.Empty;
+
+    /// <summary>给用户看的提示。</summary>
+    [JsonPropertyName("hint")]
+    public string? Hint { get; set; }
+
+    /// <summary>滑块背景图（PNG base64）；短信挑战为 null。</summary>
+    [JsonPropertyName("bgBase64")]
+    public string? BgBase64 { get; set; }
+
+    /// <summary>滑块拼图块（PNG base64）；可能为 null。</summary>
+    [JsonPropertyName("pieceBase64")]
+    public string? PieceBase64 { get; set; }
 }
 
 /// <summary>抖音登录态详情（<c>getDouyinLogin</c> / <c>startDouyinLogin</c>）。</summary>
@@ -190,6 +246,13 @@ public sealed class DouyinLoginDto
     /// <summary>出错时的原因（<c>state = error</c> 才有）；其它状态通常 null。</summary>
     [JsonPropertyName("message")]
     public string? Message { get; set; }
+
+    /// <summary>
+    /// 当前等待回填的登录挑战（短信 / 滑块）；没有则为 null。
+    /// **旧服务端不返回 → null**，界面按"没有挑战"处理（与旧行为一致）。
+    /// </summary>
+    [JsonPropertyName("challenge")]
+    public DouyinChallengeDto? Challenge { get; set; }
 }
 
 /// <summary>退出抖音登录的结果（<c>logoutDouyin</c>）。</summary>
