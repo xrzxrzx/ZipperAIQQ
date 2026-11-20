@@ -1,7 +1,7 @@
 /**
  * `douyin-web-sidecar` 的**协议层（纯函数）**。
  *
- * 定位与 `douyin-sidecar/src/bridge.ts` 的「① 翻译层」一致：不碰网络、不碰浏览器、不碰 Playwright，
+ * 定位与已移除的 `douyin-sidecar/src/bridge.ts`「① 翻译层」一致：不碰网络、不碰浏览器、不碰 Playwright，
  * 只做「帧 ↔ 平台无关模型」的翻译与校验，便于 `node --test` 直接喂假数据（实施方案 §7 单测层）。
  *
  * 分四块：
@@ -331,6 +331,8 @@ export interface NormalizedInbound {
   timeFromPlatform: boolean;
   /** 分享卡片的视频 id（B4 取媒体用；B1 只是留字段）。 */
   sharedItemId?: string;
+  /** 从会话 ID 反推出的「自己」（学习用；`null` = 这次学不到）。 */
+  selfCandidate?: string | null;
 }
 
 /**
@@ -355,10 +357,12 @@ export function normalizePrivateMessage(
   const conversationType = body.conversationType ?? 0;
   const chatType: ChatType = conversationType === 2 ? "group" : "private";
 
-  const peer = resolveThreadId(conversationId, body.sender ?? "", selfUid, chatType);
-  if (!peer) {
+  const resolution = resolveThreadId(conversationId, body.sender ?? "", selfUid, chatType);
+  if (!resolution) {
     return null;
   }
+
+  const peer = resolution.peer;
 
   const content = parseContentJson(body.content);
   const placeholders: string[] = [];
@@ -444,6 +448,7 @@ export function normalizePrivateMessage(
     occurredAtMs,
     timeFromPlatform: Boolean(createTime && createTime > 0),
     sharedItemId,
+    selfCandidate: resolution.selfCandidate,
   };
 }
 
@@ -493,36 +498,56 @@ export function toInboundFrame(event: NormalizedInbound): Frame {
  * 私聊取「不是自己的那个 uid」；群聊取最后一段（群 id）。
  * 拿不到就返回 `null` —— 宁可丢一条，也不要凭空编一个会话出来。
  */
+export interface ThreadResolution {
+  /** 会话里「对方」的 id。 */
+  peer: string;
+  /**
+   * 顺手学到的「自己」的 id（`null` = 这次学不到）。
+   *
+   * 为什么需要它：web 侧拿到的 uid 与 IM 侧的 uid 可能不是同一个值
+   * （2026-11-20 真机：self-profile 接口给 `472138`，而会话里的 IM uid 是 16 位），
+   * 直接用错的 uid 去反推「对方」，会把消息挂到错误的会话上。
+   * 所以这里**从会话 ID 反推**：入站消息的发送者一定是对方，另一个就是自己。
+   */
+  selfCandidate: string | null;
+}
+
 export function resolveThreadId(
   conversationId: string,
   sender: string,
   selfUid: string | null,
   chatType: ChatType,
-): string | null {
+): ThreadResolution | null {
   const parts = conversationId.split(":").filter((part) => part.length > 0);
   if (parts.length === 0) {
     return null;
   }
 
   if (chatType === "group") {
-    return parts[parts.length - 1] ?? null;
+    const groupId = parts[parts.length - 1] ?? null;
+    return groupId ? { peer: groupId, selfCandidate: null } : null;
   }
 
   const uids = parts.slice(2);
-
-  // 只能靠「不是我」来定位对方 —— 不知道自己是谁时**必须放弃**：
-  // 用发送者反推的话，对方发消息时会把"对方"算成自己，消息直接挂到错误的会话上。
-  if (!selfUid) {
+  if (uids.length === 0) {
     return null;
   }
 
-  const other = uids.find((uid) => uid !== selfUid);
-  if (other) {
-    return other;
+  // 已知自己是谁：对方 = 「不是我」的那个
+  if (selfUid && uids.includes(selfUid)) {
+    const other = uids.find((uid) => uid !== selfUid);
+    return other ? { peer: other, selfCandidate: null } : null;
   }
 
-  // 群聊之外的兜底：会话里只有自己（自己给自己发），就当对方是自己 —— 这种情况极少
-  return uids.includes(sender) && uids.length === 1 ? uids[0] ?? null : null;
+  // 不知道自己是谁（或探测到的 uid 与 IM 侧不一致）：
+  // 入站消息的发送者**就是对方**，另一个 id 就是自己 —— 直接用它，并把这个"自己"带回去学习。
+  if (sender && uids.includes(sender)) {
+    const other = uids.find((uid) => uid !== sender);
+    return { peer: sender, selfCandidate: other ?? null };
+  }
+
+  // 连发送者都对不上：不猜，宁可丢这条
+  return null;
 }
 
 // ═══════════════════════════ ④ 幂等 LRU ═══════════════════════════

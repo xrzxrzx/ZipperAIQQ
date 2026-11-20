@@ -261,7 +261,7 @@
                                     </StackPanel>
                                 </StackPanel>
 
-                                <TextBlock Text="sidecar 是独立的 Node 进程（douyin-sidecar/），要单独部署并主动连入 /ws/channel —— 本页只改配置，不负责拉起它。"
+                                <TextBlock Text="sidecar 是独立的 Node 进程（douyin-web-sidecar/，Playwright 浏览器底座），要单独部署并主动连入 /ws/channel —— 本页只改配置，不负责拉起它。"
                                            Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
                             </StackPanel>
                         </Border>

@@ -49,6 +49,8 @@ export interface InboundListenerOptions {
   names: ConversationNameCache;
   /** 取自己的 uid（拿到之前返回 null）。 */
   selfUid: () => string | null;
+  /** 学到「自己」的 IM uid 时回调（web 侧探测值与 IM uid 不一致时靠它纠正）。 */
+  onSelfLearned?: (selfUid: string) => void;
 }
 
 /** 入站旁听器。 */
@@ -57,6 +59,7 @@ export class InboundListener {
   private readonly emit: (frame: ChannelFrame) => void;
   private readonly names: ConversationNameCache;
   private readonly selfUid: () => string | null;
+  private readonly onSelfLearned?: (selfUid: string) => void;
   private readonly protoPath: string;
 
   private protoRoot: protobuf.Root | null = null;
@@ -72,6 +75,9 @@ export class InboundListener {
   /** 最近一次收到任何 WS 帧的时间（DOM 兜底的判据）。 */
   private lastFrameAt = 0;
 
+  /** 从会话 ID 学到的自身 IM uid（优先于探测值）。 */
+  private learnedSelf: string | null = null;
+
   /** 统计（`browser.state` 与排障用）。 */
   private stats = { frames: 0, messages: 0, interactions: 0, strangers: 0, dropped: 0 };
 
@@ -80,6 +86,7 @@ export class InboundListener {
     this.emit = options.emit;
     this.names = options.names;
     this.selfUid = options.selfUid;
+    this.onSelfLearned = options.onSelfLearned;
     this.protoPath = options.protoPath;
   }
 
@@ -328,6 +335,13 @@ export class InboundListener {
       this.stats.dropped += 1;
       this.log.debug(`重复入站消息已丢弃：${normalized.messageId}`);
       return;
+    }
+
+    // 自己是谁：web 侧探测到的 uid 可能与 IM uid 不一致 —— 用会话 ID 反推出来的值纠正它
+    if (!selfUid && normalized.selfCandidate && !this.learnedSelf) {
+      this.learnedSelf = normalized.selfCandidate;
+      this.log.info(`已从会话 ID 学到自身 IM uid：${this.learnedSelf}`);
+      this.onSelfLearned?.(this.learnedSelf);
     }
 
     // 昵称：协议体里没有，靠会话名缓存（列表扫描 / 打开会话时学的）

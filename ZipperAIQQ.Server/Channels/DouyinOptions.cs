@@ -6,7 +6,7 @@ namespace ZipperAIQQ.Server.Channels;
 /// <remarks>
 /// <para>
 /// 两个 sidecar 都往同一个 <c>/ws/channel</c> 反连，服务端靠 <c>hello.driver</c> 区分：
-/// <c>im</c> = <c>douyin-sidecar</c>（<c>douyin-im</c> 底座，旧），
+/// <c>im</c> = <c>douyin-im</c> 底座（旧，其 sidecar 已于 2026-11-21 从仓库移除，仅作回退档位保留），
 /// <c>web</c> = <c>douyin-web-sidecar</c>（Playwright + 网页版，新）。
 /// </para>
 /// <para>

@@ -128,7 +128,15 @@ export class DouyinBrowser {
       locale: "zh-CN",
       userAgent: this.options.userAgent,
       // 关掉最明显的自动化特征（不追求"完美隐身"，只是别一眼被认出来）
-      args: ["--disable-blink-features=AutomationControlled", "--no-first-run"],
+      // 另外三条是**入站可靠性**的关键：后台/不可见页面会被 Chromium 节流，
+      // 页面被节流后抖音可能退成 HTTP 轮询、不往 WS 推消息（入站就哑了）。
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--no-first-run",
+        "--disable-background-timer-throttling",
+        "--disable-renderer-backgrounding",
+        "--disable-backgrounding-occluded-windows",
+      ],
       timeout: 60_000,
     });
 
@@ -179,6 +187,9 @@ export class DouyinBrowser {
           this.log.warn(`页面 ${targetPathOf(url)} 20 秒内没有就绪证据，继续尝试`);
         });
     }
+
+    // 把页面提到前台：隐藏页面会收不到 WS 推送（实测入站哑掉时加这一条）
+    await page.bringToFront().catch(() => undefined);
 
     this.update({ page: "ok", lastAction: `打开 ${targetPathOf(url)}` });
     return page;

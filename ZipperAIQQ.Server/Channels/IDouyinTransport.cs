@@ -5,7 +5,7 @@ namespace ZipperAIQQ.Server.Channels;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 为什么要单独一层：抖底座有两条 sidecar（<c>douyin-sidecar</c> 的 <c>im</c>、
+/// 为什么要单独一层：抖音曾有两条 sidecar（<c>im</c> 的已移除，现只剩 <c>web</c> 的
 /// <c>douyin-web-sidecar</c> 的 <c>web</c>），它们**共用同一套帧协议**，唯一要区别的是
 /// 「谁连进来的」—— 用于 <c>douyin.driver</c> 闸门、日志、状态页。
 /// 帧语义（<c>hello</c> / <c>inbound</c> / <c>ack</c>…）仍在 <see cref="DouyinChannel"/>，传输层**薄**。

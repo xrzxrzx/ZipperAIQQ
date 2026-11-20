@@ -21,7 +21,7 @@ namespace ZipperAIQQ.Channel.Models;
 /// </para>
 /// <para>
 /// ⚠️ 这 4 个抖音类型的**平台原始类型串（<see cref="IncomingNotice.RawType"/>）不由本仓库决定**：
-/// 真实取值由 <c>douyin-sidecar</c> 出，S3-E 联调时再对齐映射。在映射层落地之前它们只是
+/// 真实取值由抖音通道实现（当前为 <c>douyin-web-sidecar</c>）出，S3-E 联调时再对齐映射。在映射层落地之前它们只是
 /// "可配置的语义位"，**不要凭想象写 <c>"friend_request"</c> 之类猜出来的串**。
 /// </para>
 /// </remarks>

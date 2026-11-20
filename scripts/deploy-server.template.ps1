@@ -35,10 +35,6 @@ param(
     [switch]$SkipBuild,
 
     # ── 抖音 sidecar（和服务器一起部署）──
-    [switch]$WithSidecar,
-    [string]$SidecarToken,
-    [switch]$InstallNode,
-    [string]$NodeVersion = '22.23.4'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -85,80 +81,6 @@ function Start-Remote {
 }
 
 
-function Deploy-Sidecar {
-    Step '部署抖音 sidecar'
-    $sidecarDir = Join-Path $repoRoot 'douyin-sidecar'
-    if (-not (Test-Path $sidecarDir)) { Warn "没有 $sidecarDir，跳过"; return }
-
-    $remoteSidecar = "$TargetPath\douyin-sidecar"
-    $remoteSidecarPosix = $remoteSidecar -replace '\\', '/'
-
-    # ① Node：没有就装（MSI 静默安装；-InstallNode 才动手，避免静默改系统）
-    $nodeVersion = Invoke-Remote "if (Get-Command node -ErrorAction SilentlyContinue) { (node -v) } else { 'missing' }"
-    if ($nodeVersion -notmatch '^v\d+') {
-        if (-not $InstallNode) {
-            Warn '服务器上没有 Node；加 -InstallNode 才会装（会被装成系统级）'
-            return
-        }
-
-        Step "安装 Node v$NodeVersion（MSI 静默）"
-        $msi = "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-x64.msi"
-        $install = Invoke-Remote @"
-`$msi = Join-Path `$env:TEMP 'node-install.msi';
-`$ProgressPreference = 'SilentlyContinue';
-Invoke-WebRequest -Uri '$msi' -OutFile `$msi -UseBasicParsing;
-`$p = Start-Process msiexec.exe -ArgumentList '/i', `$msi, '/qn', '/norestart' -Wait -PassThru;
-Remove-Item `$msi -Force -ErrorAction SilentlyContinue;
-'miExit=' + `$p.ExitCode + ' node=' + (& 'C:\Program Files\nodejs\node.exe' -v)
-"@
-        Write-Host "  $install"
-        if ($install -notmatch 'node=v\d+') { throw 'Node 安装后仍不可用，停止部署 sidecar' }
-        Ok 'Node 已安装'
-    }
-    else { Ok "服务器已有 node $nodeVersion" }
-
-    # ② 传源码与依赖清单（不含 node_modules / data / 登录态）
-    Invoke-Remote "New-Item -ItemType Directory -Force -Path '$remoteSidecar\src' | Out-Null; 'ok'" | Out-Null
-    foreach ($f in @('package.json', 'src/bridge.ts')) {
-        & scp -q -o BatchMode=yes (Join-Path $sidecarDir ($f -replace '/', '\')) "${remote}:$remoteSidecarPosix/$f"
-        if ($LASTEXITCODE -ne 0) { throw "sidecar 上传失败：$f" }
-    }
-    Ok 'sidecar 源码已传'
-
-    # ③ 启动脚本（token 写在这个只在本机运行的 cmd 里；不放进 git、不写进日志）
-    $tokenLine = if ($SidecarToken) { "set ZIPPER_DOUYIN_TOKEN=$SidecarToken" } else { 'rem 未配置 token（服务端若配了 token，这里必须一致）' }
-    $cmd = @"
-@echo off
-cd /d $remoteSidecar
-set ZIPPER_DOUYIN_SERVER_URL=ws://127.0.0.1:5180/ws/channel
-$tokenLine
-set ZIPPER_DOUYIN_DATA_DIR=data
-set ZIPPER_DOUYIN_LOG_LEVEL=info
-set PATH=C:\Program Files\nodejs;%PATH%
-node dist\bridge.js >> sidecar.log 2>&1
-"@
-    $tmp = Join-Path $env:TEMP 'zipper-sidecar-run.cmd'
-    Set-Content -Path $tmp -Value $cmd -Encoding ASCII
-    & scp -q -o BatchMode=yes $tmp "${remote}:$remoteSidecarPosix/run-sidecar.cmd"
-    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-    if ($LASTEXITCODE -ne 0) { throw 'run-sidecar.cmd 上传失败' }
-
-    # ④ 装依赖 + 编译 + 注册计划任务 + 启动
-    $r = Invoke-Remote @"
-Set-Location '$remoteSidecar';
-`$env:Path = 'C:\Program Files\nodejs;' + `$env:Path;
-& npm install --no-audit --no-fund 2>&1 | Select-Object -Last 3;
-& npm run build 2>&1 | Select-Object -Last 3;
-Write-Host ('build exit=' + `$LASTEXITCODE);
-if (`$LASTEXITCODE -eq 0) {
-  schtasks /create /f /tn ZipperAIQQ-DouyinSidecar /tr '$remoteSidecar\run-sidecar.cmd' /sc onstart /ru SYSTEM 2>&1 | Out-Null;
-  schtasks /end /tn ZipperAIQQ-DouyinSidecar 2>&1 | Out-Null;
-  Start-Sleep -Seconds 1;
-  schtasks /run /tn ZipperAIQQ-DouyinSidecar 2>&1 | Out-Null;
-  Start-Sleep -Seconds 12;
-  Write-Host ('nodeCount=' + (Get-Process node -ErrorAction SilentlyContinue | Measure-Object).Count);
-  if (Test-Path 'sidecar.log') { Get-Content 'sidecar.log' -Tail 6 }
-}
 "@
     Write-Host $r
 
@@ -228,9 +150,9 @@ switch ($Action) {
 
         Start-Remote
 
-        if ($WithSidecar) {
-            Deploy-Sidecar
-        }
+        # 抖音底座已换成 douyin-web-sidecar（Playwright 浏览器底座）；
+        # 它的部署不在这份脚本里：见 docs/08-上手/抖音web底座部署与登录.md
+        # 与 scripts/douyin-web-sidecar-deploy.template.ps1
     }
 }
 

@@ -3,7 +3,7 @@
 抖音**浏览器底座** sidecar：Playwright 驱动真实 Chromium 打开抖音网页版，
 把私信收发接进 ZipperAIQQ 的 `/ws/channel`。
 
-> **为什么有这个项目**：`douyin-sidecar`（`douyin-im` 底层）自 2026-11-17 起出站被平台按版本拒绝
+> **为什么有这个项目**：原 `douyin-sidecar`（`douyin-im` 底层，已移除）自 2026-11-17 起出站被平台按版本拒绝
 > （`status=3 check=10509 请前往「抖音聊天」官网，升级最新版本`），而 npm 上 `douyin-im` 只有 1.1.0、
 > 仓库没有 releases —— **没有可升目标**。网页版实测能收发私信、能读评论（PoC P-4/P-5），
 > 于是把「出站 + 主站能力」交给浏览器（决策 O4，见 `docs/问题记录/问题记录-06-*.md` 附录 C）。

@@ -17,7 +17,7 @@ namespace ZipperAIQQ.Channel.Models;
 /// **不要在别处再写一份 switch**（两份迟早漂移）。
 /// </para>
 /// <para>
-/// 抖音这 4 个类型的原始类型串（<see cref="IncomingNotice.RawType"/>）由 <c>douyin-sidecar</c> 决定，
+/// 抖音这 4 个类型的原始类型串（<see cref="IncomingNotice.RawType"/>）由抖音通道实现（当前为 <c>douyin-web-sidecar</c>）决定，
 /// 本表**只管平台归属**，不负责 RawType 映射；映射在 S3-E 联调时落地。
 /// </para>
 /// </remarks>

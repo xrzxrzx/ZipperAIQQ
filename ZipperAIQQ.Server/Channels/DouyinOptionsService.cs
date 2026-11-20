@@ -157,7 +157,7 @@ public sealed class DouyinOptionsService
 
         _logger.Information("抖音底座驱动：{Driver}（{Meaning}）",
             _current.Driver,
-            _current.Driver == DouyinDriver.Web ? "浏览器 / douyin-web-sidecar" : "douyin-im / douyin-sidecar");
+            _current.Driver == DouyinDriver.Web ? "浏览器 / douyin-web-sidecar" : "douyin-im（旧底座，已移除）");
     }
 
     /// <summary>

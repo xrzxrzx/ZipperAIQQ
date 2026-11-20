@@ -263,9 +263,9 @@ test("normalizePrivateMessage：视频 / 分享卡片降级成占位", () => {
 });
 
 test("resolveThreadId：私聊取「不是自己」的那个 uid；群聊取最后一段", () => {
-  assert.equal(resolveThreadId(CONVERSATION, SELF, SELF, "private"), PEER);
-  assert.equal(resolveThreadId(CONVERSATION, PEER, SELF, "private"), PEER);
-  assert.equal(resolveThreadId("0:2:555:777", PEER, SELF, "group"), "777");
+  assert.equal(resolveThreadId(CONVERSATION, SELF, SELF, "private")?.peer, PEER);
+  assert.equal(resolveThreadId(CONVERSATION, PEER, SELF, "private")?.peer, PEER);
+  assert.equal(resolveThreadId("0:2:555:777", PEER, SELF, "group")?.peer, "777");
   assert.equal(resolveThreadId("", PEER, SELF, "private"), null);
 });
 

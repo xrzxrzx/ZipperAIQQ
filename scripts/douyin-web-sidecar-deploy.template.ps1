@@ -3,7 +3,7 @@
     抖音 **浏览器底座** sidecar（douyin-web-sidecar）管理脚本模板。
 
 .DESCRIPTION
-    与 `douyin-sidecar-deploy` 的分工：那个管旧底座（douyin-im），这个管新底座（Playwright + 网页版）。
+    旧底座（`douyin-sidecar` / `douyin-im`）已于 2026-11-21 从仓库移除 —— 本脚本是**唯一**的抖音 sidecar 部署入口。
     两个 sidecar 都往同一个 `/ws/channel` 反连，**由服务端 `douyin.driver` 决定收哪一个**。
 
     ⚠️ 本文件是**模板**（占位符 `<server-ip-redacted>` 等要换成真值，或用参数覆盖）。

@@ -62,22 +62,36 @@ export type ChallengeDetection =
 export async function openChatPage(page: Page): Promise<void> {
   await page.goto(SITE.chatUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
 
-  // 等就绪谓词（会话列表 / 输入框任一出现）而不是固定 sleep：少 5 秒，且失败即超时可见
-  await page
-    .waitForFunction(
-      () =>
-        document.readyState === "complete" &&
-        (Boolean(document.querySelector('textarea, [contenteditable="true"]')) ||
-          Boolean(document.querySelector("div, li"))),
-      { timeout: 20_000 },
-    )
-    .catch(() => undefined);
+  // 等**真的能用**的证据：会话列表里出现至少一行。
+  // 原来只等 "有 div/li"，那在空壳页面也立刻成立 → 列表还没渲染就返回 0 行
+  // （2026-11-20 真机：query.contacts 返回 0，实际 8 秒后列表里就有「拉链」）。
+  await waitForConversationList(page, 25_000);
 
   const url = page.url();
   if (!url.includes("/chat")) {
     // 未登录会被弹回首页 / 登录页：这不是"页面坏了"，是登录态问题
     throw new Error(`未能进入私信页（当前 ${url}）：可能未登录`);
   }
+}
+
+/**
+ * 等会话列表渲染出来（**首行出现**即算就绪）。
+ *
+ * @returns 等到返回 `true`；超时返回 `false`（调用方决定报错还是降级，不静默）
+ */
+export async function waitForConversationList(page: Page, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + Math.max(1_000, timeoutMs);
+
+  while (Date.now() < deadline) {
+    const rows = await listConversations(page).catch(() => []);
+    if (rows.length > 0) {
+      return true;
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  return false;
 }
 
 /**

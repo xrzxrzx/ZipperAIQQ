@@ -2,7 +2,7 @@
 /**
  * ZipperAIQQ 抖音 **Web sidecar**（浏览器底座）入口。
  *
- * 与 `douyin-sidecar`（`douyin-im` 底座）的区别：
+ * 与已移除的 `douyin-sidecar`（`douyin-im` 底座）的区别：
  *   - 那边：`douyin-im` 管登录 + 收发事件；这边：Playwright 驱动真实 Chromium 走网页版
  *   - 为什么换：平台按客户端版本拒发（`status=3 check=10509`），`douyin-im` 无新版可升；
  *     而网页版能发私信、能读评论（PoC P-4/P-5 已实机验收）
@@ -205,6 +205,16 @@ class ChannelLink {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastInboundAt = 0;
 
+  /**
+   * 当前这次连接的「收尾函数」。
+   *
+   * 为什么需要它：服务端拒绝（驱动不符）后**直接 CloseAsync**，实测这条连接
+   * 既不发 `close` 也不发 `error`（2026-11-20 真机：socket readyState 已经不是 OPEN，
+   * 但 connectOnce 的 Promise 一直不 settle → 重连循环卡死，永远不再重连）。
+   * 心跳里发现「不是 OPEN」就手动收尾，把这个 Promise 解开。
+   */
+  private finishCurrent: ((error?: unknown) => void) | null = null;
+
   constructor(options: LinkOptions) {
     this.options = options;
   }
@@ -271,6 +281,7 @@ class ChannelLink {
         }
 
         settled = true;
+        this.finishCurrent = null;
         this.stopHeartbeat();
         if (this.socket === socket) {
           this.socket = null;
@@ -295,6 +306,7 @@ class ChannelLink {
       }
 
       this.socket = socket;
+      this.finishCurrent = finish;
 
       socket.addEventListener("open", () => {
         this.attempt = 0;
@@ -353,6 +365,14 @@ class ChannelLink {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
       if (this.stopped || this.socket !== socket) {
+        return;
+      }
+
+      // 连接已经不是 OPEN（服务端关了 / 半死）：主动收尾，别让重连循环卡在一个永不 settle 的 Promise 上
+      if (socket.readyState !== SOCKET_OPEN) {
+        this.options.log.warn(`连接状态为 ${socket.readyState}（非 OPEN），强制重连`);
+        this.options.log.debug("调用 finishCurrent 收尾");
+        this.finishCurrent?.(new Error("socket not open"));
         return;
       }
 
@@ -492,6 +512,24 @@ async function main(): Promise<void> {
     emit: send,
     names,
     selfUid: currentSelfUid,
+    onSelfLearned: (learned) => {
+      // 探测值（如 self-profile 的短 uid）与 IM uid 不一致时，以会话反推的为准
+      if (selfUid !== learned) {
+        log.warn(`自身 uid 以会话反推值为准：${learned}（原探测值 ${selfUid ?? "无"}）`);
+        selfUid = learned;
+
+        // 补发一次 hello：服务端只在 hello 里读 selfId，不补的话状态页一直显示错的那个
+        send(
+          makeFrame("hello", {
+            version: PROTOCOL_VERSION,
+            platform: PLATFORM,
+            driver: DRIVER,
+            selfId: selfUid,
+            capabilities: [...CAPABILITIES],
+          }),
+        );
+      }
+    },
   });
 
   browser.onPage((page) => {
@@ -618,9 +656,15 @@ async function main(): Promise<void> {
     try {
       const page = await browser.ensureChatPage(SITE.chatUrl);
       await openChatPage(page).catch((error: unknown) => {
-        log.debug(`刷新私信页失败（继续用当前页）：${error instanceof Error ? error.message : String(error)}`);
+        log.warn(`刷新私信页失败（继续用当前页）：${error instanceof Error ? error.message : String(error)}`);
       });
+
+      const health = await pageHealth(page);
       const rows = await listConversations(page);
+      log.info(
+        `query.contacts 扫描：url=${health.url} rows=${rows.length} ` +
+          `names=${rows.map((row) => row.name).join("|") || "(空)"} 输入框=${health.hasInput}`,
+      );
       names.refreshFromRows(rows);
 
       const contacts = rows
@@ -721,11 +765,11 @@ async function main(): Promise<void> {
   if (await browser.isLoggedIn().catch(() => false)) {
     selfUid = await browser.selfUid().catch(() => null);
     log.info(`检测到已有登录态：selfId=${selfUid ?? "(未探测到)"}`);
-    login.emitState();
 
-    // 同上：停在 /chat 才会有入站 WS
-    await browser.ensureChatPage(SITE.chatUrl).catch((error: unknown) => {
-      log.warn(`打开私信页失败（入站暂时收不到）：${error instanceof Error ? error.message : String(error)}`);
+    // 走 startLogin：它发现已登录 → markOnline（上报 login.state=online）+ 打开 /chat。
+    // 之前这里只 emitState()，状态还是 unknown —— 服务端/客户端一直显示"未知"（2026-11-20 真机发现）。
+    void login.startLogin().catch((error: unknown) => {
+      log.warn(`补报登录态失败：${error instanceof Error ? error.message : String(error)}`);
     });
   }
 
