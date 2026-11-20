@@ -42,6 +42,13 @@ export interface ConversationRef {
   conversationShortId?: string;
   /** `im_proto` 的 conversation_type：1=私聊 2=群。 */
   conversationType: number;
+  /**
+   * 最后一条**入站**文本（截断）。
+   *
+   * 用途：API 走不通时的 DOM 兜底要「点开那个会话」——
+   * 抖音的会话行预览里就有这条文本，用它定位比用昵称稳（昵称可能重名/为空）。
+   */
+  lastText?: string;
 }
 
 /**

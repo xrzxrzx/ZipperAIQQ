@@ -618,3 +618,64 @@ function pickCanonicalId(ids: string[]): string | null {
 
   return [...ids].sort((a, b) => b.length - a.length)[0] ?? null;
 }
+
+/**
+ * 重载私信页（**DOM 兜底的第一步**）。
+ *
+ * 为什么必须重载：`/chat` 的会话列表是前端在 `get_message_by_init` 之后才渲染的，
+ * 页面放着不动一段时间后列表可能只剩一个「抖音聊天」标题（实测 2026-11-21）。
+ * 重载一次就能把列表拉回来 —— 比"等一下再看"可靠得多。
+ */
+export async function reloadChatPage(page: Page): Promise<void> {
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await waitForConversationList(page, 25_000);
+}
+
+/**
+ * 按「会话行预览里的一段文字」找会话行。
+ *
+ * 为什么用预览文本而不是昵称：昵称可能重名、可能为空，而**刚收到的消息正文**
+ * 一定出现在行的预览里（入站帧里我们已经拿到了）。
+ */
+export async function findConversationRowByPreview(page: Page, needle: string): Promise<ConversationRow | null> {
+  const probe = needle.replace(/\s+/g, "").slice(0, 12);
+  if (!probe) {
+    return null;
+  }
+
+  const rows = await listConversations(page);
+  const hit = rows.find((row) => row.name.replace(/\s+/g, "").includes(probe));
+  return hit ?? null;
+}
+
+/** 点开一行的中心（列表是虚拟滚动，坐标点击最稳）。 */
+export async function clickConversationRow(page: Page, row: ConversationRow): Promise<void> {
+  await page.mouse.click(row.x + row.width / 2, row.y + row.height / 2);
+  await page.waitForTimeout(2_000);
+}
+
+/**
+ * 在当前已打开的会话里发一条文本并回读确认。
+ *
+ * @returns 是否在末尾看到刚发的那条
+ */
+export async function sendTextInOpenConversation(page: Page, text: string): Promise<boolean> {
+  const input = await findInput(page);
+  await input.click({ timeout: SITE.actionTimeoutMs });
+  await page.keyboard.type(text, { delay: 12 });
+  await page.waitForTimeout(300);
+  await page.keyboard.press("Enter");
+
+  const probe = text.replace(/\s+/g, "").slice(0, 12);
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    const tail = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+    if (tail.includes(probe)) {
+      return true;
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  return false;
+}

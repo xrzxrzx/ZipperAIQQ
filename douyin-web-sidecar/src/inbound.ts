@@ -360,6 +360,7 @@ export class InboundListener {
       conversationId: message.conversationId ?? "",
       conversationShortId: message.conversationShortId,
       conversationType: Number(message.conversationType ?? 1),
+      lastText: (normalized.text ?? "").trim().slice(0, 40),
     });
 
     this.stats.messages += 1;

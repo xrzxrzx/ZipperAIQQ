@@ -20,7 +20,14 @@ import {
   sessionIdFor,
 } from "./protocol.js";
 import type { ConversationRegistry, DouyinSendApi } from "./send-api.js";
-import { sendImage, SITE, type ConversationNameCache } from "./site.js";
+import {
+  clickConversationRow,
+  findConversationRowByPreview,
+  reloadChatPage,
+  sendTextInOpenConversation,
+  SITE,
+  type ConversationNameCache,
+} from "./site.js";
 
 /** 图片下载超时：CDN 挂住时不能把整条发送拖死。 */
 const IMAGE_FETCH_TIMEOUT_MS = 20_000;
@@ -81,47 +88,112 @@ export class OutboundSender {
     const target = this.conversations.get(plan.threadId);
 
     if (!target) {
-      // 发送只需要 conversation_id，而它只出现在入站帧里 —— 没收到过对方的消息就拿不到
       throw new OutboundError(
         "not_found",
-        `还没有这个会话的坐标（threadId=${plan.threadId}）：先让对方发一条消息，` +
-          "入站帧里才会带 conversation_id",
+        `还没有这个会话的坐标（threadId=${plan.threadId}）：先让对方发一条消息，入站帧里才会带 conversation_id`,
       );
     }
 
     const page = await this.browser.page;
 
-    let chunks = 0;
-    for (const chunk of plan.chunks) {
-      const clientMessageId = crypto.randomUUID();
-      const result = await this.api.sendText(page, target, chunk, clientMessageId);
+    // ① 首选：HTTP API（页面上下文 fetch）。签名头/msToken 由页面提供，我们只复刻请求体。
+    try {
+      let chunks = 0;
+      for (const chunk of plan.chunks) {
+        const result = await this.api.sendText(page, target, chunk, crypto.randomUUID());
+        if (!result.ok) {
+          throw new OutboundError(
+            result.statusCode === 10509 ? "risk" : "unknown",
+            `抖音发送失败：status=${result.statusCode} ${result.errorDesc ?? ""}`.trim(),
+          );
+        }
 
-      if (!result.ok) {
-        throw new OutboundError(
-          result.statusCode === 10509 ? "risk" : "unknown",
-          `抖音发送失败：status=${result.statusCode} ${result.errorDesc ?? ""}`.trim(),
-        );
+        chunks += 1;
       }
 
-      chunks += 1;
+      const degraded = this.collectDegraded(plan);
+      this.log.info(`API 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
+      return { chunks, images: 0, degraded };
+    } catch (error) {
+      // ② 回落：DOM（重载 → 按刚收到的消息预览定位会话行 → 点开 → 输入 → 回读）
+      //    API 的失败原因**不吞**：写日志并在两条路都失败时一起报给上层。
+      const apiFailure = error instanceof Error ? error.message : String(error);
+      this.log.warn(`API 出站失败，改用 DOM 兜底：${apiFailure}`);
+      try {
+        const chunks = await this.sendByDom(page, plan, target);
+        const degraded = this.collectDegraded(plan);
+        this.log.info(`DOM 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
+        return { chunks, images: 0, degraded };
+      } catch (domError) {
+        const domFailure = domError instanceof Error ? domError.message : String(domError);
+        throw new OutboundError(
+          domError instanceof OutboundError ? domError.code : "unknown",
+          `抖音发送失败（API：${apiFailure}；DOM：${domFailure}）`,
+        );
+      }
     }
+  }
 
-    // 图片：API 需要先上传拿 key，本期未适配 —— **明确降级**（不假装发了）
-    let images = 0;
+  /** 两条路共用的降级清单（@ 与图片本期都没还原，必须留痕）。 */
+  private collectDegraded(plan: OutboundPlan): string[] {
     const degraded = [...plan.degraded];
-    const mediaCount = plan.imageData.length + plan.imageUrls.length;
-    if (mediaCount > 0) {
+
+    if (plan.imageData.length + plan.imageUrls.length > 0 && !degraded.includes("image")) {
       degraded.push("image");
-      this.log.warn(`图片发送未适配 API（${mediaCount} 张已跳过，等待上传通道）`);
     }
 
-    // @ 没能还原：同样必须让服务端与模型知道
     if (plan.mentions.length > 0 && !degraded.includes("mention")) {
       degraded.push("mention");
     }
 
-    this.log.info(`API 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
-    return { chunks, images, degraded };
+    return degraded;
+  }
+
+  /**
+   * DOM 兜底发送（**API 不通时**才走）。
+   *
+   * 顺序：重载 /chat → 用「刚收到的消息预览」找到会话行 → 点开 → 输入 → 回读确认。
+   * 每一步失败都抛，不猜、不点错人。
+   */
+  private async sendByDom(
+    page: Awaited<ReturnType<DouyinBrowser["ensureChatPage"]>>,
+    plan: OutboundPlan,
+    target: { lastText?: string },
+  ): Promise<number> {
+    await this.browser.ensureChatPage(SITE.chatUrl);
+    await reloadChatPage(page);
+
+    const needle = target.lastText ?? this.names.get(plan.threadId) ?? "";
+    let row = await findConversationRowByPreview(page, needle);
+    if (!row) {
+      // 预览文本可能被截断/换行：退一步按昵称找
+      const nameHint = this.names.get(plan.threadId);
+      if (nameHint) {
+        await reloadChatPage(page);
+        row = await findConversationRowByPreview(page, nameHint);
+      }
+    }
+
+    if (!row) {
+      throw new OutboundError(
+        "not_found",
+        `DOM 兜底也找不到会话（threadId=${plan.threadId}，预览线索=${needle.slice(0, 12) || "无"}）`,
+      );
+    }
+
+    await clickConversationRow(page, row);
+
+    let sent = 0;
+    for (const chunk of plan.chunks) {
+      const ok = await sendTextInOpenConversation(page, chunk);
+      if (!ok) {
+        throw new OutboundError("readback", `DOM 发送后没在会话里看到刚发的那条（前 20 字：${chunk.slice(0, 20)}）`);
+      }
+
+      sent += 1;
+    }
+
+    return sent;
   }
 
   /** 把 base64 / URL 落成临时文件（网页版上传只吃本地文件）。 */
