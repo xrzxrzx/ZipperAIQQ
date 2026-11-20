@@ -438,6 +438,12 @@ async function main(): Promise<void> {
     onOnline: (uid) => {
       selfUid = uid;
       log.info(`自身 uid 已确认：${uid ?? "(未探测到)"}`);
+
+      // 登录是在首页扫码完成的：不回到 /chat 的话入站 WS 根本没挂上
+      // （页面不在私信页 → 没有 frontier-im 连接 → 一条消息也收不到）
+      void browser.ensureChatPage(SITE.chatUrl).catch((error: unknown) => {
+        log.warn(`登录后打开私信页失败：${error instanceof Error ? error.message : String(error)}`);
+      });
     },
   });
 
@@ -677,6 +683,11 @@ async function main(): Promise<void> {
     selfUid = await browser.selfUid().catch(() => null);
     log.info(`检测到已有登录态：selfId=${selfUid ?? "(未探测到)"}`);
     login.emitState();
+
+    // 同上：停在 /chat 才会有入站 WS
+    await browser.ensureChatPage(SITE.chatUrl).catch((error: unknown) => {
+      log.warn(`打开私信页失败（入站暂时收不到）：${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   await link.start();
