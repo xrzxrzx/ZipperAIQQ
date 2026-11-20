@@ -68,3 +68,6 @@ logs/
 /artifacts/deploy/
 /scripts/.http-token
 /artifacts/server.yaml
+
+# 本地临时产物（AI 取证/PoC，不入库）
+tmp/
