@@ -18,7 +18,7 @@ namespace ZipperAIQQ.Server.Channels;
 /// 这样上层（Agent / 调度 / 邮件）拿到的仍是同一种语义异常，不用各自判断「现在还能不能发」。
 /// </para>
 /// </remarks>
-public sealed class HealthTrackingMessageChannel : IMessageChannel
+public sealed class HealthTrackingMessageChannel : IMessageChannel, ISendNoticeSink
 {
     private readonly IMessageChannel _inner;
     private readonly ChannelHealthRegistry _health;
@@ -49,6 +49,11 @@ public sealed class HealthTrackingMessageChannel : IMessageChannel
     }
 
     public IReadOnlyList<string> Platforms => _inner.Platforms;
+
+    /// <inheritdoc />
+    /// <remarks>纯转发：健康统计只关心成败，不关心内容是否原样还原。</remarks>
+    public string? TakeLastDegraded(string platform, string sessionId) =>
+        _inner is ISendNoticeSink sink ? sink.TakeLastDegraded(platform, sessionId) : null;
 
     public string? SelfIdFor(string platform) => _inner.SelfIdFor(platform);
 

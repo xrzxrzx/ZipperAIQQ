@@ -25,7 +25,7 @@ namespace ZipperAIQQ.Channel.Throttling;
 /// 保证严格串行、严格间隔 —— 并发发送会让间隔失效。
 /// </para>
 /// </remarks>
-public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory
+public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory, ISendNoticeSink
 {
     private readonly IMessageChannel _inner;
     private readonly int _minIntervalMs;
@@ -75,6 +75,14 @@ public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory
     public ChannelCapabilities Capabilities => _inner.Capabilities;
 
     public Task StartAsync(CancellationToken ct = default) => _inner.StartAsync(ct);
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 纯转发：节流层不产生也不吞降级说明 —— 它只是"排队发送"，与内容是否原样还原无关。
+    /// 不转发的话外层工具永远读不到（工具拿到的正是本包装，不是内层通道）。
+    /// </remarks>
+    public string? TakeLastDegraded(string platform, string sessionId) =>
+        _inner is ISendNoticeSink sink ? sink.TakeLastDegraded(platform, sessionId) : null;
 
     public IAsyncEnumerable<InboundEvent> ReceiveAsync(CancellationToken ct) => _inner.ReceiveAsync(ct);
 

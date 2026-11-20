@@ -24,6 +24,7 @@ const root = await protobuf.load(protoPath);
 test("关键 message 存在", () => {
   for (const name of [
     "im_proto.Frame",
+    "im_proto.StrangerNewMessageNotify",
     "im_proto.Response",
     "im_proto.ResponseBody",
     "im_proto.NewMessageNotify",
@@ -38,7 +39,7 @@ test("关键字段号与上游一致（改了这里就是改了线上契约）",
     "im_proto.Frame": { seqid: 1, logid: 2, service: 3, method: 4, headers: 5, payload: 8 },
     // ⚠️ protobufjs 把 snake_case 字段名转成 camelCase 作为键，这里按它的键写
     "im_proto.Response": { cmd: 1, statusCode: 3, body: 6, headers: 8 },
-    "im_proto.ResponseBody": { hasNewMessageNotify: 500 },
+    "im_proto.ResponseBody": { hasNewMessageNotify: 500, strangerHasNewMessageNotify: 503 },
     "im_proto.NewMessageNotify": { conversationId: 2, conversationType: 3, message: 5 },
     "im_proto.MessageBody": {
       conversationId: 1,
@@ -115,6 +116,10 @@ test("帧编解码闭环：service=5 的私信帧 → 归一化出文本", () =>
     cmd: number;
     body?: { hasNewMessageNotify?: { message?: Record<string, unknown> } };
   };
+
+  // StrangerNewMessageNotify.message 必须在 field 2（抄错类型不会报错，只会永远解不出消息）
+  const strangerType = root.lookupType("im_proto.StrangerNewMessageNotify");
+  assert.equal(strangerType.fields.message?.id, 2, "StrangerNewMessageNotify.message 字段号应为 2");
 
   assert.equal(Number(response.cmd), 500);
 

@@ -61,7 +61,17 @@ export type ChallengeDetection =
 /** 进入私信页并等前端水合完。 */
 export async function openChatPage(page: Page): Promise<void> {
   await page.goto(SITE.chatUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  await page.waitForTimeout(SITE.hydrateMs);
+
+  // 等就绪谓词（会话列表 / 输入框任一出现）而不是固定 sleep：少 5 秒，且失败即超时可见
+  await page
+    .waitForFunction(
+      () =>
+        document.readyState === "complete" &&
+        (Boolean(document.querySelector('textarea, [contenteditable="true"]')) ||
+          Boolean(document.querySelector("div, li"))),
+      { timeout: 20_000 },
+    )
+    .catch(() => undefined);
 
   const url = page.url();
   if (!url.includes("/chat")) {
@@ -533,6 +543,15 @@ export async function pageHealth(page: Page): Promise<{
 export class ConversationNameCache {
   private readonly names = new Map<string, string>();
 
+  /**
+   * 反向表：显示名 → id。
+   *
+   * 为什么不直接遍历 `names` 反查：一个会话可能有多个 id 形态（data-* + href 各一个数字串），
+   * `names` 里会有同名多条 → 「唯一命中」永远不成立，DOM 兜底等于永久关闭（审查 N-3）。
+   * 这里每行只记**一个**规范 id（优先级与 `openConversation` 一致：长的那个更像真 uid）。
+   */
+  private readonly idsByNames = new Map<string, string>();
+
   remember(threadId: string, name: string | null | undefined): void {
     if (!threadId || !name) {
       return;
@@ -551,6 +570,11 @@ export class ConversationNameCache {
       for (const id of row.ids) {
         this.remember(id, row.name);
       }
+
+      const canonical = pickCanonicalId(row.ids);
+      if (canonical && row.name) {
+        this.idsByNames.set(row.name, canonical);
+      }
     }
   }
 
@@ -568,7 +592,15 @@ export class ConversationNameCache {
       return null;
     }
 
-    const hits = [...this.names.entries()].filter(([, value]) => value === name);
-    return hits.length === 1 ? hits[0]?.[0] ?? null : null;
+    return this.idsByNames.get(name) ?? null;
   }
+}
+
+/** 一行的若干 id 里挑一个"最像 uid"的：最长优先（短的多半是消息 id / 短链）。 */
+function pickCanonicalId(ids: string[]): string | null {
+  if (ids.length === 0) {
+    return null;
+  }
+
+  return [...ids].sort((a, b) => b.length - a.length)[0] ?? null;
 }

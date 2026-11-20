@@ -178,6 +178,7 @@ export class LoginFlow {
     try {
       const page = await this.browser.ensureChatPage(SITE.homeUrl);
       let qrMisses = 0;
+      let sawQr = false;
 
       while (!signal.aborted && Date.now() < deadline) {
         if (await this.browser.isLoggedIn()) {
@@ -192,6 +193,7 @@ export class LoginFlow {
         }
 
         const box = await findQrBox(page).catch(() => null);
+        sawQr = box !== null;
         if (box) {
           const png = await this.browser.captureQrPng(box);
           if (png) {
@@ -211,14 +213,16 @@ export class LoginFlow {
           const opened = await openLoginDialog(page);
           this.log.info(opened ? "已点击登录入口，等扫码弹窗" : "没找到登录入口，继续等待弹窗");
 
-          if (!opened) {
-            qrMisses = 0; // 别每轮都点一遍，等一个周期再来
-          }
+          // 点成功就重置计数（否则下一轮二维码还没渲染出来时会再点一次，
+          // 连点可能把刚弹出的登录框收起，比不点更糟）；点失败也重置，避免每轮空点。
+          qrMisses = 0;
         } else {
           qrMisses += 1;
         }
 
-        await sleep(QR_REFRESH_MS, signal);
+        // 还没见到二维码时用短间隔重试（首帧越快越好，A-1a 的 2 秒就靠它）；
+        // 见到之后回到 8 秒节奏，别把页面刷爆
+        await sleep(sawQr ? QR_REFRESH_MS : 800, signal);
       }
 
       if (!signal.aborted) {

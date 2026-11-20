@@ -193,6 +193,79 @@ public sealed class DouyinWebDriverTests
         Assert.Equal(DouyinDriver.Im, channel.Driver);
     }
 
+    [Fact]
+    public async Task Inbound_before_hello_is_dropped()
+    {
+        await using var channel = CreateChannel(DouyinDriver.Im);
+        var connection = new FakeConnection();
+        await channel.AttachAsync(connection);
+
+        // 冒名连接抢在 hello 之前发一帧：不许进 inbox（否则闸门只管出站不管入站）
+        connection.Push(PrivateInboundFrame("10086", "m-before-hello", "偷跑"));
+
+        // 握手之后再发一帧做屏障：能读到它说明前面那帧确实被丢了
+        connection.Push(HelloFrame("im", "self-1"));
+        connection.Push(PrivateInboundFrame("10086", "m-after-hello", "正常"));
+
+        var message = await ReadMessageAsync(channel, TimeSpan.FromSeconds(5));
+        Assert.Equal("m-after-hello", message.EventId);
+    }
+
+    [Fact]
+    public async Task Degraded_ack_is_readable_once_through_send_notice_sink()
+    {
+        await using var channel = CreateChannel(DouyinDriver.Web);
+
+        // sidecar 说「发出去了，但引用降级了」
+        var connection = new FakeConnection
+        {
+            Respond = json =>
+            {
+                var frame = JsonNode.Parse(json)!.AsObject();
+                if (frame["type"]!.GetValue<string>() != DouyinFrameTypes.Outbound)
+                {
+                    return [];
+                }
+
+                var requestId = frame["data"]!["requestId"]!.GetValue<string>();
+                return
+                [
+                    Frame(DouyinFrameTypes.Ack, new
+                    {
+                        requestId,
+                        ok = true,
+                        error = (string?)null,
+                        degraded = "reply_to",
+                    }),
+                ];
+            },
+        };
+
+        await channel.AttachAsync(connection);
+        connection.Push(HelloFrame("web", "self-1"));
+
+        await channel.SendAsync(
+            new OutgoingMessage
+            {
+                Chat = new ChatRef
+                {
+                    Platform = DouyinChannel.PlatformName,
+                    Type = ChatType.Private,
+                    Id = "10086",
+                },
+                Segments = [new TextSegment("收到～")],
+            },
+            CancellationToken.None);
+
+        // 工具层就靠这一句告诉模型「没原样发出去」
+        Assert.Equal(
+            "reply_to",
+            channel.TakeLastDegraded(DouyinChannel.PlatformName, "douyin:p10086"));
+
+        // 读即清：第二次不许再报（否则下一次成功也会被说成降级）
+        Assert.Null(channel.TakeLastDegraded(DouyinChannel.PlatformName, "douyin:p10086"));
+    }
+
     // ─────────────────────────── 登录挑战 ───────────────────────────
 
     [Fact]
@@ -249,6 +322,7 @@ public sealed class DouyinWebDriverTests
         var connection = new FakeConnection();
         await channel.AttachAsync(connection);
 
+        connection.Push(HelloFrame("web", "self-1"));
         connection.Push(Frame(DouyinFrameTypes.LoginChallenge, new { kind = "slider" }));
         connection.Push(PrivateInboundFrame("10086", "m-barrier", "?"));
         await ReadMessageAsync(channel, TimeSpan.FromSeconds(5));
@@ -285,6 +359,7 @@ public sealed class DouyinWebDriverTests
         var connection = new FakeConnection();
         await channel.AttachAsync(connection);
 
+        connection.Push(HelloFrame("web", "self-1"));
         connection.Push(Frame(DouyinFrameTypes.BrowserState, new
         {
             page = "ok",
@@ -385,6 +460,9 @@ public sealed class DouyinWebDriverTests
         private readonly List<string> _sent = [];
         private int _closed;
 
+        /// <summary>收到一帧时返回要回推的帧（模拟 sidecar 的 ack / result）。</summary>
+        public Func<string, IEnumerable<string>>? Respond { get; init; }
+
         public int CloseCount { get; private set; }
 
         public IReadOnlyList<string> SentFrames
@@ -408,6 +486,14 @@ public sealed class DouyinWebDriverTests
             lock (_sync)
             {
                 _sent.Add(json);
+            }
+
+            if (Respond is { } respond)
+            {
+                foreach (var reply in respond(json))
+                {
+                    Push(reply);
+                }
             }
 
             return Task.CompletedTask;

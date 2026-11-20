@@ -59,7 +59,14 @@ message ResponseBody {
   optional NewMessageNotify has_new_message_notify = 500;
   // 503 = 陌生人盒新消息（第一版不响应，但**要能认出来并记录**：
   //       静默丢会让人以为"协议没通"，排障时白查一轮）
-  optional NewMessageNotify stranger_has_new_message_notify = 503;
+  // ⚠️ 类型是 **StrangerNewMessageNotify**（上游 `im.proto` 同名 message），不是 NewMessageNotify：
+  //    后者 field 2 是 conversation_id（string），套在这里会把 MessageBody 解成乱码且永远拿不到 message。
+  optional StrangerNewMessageNotify stranger_has_new_message_notify = 503;
+}
+
+/// 陌生人盒的新消息：只有一个 message 字段（field 2）
+message StrangerNewMessageNotify {
+  optional MessageBody message = 2;
 }
 
 message NewMessageNotify {

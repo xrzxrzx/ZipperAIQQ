@@ -158,7 +158,17 @@ export class DouyinBrowser {
     const page = this.page;
     if (!page.url().includes("/chat")) {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
-      await page.waitForTimeout(5_000);
+      // 等"能用的证据"而不是死等 5 秒：输入框 / 二维码画布 / 首屏内容任一出现即算就绪。
+      // 固定 sleep 会把 A-1 的「2 秒出码」直接顶掉（审查 P1-7）。
+      await page
+        .waitForFunction(
+          () =>
+            document.readyState === "complete" &&
+            (Boolean(document.querySelector('textarea, [contenteditable="true"]')) ||
+              Boolean(document.querySelector("canvas, img"))),
+          { timeout: 20_000 },
+        )
+        .catch(() => undefined);
     }
 
     this.update({ page: "ok", lastAction: "打开私信页" });

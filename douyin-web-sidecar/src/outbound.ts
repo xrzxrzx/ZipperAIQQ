@@ -107,8 +107,10 @@ export class OutboundSender {
     ];
 
     for (const item of media) {
-      const before = await snapshotTail(page);
       const file = await this.materialize(item);
+      // 基线必须在**下载之后**取：下载最多 20 秒，这期间对方发来的图会把基线推高
+      // （否则发送失败时"图片数变多"也成立 → 又一次假成功，审查 N-4）
+      const before = await snapshotTail(page);
       try {
         await sendImage(page, file);
         await expectNewBubble(page, before, "", true);

@@ -28,7 +28,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var connection = new FakeDouyinConnection();
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         // 坏 JSON、缺 type、未知 type、inbound 缺会话字段 —— 全部只记日志，不能打断接收流
         connection.Push("{这不是 JSON");
@@ -48,7 +48,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var connection = new FakeDouyinConnection();
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         var raised = new List<string>();
         channel.SelfIdChanged += selfId => raised.Add(selfId);
@@ -70,7 +70,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var connection = new FakeDouyinConnection();
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         const long platformTime = 1_730_000_000_000;
         connection.Push(Frame(DouyinFrameTypes.Inbound, new
@@ -118,7 +118,7 @@ public sealed class DouyinChannelTests
             Logger);
 
         var connection = new FakeDouyinConnection { Respond = AutoAck };
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         connection.Push(Frame(DouyinFrameTypes.Inbound, new
         {
@@ -147,7 +147,7 @@ public sealed class DouyinChannelTests
         // 运行时打开：同一个通道实例，改配置后立刻能发（不必重建对象/重启服务）
         await using var channel = new DouyinChannel(new DouyinOptions { Enabled = false }, new ChatFilter(new ChatFilterOptions(), DouyinChannel.PlatformName), Logger);
         var connection = new FakeDouyinConnection { Respond = AutoAck };
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => channel.SendAsync(Outgoing("关着的时候"), CancellationToken.None));
@@ -162,7 +162,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var connection = new FakeDouyinConnection();
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         // 群 @ 在 douyin-im 里要求数字 uid（设计 §10 风险 7）：非数字降级纯文本，别把整条消息弄坏
         connection.Push(Frame(DouyinFrameTypes.Inbound, new
@@ -188,7 +188,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var connection = new FakeDouyinConnection { Respond = AutoAck };
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         var message = new OutgoingMessage
         {
@@ -209,7 +209,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var connection = new FakeDouyinConnection();
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         // 设计 §3.3 示例形状：只有 session + chatType + segments
         connection.Push(Frame(DouyinFrameTypes.Inbound, new
@@ -239,7 +239,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var connection = new FakeDouyinConnection();
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         connection.Push(Frame(DouyinFrameTypes.Inbound, new
         {
@@ -262,7 +262,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var connection = new FakeDouyinConnection();
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         connection.Push(Frame(DouyinFrameTypes.Inbound, new
         {
@@ -286,7 +286,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var connection = new FakeDouyinConnection { Respond = AutoAck };
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         await channel.SendAsync(Outgoing("你好"), CancellationToken.None);
 
@@ -302,7 +302,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel(sendTimeoutMs: 50);
         var connection = new FakeDouyinConnection(); // 不回 ack
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         // 语义异常：连接在但这条没回 → ChannelSendFailed（可退避重试，不叫模型）
         var exception = await Assert.ThrowsAsync<ChannelSendFailedException>(
@@ -323,7 +323,7 @@ public sealed class DouyinChannelTests
                 return [Frame(DouyinFrameTypes.Ack, new { requestId, ok = false, error = "conversation-risk" })];
             },
         };
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         var exception = await Assert.ThrowsAsync<ChannelSendFailedException>(
             () => channel.SendAsync(Outgoing("被风控拦住"), CancellationToken.None));
@@ -348,7 +348,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel(maxTextLength: 10);
         var connection = new FakeDouyinConnection { Respond = AutoAck };
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         // 20 个字符 + 上限 10 → 两帧，各自 ≤ 10 字符
         await channel.SendAsync(Outgoing("0123456789abcdefghij"), CancellationToken.None);
@@ -372,7 +372,7 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var connection = new FakeDouyinConnection { Respond = AutoAck };
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         var message = new OutgoingMessage
         {
@@ -406,13 +406,13 @@ public sealed class DouyinChannelTests
     {
         await using var channel = CreateChannel();
         var first = new FakeDouyinConnection();
-        await channel.AttachAsync(first);
+        await AttachWithHandshakeAsync(channel, first);
 
         first.Push(PrivateInboundFrame(threadId: "10086", messageId: "m-1", text: "第一条"));
         Assert.Equal("m-1", (await ReadMessageAsync(channel, TimeSpan.FromSeconds(5))).EventId);
 
         var second = new FakeDouyinConnection();
-        await channel.AttachAsync(second);
+        await AttachWithHandshakeAsync(channel, second); // 新连接同样要过握手（驱动闸门）
 
         Assert.Equal(1, first.CloseCount); // 旧连接被关闭
         Assert.True(channel.IsConnected);
@@ -448,7 +448,7 @@ public sealed class DouyinChannelTests
                 ];
             },
         };
-        await channel.AttachAsync(connection);
+        await AttachWithHandshakeAsync(channel, connection);
 
         var contacts = await channel.GetFriendsAsync(CancellationToken.None);
 
@@ -475,6 +475,20 @@ public sealed class DouyinChannelTests
             // 会话过滤与 QQ 同一套：空名单 = 全部放行（各用例默认走放行分支）
             new ChatFilter(new ChatFilterOptions(), DouyinChannel.PlatformName),
             Logger);
+
+    /// <summary>
+    /// 接入 + 握手。
+    /// </summary>
+    /// <remarks>
+    /// 2026-11-20 起通道有**驱动闸门**：没过 <c>hello</c> 的连接投递的入站帧会被丢弃
+    /// （否则冒名 sidecar 抢在挥手之前发一帧就能进模型）。所以用例要先握手 ——
+    /// 真机上 sidecar 连上第一件事就是发 hello，这个前提与线上一致。
+    /// </remarks>
+    private static async Task AttachWithHandshakeAsync(DouyinChannel channel, FakeDouyinConnection connection)
+    {
+        await channel.AttachAsync(connection);
+        connection.Push(HelloFrame("self-bootstrap"));
+    }
 
     /// <summary>拼一帧：<c>{type, time, data}</c>。</summary>
     private static string Frame(string type, object data) =>

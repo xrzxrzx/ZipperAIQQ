@@ -95,6 +95,11 @@ async function loadConfig(log: Logger): Promise<SidecarConfig> {
     log.warn(`未找到 ${configPath}，改用默认值 + 环境变量（详见 README「配置」）`);
   }
 
+  if (fileConfig.maxHeapMb !== undefined) {
+    // 改名不静默：旧键还在的机器上，阈值会悄悄回落到默认值（审查 N-5）
+    log.warn("配置项 maxHeapMb 已更名为 maxJsHeapMb（语义是渲染进程 JS 堆），本次按新键/默认值处理");
+  }
+
   return {
     serverUrl:
       str(process.env.ZIPPER_DOUYIN_WEB_SERVER_URL) ??

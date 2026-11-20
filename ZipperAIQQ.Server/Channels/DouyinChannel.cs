@@ -29,7 +29,8 @@ namespace ZipperAIQQ.Server.Channels;
 /// 由上层转成「回填给模型的失败原因」（FR-2.3）。静默吞掉会让模型以为发出去了。
 /// </para>
 /// </remarks>
-public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannelLogin, IAsyncDisposable, IRecoverableChannel
+public sealed class DouyinChannel
+    : IMessageChannel, IContactDirectory, IChannelLogin, ISendNoticeSink, IAsyncDisposable, IRecoverableChannel
 {
     /// <summary>平台标识，与 <see cref="ChatRef.Platform"/>、<c>session</c> 前缀一致。</summary>
     public const string PlatformName = "douyin";
@@ -55,6 +56,9 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
     private readonly Channel<InboundEvent> _inbox =
         System.Threading.Channels.Channel.CreateUnbounded<InboundEvent>(
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
+    /// <summary>最近一次发送的降级说明（会话 → 说明）。**读即清**，见 <see cref="ISendNoticeSink"/>。</summary>
+    private readonly ConcurrentDictionary<string, string> _lastDegraded = new(StringComparer.Ordinal);
 
     /// <summary>出站 <c>ack</c> 配对表（requestId → 等待者）。超时 / 失败都会移除，不泄漏。</summary>
     private readonly ConcurrentDictionary<string, TaskCompletionSource<DouyinAck>> _pendingAcks =
@@ -87,6 +91,9 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
 
     /// <summary>最近一次被拒的 sidecar 说明（状态页与日志用）。</summary>
     private volatile string? _driverRejectNote;
+
+    /// <summary>被拒次数（两只 sidecar 抢连时会一直涨，状态页据此提示「另一只还在跑」）。</summary>
+    private int _driverRejectCount;
 
     /// <summary>当前等待回填的登录挑战。</summary>
     private volatile DouyinLoginChallenge? _challenge;
@@ -389,14 +396,63 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
                 index == 0 ? replyTo : null,
                 requestId);
 
-            await SendAndAwaitAckAsync(connection, requestId, json, index + 1, batches.Count, ct)
+            var degraded = await SendAndAwaitAckAsync(connection, requestId, json, index + 1, batches.Count, ct)
                 .ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(degraded))
+            {
+                // 多帧时取并集：任一分段降级，整条消息都算降级
+                _lastDegraded.AddOrUpdate(
+                    DegradedKey(session),
+                    degraded,
+                    (_, existing) => existing.Contains(degraded, StringComparison.Ordinal)
+                        ? existing
+                        : $"{existing},{degraded}");
+            }
         }
 
         _logger.Information(
             "抖音消息已发出：会话 {Session}，共 {Count} 帧",
             session,
             batches.Count);
+    }
+
+    // ─────────────────────────── ISendNoticeSink ───────────────────────────
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 抖音的「降级」来自 sidecar 的 <c>ack.degraded</c>（引用 / @ 没还原）。
+    /// 会话对不上时返回 <c>null</c>（并发发送不同会话时别把别人的降级说成本次的）。
+    /// </remarks>
+    public string? TakeLastDegraded(string platform, string sessionId)
+    {
+        if (!string.Equals(platform, PlatformName, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return _lastDegraded.TryRemove(DegradedKey(sessionId), out var degraded) ? degraded : null;
+    }
+
+    /// <summary>
+    /// 会话 ID 的归一化键（<c>douyin:p10086</c> / <c>douyin:g77</c> / <c>10086</c> 都落到 <c>10086</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 写入与读取**必须**用同一个键函数：一个用 <c>ChatRef.SessionId</c>、另一个用手写归一化，
+    /// 就会像 2026-11-20 那次一样"存了但永远取不到"（单测当场抓到）。
+    /// </remarks>
+    private static string DegradedKey(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return string.Empty;
+        }
+
+        var chatId = sessionId.StartsWith(PlatformName + ":", StringComparison.Ordinal)
+            ? sessionId[(PlatformName.Length + 1)..]
+            : sessionId;
+
+        return chatId.Length > 0 && (chatId[0] == 'p' || chatId[0] == 'g') ? chatId[1..] : chatId;
     }
 
     // ─────────────────────────── IContactDirectory ───────────────────────────
@@ -654,8 +710,9 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
 
                 if (!string.Equals(announced, expected, StringComparison.Ordinal))
                 {
+                    var count = Interlocked.Increment(ref _driverRejectCount);
                     _driverRejectNote =
-                        $"已拒绝 {announced} 底座的 sidecar（自报 driver={announced}，当前 douyin.driver={expected}）";
+                        $"已拒绝 {announced} 底座的 sidecar（自报 driver={announced}，当前 douyin.driver={expected}；累计 {count} 次）";
                     _logger.Warning(
                         "拒绝抖音 sidecar：自报驱动 {Announced}，当前配置 {Expected}（peer={Peer}）；" +
                         "要切换底座请改 douyin.driver",
@@ -669,6 +726,7 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
 
                 _driver = announced;
                 _driverRejectNote = null;
+                Interlocked.Exchange(ref _driverRejectCount, 0);
                 _logger.Information("抖音 sidecar 驱动已确认：{Driver}（peer={Peer}）", announced, _transportPeer ?? "unknown");
 
                 if (hello.Version is { Length: > 0 } version
@@ -686,6 +744,14 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
 
             case DouyinFrameTypes.Inbound:
             {
+                // 没过驱动闸门（还没握手 / 已因驱动不符被拒）的连接，一律不许投递入站：
+                // 否则"闸门"只挡住了出站，冒名的 sidecar 抢在 hello 之前发一帧就能进模型（审查 N-6）。
+                if (_driver is null)
+                {
+                    _logger.Debug("丢弃未完成握手的连接发来的入站帧（driver 未确认）");
+                    break;
+                }
+
                 // 运行时开关（S3-F 补）：停用时直接丢，不进库、不进模型。
                 // 为什么在通道层：与接收过滤同口径（FR-17.3），且关掉之后连"占存储"都不该发生。
                 if (!_options.Enabled)
@@ -794,7 +860,8 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
     // ─────────────────────────── 发送 / 查询 ───────────────────────────
 
     /// <summary>发一帧并等 ack；超时/失败抛异常（不吞）。</summary>
-    private async Task SendAndAwaitAckAsync(
+    /// <returns>降级说明（<c>reply_to</c> 等）；没有降级返回 <c>null</c>。</returns>
+    private async Task<string?> SendAndAwaitAckAsync(
         IDouyinConnection connection,
         string requestId,
         string json,
@@ -842,8 +909,18 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
             {
                 throw new ChannelSendFailedException(
                     "douyin",
-                    $"抖音发送失败：{ack.Error ?? "sidecar 未给出原因"}");
+                    $"抖音发送失败：{ack.Error ?? "sidecar 未给出原因"}"
+                    + (string.IsNullOrWhiteSpace(ack.Code) ? string.Empty : $"（失败码 {ack.Code}）"));
             }
+
+            if (!string.IsNullOrWhiteSpace(ack.Degraded))
+            {
+                // 发是发出去了，但**不是原样**：日志留痕 + 通知出口留给工具层（模型要知道少了什么）
+                _logger.Warning("抖音发送降级：{Degraded}（第 {Sequence}/{Total} 帧）", ack.Degraded, sequence, total);
+                return ack.Degraded;
+            }
+
+            return null;
         }
         finally
         {

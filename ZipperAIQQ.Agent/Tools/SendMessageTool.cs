@@ -129,7 +129,16 @@ public static class SendMessageTool
 
                 if (failures.Count == 0)
                 {
-                    return $"已发送 {sent} 条消息。";
+                    // 发成功 ≠ 原样发出：抖音的引用 / @ 会降级（ack.degraded）。
+                    // 不说这一句，模型就会以为「@ 到了」「引用上了」，下一轮还会问"对方怎么没反应"。
+                    var degraded = channel is ISendNoticeSink sink
+                        ? sink.TakeLastDegraded(chat.Platform, chat.SessionId)
+                        : null;
+
+                    return string.IsNullOrWhiteSpace(degraded)
+                        ? $"已发送 {sent} 条消息。"
+                        : $"已发送 {sent} 条消息。注意：部分内容未能原样发出（降级：{degraded}），"
+                          + "对方看到的是降级后的版本（例如引用变成了普通消息、@ 没有生效）。";
                 }
 
                 // 回给模型的不只是原因，还有「下一步该怎么办」—— 否则它只会换个说法重发。

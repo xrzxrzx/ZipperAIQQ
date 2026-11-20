@@ -34,7 +34,7 @@ namespace ZipperAIQQ.Server.Channels;
 /// 不实现的话那些工具会在调用时才炸。多平台下的按平台查询属于 S3-C（决策四）。
 /// </para>
 /// </remarks>
-public sealed class CompositeMessageChannel : IMessageChannel, IContactDirectory
+public sealed class CompositeMessageChannel : IMessageChannel, IContactDirectory, ISendNoticeSink
 {
     private readonly IReadOnlyList<IMessageChannel> _channels;
     private readonly Dictionary<string, IMessageChannel> _byPlatform;
@@ -196,6 +196,26 @@ public sealed class CompositeMessageChannel : IMessageChannel, IContactDirectory
         }
 
         return target.SendAsync(message, ct);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// 只有**真的实现了** <see cref="ISendNoticeSink"/> 的子通道才有降级可言
+    /// （QQ 没有这个概念，返回 <c>null</c> 而不是编一个）。
+    /// </remarks>
+    public string? TakeLastDegraded(string platform, string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(platform))
+        {
+            return null;
+        }
+
+        if (!_byPlatform.TryGetValue(platform, out var channel))
+        {
+            return null;
+        }
+
+        return channel is ISendNoticeSink sink ? sink.TakeLastDegraded(platform, sessionId) : null;
     }
 
     /// <summary>把一条子通道的事件搬进合并流；该通道断了不影响其他通道。</summary>
