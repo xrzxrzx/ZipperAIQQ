@@ -151,12 +151,18 @@ export class DouyinBrowser {
     this.startRecycleTimer();
   }
 
-  /** 打开（或复用）私信页。 */
+  /**
+   * 打开（或复用）某个页面。
+   *
+   * ⚠️ 判据是「当前页 **是不是目标页**」，不是「当前页是不是 /chat」：
+   * 后者会让"页面停在 /chat、票据过期需要重新扫码"这个**主场景**永远去不了首页，
+   * 而登录二维码只存在于首页的登录弹窗里（审查 T-2）。
+   */
   async ensureChatPage(url: string): Promise<Page> {
     await this.start();
 
     const page = this.page;
-    if (!page.url().includes("/chat")) {
+    if (!samePage(page.url(), url)) {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
       // 等"能用的证据"而不是死等 5 秒：输入框 / 二维码画布 / 首屏内容任一出现即算就绪。
       // 固定 sleep 会把 A-1 的「2 秒出码」直接顶掉（审查 P1-7）。
@@ -168,10 +174,13 @@ export class DouyinBrowser {
               Boolean(document.querySelector("canvas, img"))),
           { timeout: 20_000 },
         )
-        .catch(() => undefined);
+        .catch(() => {
+          // 等不到就绪证据不能静默：慢加载会在后面以"找不到元素"的形式炸，排查绕一大圈
+          this.log.warn(`页面 ${targetPathOf(url)} 20 秒内没有就绪证据，继续尝试`);
+        });
     }
 
-    this.update({ page: "ok", lastAction: "打开私信页" });
+    this.update({ page: "ok", lastAction: `打开 ${targetPathOf(url)}` });
     return page;
   }
 
@@ -410,5 +419,25 @@ export class DouyinBrowser {
     } catch (error) {
       this.log.debug(`播报 browser.state 失败：${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+}
+
+/** 两个 URL 是否同一个页面（同源 + 同路径；忽略 query / hash）。 */
+function samePage(current: string, target: string): boolean {
+  try {
+    const a = new URL(current);
+    const b = new URL(target);
+    return a.origin === b.origin && a.pathname === b.pathname;
+  } catch {
+    return false;
+  }
+}
+
+/** 路径部分（日志用；`/` 显示成 `/`）。 */
+function targetPathOf(url: string): string {
+  try {
+    return new URL(url).pathname || "/";
+  } catch {
+    return url;
   }
 }

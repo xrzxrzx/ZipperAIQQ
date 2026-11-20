@@ -488,6 +488,18 @@ public sealed class DouyinChannelTests
     {
         await channel.AttachAsync(connection);
         connection.Push(HelloFrame("self-bootstrap"));
+
+        // **屏障**：hello 是"投递"不是"已处理"。不等它处理完，用例在 attach 之后才订阅
+        // <c>SelfIdChanged</c> 时就可能收到握手帧引发的事件 → 断言个数漂移（2026-11-20 实测红）。
+        // 这里轮询 selfId 等到位（hello 的副作用），**不靠投递入站**：有的用例 Enabled=false，
+        // 入站会被丢弃，拿它当屏障会假超时。
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        while (channel.SelfId is null && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.NotNull(channel.SelfId);
     }
 
     /// <summary>拼一帧：<c>{type, time, data}</c>。</summary>

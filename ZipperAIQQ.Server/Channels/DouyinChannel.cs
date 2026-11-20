@@ -385,6 +385,10 @@ public sealed class DouyinChannel
 
         var session = message.Chat.SessionId;
 
+        // 先清掉上一次的降级说明：代发路径（ChatAgent.TrySendAsync）不会来读，
+        // 留着会被下一次**完全正常**的发送读走 → 模型被告知"这次降级了"（审查 T-4）。
+        _lastDegraded.TryRemove(DegradedKey(session), out _);
+
         for (var index = 0; index < batches.Count; index++)
         {
             var requestId = NewRequestId();
@@ -578,6 +582,10 @@ public sealed class DouyinChannel
             if (ReferenceEquals(Volatile.Read(ref _connection), connection))
             {
                 _connection = null;
+                // 断线也要把「这一任握过手」的记忆清掉：否则下一次连上来但**不发 hello** 的连接，
+                // 会借着上一任的 driver 通过入站闸门（审查 T-3）。
+                _driver = null;
+                _browserState = null;
             }
         }
     }
