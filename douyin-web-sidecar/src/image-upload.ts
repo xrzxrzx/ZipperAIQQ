@@ -18,6 +18,7 @@
  * 产出直接喂给出站：`content` 里的 `resource_url{oid,skey,data_size,md5}`。
  */
 
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { BrowserContext, Page } from "playwright";
 import type { BrowserLogger } from "./browser.js";
@@ -197,24 +198,35 @@ export class DouyinImageUploader {
 
     const commitText = await commitRes.text();
     const commitJson = JSON.parse(commitText) as {
-      Result?: { Results?: { Uri?: string; SourceMd5?: string }[]; SecretKey?: string };
+      Result?: {
+        Results?: {
+          Uri?: string;
+          SourceMd5?: string;
+          Encryption?: { Uri?: string; SecretKey?: string; encryption_md5?: string; encryption_size?: number };
+        }[];
+        SecretKey?: string;
+      };
       SecretKey?: string;
     };
     const committed = commitJson.Result?.Results?.[0];
-    const skey = commitJson.SecretKey ?? commitJson.Result?.SecretKey;
-    if (!committed?.Uri || !skey) {
+    // 真机命中：发消息用的 oid/skey 是**加密后的 Uri / SecretKey**（Encryption 子对象）
+    const encryption = committed?.Encryption;
+    const oid = encryption?.Uri ?? committed?.Uri;
+    // 有时平台不做服务端加密：这时没有 Encryption 子对象，也没有 skey（空串发出去试试）
+    const skey = encryption?.SecretKey ?? commitJson.SecretKey ?? commitJson.Result?.SecretKey ?? "";
+    if (!oid) {
       throw new OutboundError(
         "unknown",
-        `CommitUploadInner 缺字段；resultKeys=${Object.keys((commitJson.Result ?? {}) as object).join(",")} itemKeys=${Object.keys((committed ?? {}) as object).join(",")} topKeys=${Object.keys(commitJson as object).join(",")}`,
+        `CommitUploadInner 缺字段；itemKeys=${Object.keys((committed ?? {}) as object).join(",")}`,
       );
     }
 
-    this.log.info(`图片上传完成：oid=${committed.Uri.slice(0, 24)}… size=${data.length}`);
+    this.log.info(`图片上传完成：oid=${oid.slice(0, 24)}… size=${data.length}`);
 
     return {
-      oid: committed.Uri,
+      oid,
       skey,
-      md5: (committed.SourceMd5 ?? "").toLowerCase(),
+      md5: createHash("md5").update(data).digest("hex"),
       size: data.length,
       width,
       height,

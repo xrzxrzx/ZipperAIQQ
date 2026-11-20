@@ -26,6 +26,7 @@ import { InboundListener } from "./inbound.js";
 import { LoginFlow } from "./login.js";
 import { OutboundSender } from "./outbound.js";
 import { ConversationRegistry, DouyinSendApi } from "./send-api.js";
+import { DouyinImageUploader } from "./image-upload.js";
 import {
   buildOutboundPlan,
   CAPABILITIES,
@@ -558,12 +559,15 @@ async function main(): Promise<void> {
   });
 
   // ── 出站 ──
+  const uploader = new DouyinImageUploader({ log });
+
   const outbound = new OutboundSender({
     browser,
     log,
     names,
     conversations,
     api: sendApi,
+    uploader,
     workDir: config.workDir,
   });
 

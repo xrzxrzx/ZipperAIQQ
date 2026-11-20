@@ -14,12 +14,14 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserLogger, DouyinBrowser } from "./browser.js";
+import { ConversationRegistry, DouyinSendApi } from "./send-api.js";
+import { DouyinImageUploader } from "./image-upload.js";
 import {
   OutboundError,
   type OutboundPlan,
   sessionIdFor,
 } from "./protocol.js";
-import type { ConversationRegistry, DouyinSendApi } from "./send-api.js";
+
 import {
   clickConversationRow,
   findConversationRowByAny,
@@ -55,6 +57,8 @@ export interface OutboundSenderOptions {
   conversations: ConversationRegistry;
   /** HTTP API 出站器（页面上下文里 fetch，自动带 cookie） */
   api: DouyinSendApi;
+  /** 图片上传器（SigV4 + TOS，纯 API） */
+  uploader: DouyinImageUploader;
   /** 临时媒体目录（发完即删）。 */
   workDir: string;
 }
@@ -66,6 +70,7 @@ export class OutboundSender {
   private readonly names: ConversationNameCache;
   private readonly conversations: ConversationRegistry;
   private readonly api: DouyinSendApi;
+  private readonly uploader: DouyinImageUploader;
   private readonly workDir: string;
 
   constructor(options: OutboundSenderOptions) {
@@ -74,6 +79,7 @@ export class OutboundSender {
     this.names = options.names;
     this.conversations = options.conversations;
     this.api = options.api;
+    this.uploader = options.uploader;
     this.workDir = options.workDir;
   }
 
@@ -168,22 +174,45 @@ export class OutboundSender {
       return { sent: 0 };
     }
 
-    // 图片必须在「已打开的会话」里塞：文本走 API 时页面根本没开会话
-    const opened = await this.openConversationForMedia(page, plan, target);
-    if (!opened) {
-      this.log.warn(`发图前打不开会话（threadId=${plan.threadId}），图片全部记降级`);
-      return { sent: 0 };
-    }
-
     let sent = 0;
+    const context = this.browser.browserContext;
+
     for (const item of media) {
       const file = await this.materialize(item);
       try {
-        const ok = await sendImageInOpenConversation(page, file);
-        if (ok) {
+        // ① 纯 API：上传（SigV4 + TOS）→ 发 message_type=27
+        try {
+          const uploaded = await this.uploader.upload(context, page, file);
+          const result = await this.api.sendImage(
+            context,
+            page,
+            target as never,
+            uploaded,
+            crypto.randomUUID(),
+          );
+
+          if (result.ok) {
+            this.conversations.noteSent(plan.threadId, "[图片]");
+            sent += 1;
+            continue;
+          }
+
+          this.log.warn(`API 发图被拒：status=${result.statusCode} ${result.errorDesc ?? ""}`);
+        } catch (error) {
+          this.log.warn(`API 发图失败，改用 DOM 兜底：${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        // ② 兜底：DOM（塞文件 → 点「发送（N）」）
+        const opened = await this.openConversationForMedia(page, plan, target);
+        if (!opened) {
+          this.log.warn(`发图前打不开会话（threadId=${plan.threadId}）`);
+          continue;
+        }
+
+        if (await sendImageInOpenConversation(page, file)) {
           sent += 1;
         } else {
-          this.log.warn("图片没发出去：没等到「发送（N）」确认框");
+          this.log.warn("DOM 发图失败：没等到「发送（N）」确认框");
         }
       } catch (error) {
         this.log.warn(`图片发送异常：${error instanceof Error ? error.message : String(error)}`);

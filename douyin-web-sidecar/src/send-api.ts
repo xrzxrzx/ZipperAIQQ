@@ -186,6 +186,80 @@ export function buildSendPayload(
   return Buffer.from(requestType.encode(message).finish());
 }
 
+/**
+ * 构造图片消息体（`message_type=27`，真机抓包确认的 content 结构）。
+ *
+ * content 形状：
+ * `{resource_url:{oid,skey,data_size,md5}, md5, cover_width, cover_height, from_gallery:1, aweType:2702}`
+ */
+export function buildImagePayload(
+  requestType: protobuf.Type,
+  template: {
+    sdkVersion?: string;
+    refer?: number;
+    buildNumber?: string;
+    channel?: string;
+    deviceId?: string;
+    devicePlatform?: string;
+    deviceType?: string;
+    osVersion?: string;
+    versionCode?: string;
+    authType?: number;
+    headers: Record<string, string>;
+  },
+  target: ConversationRef,
+  image: { oid: string; skey: string; md5: string; size: number; width: number; height: number },
+  clientMessageId: string,
+  sequenceId: number,
+  nowMs: number,
+): Buffer {
+  const content = JSON.stringify({
+    resource_url: { oid: image.oid, skey: image.skey, data_size: image.size, md5: image.md5 },
+    cover_width: image.width,
+    cover_height: image.height,
+    check_pics: [],
+    md5: image.md5,
+    from_gallery: 1,
+    aweType: 2702,
+  });
+
+  const message = requestType.create({
+    cmd: CMD_SEND_MESSAGE,
+    sequenceId,
+    sdkVersion: template.sdkVersion ?? "0.1.8",
+    refer: template.refer ?? 3,
+    inboxType: 0,
+    buildNumber: template.buildNumber ?? "0d50935:feat/pc-im-group",
+    channel: template.channel,
+    deviceId: template.deviceId,
+    devicePlatform: template.devicePlatform,
+    deviceType: template.deviceType,
+    osVersion: template.osVersion,
+    versionCode: template.versionCode || "360000",
+    authType: template.authType ?? 1,
+    biz: "douyin_web",
+    access: "web_sdk",
+    token: "",
+    headers: template.headers,
+    body: {
+      sendMessageBody: {
+        conversationId: target.conversationId,
+        conversationType: target.conversationType,
+        conversationShortId: target.conversationShortId,
+        content,
+        messageType: 27,
+        ext: {
+          "s:client_message_id": clientMessageId,
+          "s:stime": String(nowMs),
+          "s:mentioned_users": "",
+        },
+      },
+    },
+  });
+
+  return Buffer.from(requestType.encode(message).finish());
+}
+
 /** API 出站器（模板 + 签名 + Node 侧请求）。 */
 export class DouyinSendApi {
   private readonly log: BrowserLogger;
@@ -526,6 +600,105 @@ export class DouyinSendApi {
 
     this.log.debug(`API 发送成功：seq=${sequenceId} conv=${target.conversationId} logId=${decoded.logId ?? "-"}`);
     return { ok: true, statusCode: 0, logId: decoded.logId };
+  }
+
+  /**
+   * 发一张已上传的图片（`message_type=27`）。
+   *
+   * 图片字节的上传在 `image-upload.ts`（SigV4 + TOS）；这里只负责「发」。
+   */
+  async sendImage(
+    context: BrowserContext,
+    page: Page,
+    target: ConversationRef,
+    image: { oid: string; skey: string; md5: string; size: number; width: number; height: number },
+    clientMessageId: string,
+  ): Promise<SendApiResult> {
+    await this.load();
+
+    const requestType = this.requestType;
+    if (!requestType) {
+      throw new OutboundError("page", "出站协议未加载");
+    }
+
+    const template = this.template ?? this.fallbackTemplate(await this.readPageEnv(page));
+    const merged = { ...template, headers: { ...template.headers, ...this.loadSeed() } };
+    const sequenceId = Date.now() % 2_000_000_000;
+    const payload = buildImagePayload(
+      requestType,
+      merged,
+      target,
+      image,
+      clientMessageId,
+      sequenceId,
+      Date.now(),
+    );
+
+    return this.postSigned(context, page, payload);
+  }
+
+  /** 签名 + `context.request` 发送（文本与图片共用）。 */
+  private async postSigned(context: BrowserContext, page: Page, payload: Buffer): Promise<SendApiResult> {
+    // 页面可能还没加载完 SDK：等签名器就绪（最多 15 秒）
+    for (let i = 0; i < 15; i += 1) {
+      const ready = await page
+        .evaluate((name) => {
+          const signer = (window as unknown as Record<string, unknown>)[name] as { sign?: unknown } | undefined;
+          return Boolean(signer && typeof signer.sign === "function");
+        }, SIGNER_GLOBAL)
+        .catch(() => false);
+
+      if (ready) {
+        break;
+      }
+
+      await page.waitForTimeout(1000);
+    }
+
+    const bodyB64 = payload.toString("base64");
+    const signed = await page.evaluate(
+      async ({ url, path, b64, signerGlobal }) => {
+        const signer = (window as unknown as Record<string, unknown>)[signerGlobal] as
+          | { sign?: (input: unknown) => unknown }
+          | undefined;
+        if (!signer || typeof signer.sign !== "function") {
+          return { error: "签名器不可用" };
+        }
+
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        let result = signer.sign({ url, method: "POST", body: bytes, path });
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          result = await result;
+        }
+
+        return { headers: ((result as { headers?: Record<string, string> }) ?? {}).headers ?? {} };
+      },
+      { url: SEND_URL, path: SEND_PATH, b64: bodyB64, signerGlobal: SIGNER_GLOBAL },
+    );
+
+    if ("error" in signed && signed.error) {
+      throw new OutboundError("page", `签名失败：${String(signed.error)}`);
+    }
+
+    const signHeaders = "headers" in signed ? (signed.headers ?? {}) : {};
+    if (Object.keys(signHeaders).length === 0) {
+      throw new OutboundError("page", "签名返回空头");
+    }
+
+    const response = await context.request.post(SEND_URL, {
+      headers: { "content-type": "application/x-protobuf", ...signHeaders },
+      data: payload,
+      timeout: 20_000,
+    });
+
+    if (response.status() !== 200) {
+      return { ok: false, statusCode: response.status(), errorDesc: `HTTP ${response.status()}` };
+    }
+
+    const decoded = this.decodeResponse(await response.body());
+    return decoded.statusCode === 0
+      ? { ok: true, statusCode: 0, logId: decoded.logId }
+      : { ok: false, statusCode: decoded.statusCode, errorDesc: decoded.errorDesc, logId: decoded.logId };
   }
 
   /** 解 `im_proto.Response`（只取业务码/原因/logId）。 */
