@@ -784,6 +784,16 @@ async function main(): Promise<void> {
     log.error(`浏览器启动失败：${error instanceof Error ? error.message : String(error)}`);
   }
 
+  // 浏览器一起来就挂上「会话模板采集」——必须**早于**打开私信页，
+  // 否则页面的 get_message_by_init / 轮询请求会在挂载前跑掉，首次发送就没模板（2026-11-21 实测）
+  try {
+    if (browser.isStarted) {
+      sendApi.attach(browser.browserContext);
+    }
+  } catch (error) {
+    log.warn(`会话模板采集未挂上：${error instanceof Error ? error.message : String(error)}`);
+  }
+
   // 已有 profile（登录态还在）就顺手把 selfId 探出来
   if (await browser.isLoggedIn().catch(() => false)) {
     selfUid = await browser.selfUid().catch(() => null);
