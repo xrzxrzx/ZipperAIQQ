@@ -99,6 +99,20 @@ export class DouyinBrowser {
     return this.chatPage;
   }
 
+  /**
+   * 当前浏览器 context（出站 HTTP API 要用它的 `request`：共享 cookie、不受页面 CORS 限制）。
+   *
+   * 为什么要绕开页面：页面内 `fetch`/`XHR` 到 imapi 会被安全 SDK 拦成 `Failed to fetch`，
+   * 而 `context.request` 走的是 Playwright 自己的网络栈（同一份 cookie），实测 200。
+   */
+  get browserContext(): BrowserContext {
+    if (!this.context) {
+      throw new Error("浏览器 context 不可用（尚未启动或已崩溃）");
+    }
+
+    return this.context;
+  }
+
   /** 是否已启动。 */
   get isStarted(): boolean {
     return this.context !== null;

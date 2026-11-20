@@ -132,13 +132,59 @@ message RequestBody {
   optional SendMessageRequestBody send_message_body = 100;
 }
 
+message TokenInfo {
+  optional int32 mark_id = 1;
+  optional TokenType type = 2;
+  optional int32 app_id = 3;
+  optional int64 user_id = 4;
+  optional int64 timestamp = 5;
+}
+
+enum TokenType {
+  DEFAULT_TOKEN = 0;
+  APP_TOKEN = 1;
+  SERVER_TOKEN = 2;
+}
+
+enum AuthType {
+  UNKNOWN_AUTH = 0;
+  SESSION_AUTH = 1;
+  TOKEN_AUTH = 2;
+}
+
+message MsgTrace {
+  map<int32, int64> metrics = 1;
+  optional MsgTracePath path = 2;
+}
+
+enum MsgTracePath {
+  FROM_UNKNOWN = 0;
+  FROM_FRONTIER = 1;
+  FROM_HTTP = 2;
+  FROM_SERVER = 3;
+}
+
 message Request {
   optional int32 cmd = 1;              // 100 = SEND_MESSAGE
   optional int64 sequence_id = 2;
   optional string sdk_version = 3;      // 实测 "0.1.8"
-  optional string token = 4;            // 实测为空（靠 cookie 鉴权）
-  optional int32 refer = 5;             // 实测 3
+  optional string token = 4;            // 实测为空串（鉴权信息在 token_info / headers 里）
+  optional int32 refer = 5;             // 实测 3（本 SDK 版本是 int，不是 message）
+  optional int32 inbox_type = 6;
   optional string build_number = 7;     // 实测 "0d50935:feat/pc-im-group"
   optional RequestBody body = 8;
-  map<string, string> headers = 15;
+  optional string device_id = 9;
+  optional string channel = 10;         // 实测 "douyin_pc"
+  optional string device_platform = 11;
+  optional string device_type = 12;
+  optional string os_version = 13;
+  optional string version_code = 14;    // 实测 "360000"
+  map<string, string> headers = 15;     // session_aid / session_did / identity_security_token / user_agent …
+  optional int32 config_id = 16;
+  optional TokenInfo token_info = 17;
+  optional AuthType auth_type = 18;
+  optional MsgTrace msg_trace = 19;
+  optional int32 retry_count = 20;
+  optional string biz = 21;
+  optional string access = 22;
 }

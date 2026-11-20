@@ -96,42 +96,44 @@ export class OutboundSender {
     }
 
     const page = await this.browser.page;
+    const context = this.browser.browserContext;
 
-    // ① 先用 DOM（**已真机验证可用**）：重载 → 按线索定位会话 → 点开 → 输入 → 回读
-    //    为什么不是 API 优先：imapi 的 ticket-guard 签名要 SDK 初始化上下文，
-    //    直接调 signers 拿到的是空头（2026-11-21 逆向结论），硬试只会多一次必然失败的网络请求。
+    // 挂号：旁听页面自己的 imapi 请求体，攒「会话凭证模板」
+    this.api.attach(context);
+
+    // ① 首选：HTTP API（模板 + ticket-guard 签名 + Node 侧请求），**不点 DOM**
     try {
-      const chunks = await this.sendByDom(page, plan, target);
-      const degraded = this.collectDegraded(plan);
-      this.log.info(`DOM 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
-      return { chunks, images: 0, degraded };
-    } catch (error) {
-      const domFailure = error instanceof Error ? error.message : String(error);
-      this.log.warn(`DOM 出站失败，尝试 API：${domFailure}`);
-
-      // ② 备用：HTTP API（等 ticket-guard 签名方案落地后可改回首选）
-      try {
-        let chunks = 0;
-        for (const chunk of plan.chunks) {
-          const result = await this.api.sendText(page, target, chunk, crypto.randomUUID());
-          if (!result.ok) {
-            throw new OutboundError(
-              result.statusCode === 10509 ? "risk" : "unknown",
-              `抖音发送失败：status=${result.statusCode} ${result.errorDesc ?? ""}`.trim(),
-            );
-          }
-
-          chunks += 1;
+      let chunks = 0;
+      for (const chunk of plan.chunks) {
+        const result = await this.api.sendText(context, page, target, chunk, crypto.randomUUID());
+        if (!result.ok) {
+          throw new OutboundError(
+            result.statusCode === 10509 ? "risk" : "unknown",
+            `抖音发送失败：status=${result.statusCode} ${result.errorDesc ?? ""}`.trim(),
+          );
         }
 
+        chunks += 1;
+      }
+
+      const degraded = this.collectDegraded(plan);
+      this.log.info(`API 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
+      return { chunks, images: 0, degraded };
+    } catch (error) {
+      const apiFailure = error instanceof Error ? error.message : String(error);
+      this.log.warn(`API 出站失败，改用 DOM 兜底：${apiFailure}`);
+
+      // ② 兜底：DOM（重载 → 按线索定位会话 → 点开 → 输入 → 回读）
+      try {
+        const chunks = await this.sendByDom(page, plan, target);
         const degraded = this.collectDegraded(plan);
-        this.log.info(`API 出站完成（备用路径）：${session} 文本=${chunks}`);
+        this.log.info(`DOM 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
         return { chunks, images: 0, degraded };
-      } catch (apiError) {
-        const apiFailure = apiError instanceof Error ? apiError.message : String(apiError);
+      } catch (domError) {
+        const domFailure = domError instanceof Error ? domError.message : String(domError);
         throw new OutboundError(
-          apiError instanceof OutboundError ? apiError.code : "unknown",
-          `抖音发送失败（DOM：${domFailure}；API：${apiFailure}）`,
+          domError instanceof OutboundError ? domError.code : "unknown",
+          `抖音发送失败（API：${apiFailure}；DOM：${domFailure}）`,
         );
       }
     }

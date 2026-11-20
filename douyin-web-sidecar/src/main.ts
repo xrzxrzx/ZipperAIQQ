@@ -510,7 +510,20 @@ async function main(): Promise<void> {
 
   // ── 出站 API（页面上下文里 fetch）──
   const protoPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "proto", "im.proto");
-  const sendApi = new DouyinSendApi({ log, protoPath });
+  const sendApi = new DouyinSendApi({
+    log,
+    protoPath,
+    seedPath: path.join(path.dirname(protoPath), "..", "data", "session-seed.json"),
+  });
+
+  // 出站要「会话凭证模板」：尽早挂上旁听，页面第一次轮询私信就能采到
+  try {
+    if (browser.isStarted) {
+      sendApi.attach(browser.browserContext);
+    }
+  } catch (error) {
+    log.warn(`会话模板采集未能提前挂上（会在首次发送时再挂）：${error instanceof Error ? error.message : String(error)}`);
+  }
 
   // ── 入站 ──
   const inbound = new InboundListener({

@@ -1,64 +1,49 @@
 /**
- * 出站·**HTTP API 版**（2026-11-20 真机抓包确认的正式路径）。
+ * 出站·**HTTP API 版**（2026-11-21 真机打通）。
  *
- * 为什么不用点 DOM：`/chat` 的消息列表是虚拟滚动 + 首屏延迟，用 DOM 找会话行极不稳定
- * （真机实测：一次扫到「拉链」，一次只有「抖音聊天」头 → `not_found`，消息全退回）。
- * 而页面自己发消息走的是**一条普通 HTTP 请求**：
+ * 一次发送 = 三步，全部有实测依据：
  *
- * ```
- * POST https://imapi.douyin.com/v1/message/send?verifyFp=…&fp=…&msToken=…
- * Content-Type: application/x-protobuf
- * Body: im_proto.Request{ cmd=100, sequence_id, sdk_version="0.1.8",
- *                        build_number="0d50935:feat/pc-im-group",
- *                        body.send_message_body{ conversation_id, conversation_type,
- *                          conversation_short_id, content(JSON), ext{s:client_message_id,s:stime} } }
- * ```
+ * 1. **会话模板**：页面每次轮询私信都会 POST 一次 `/v1/message/get_*`，
+ *    请求体同样是 `im_proto.Request`，里面那张 `headers` 表（`session_aid` / `session_did` /
+ *    `identity_security_token` / `user_agent` / `referer` …）就是**会话凭证**。
+ *    我们旁听页面自己的请求，把最近一次的请求体当模板留着 —— 不需要点 DOM、不需要用户操作。
+ * 2. **签名**：页面里的 `window.ucSecureConsumerSDK.sign({url, method, body, path})`
+ *    返回 `bd-ticket-guard-*` 五件套（实测 `state=ready`、`cryptoUsage=system`）。
+ * 3. **发送**：**在 Node 侧**用 `context.request.post()` 发 —— 它与浏览器共享 cookie，
+ *    但不受页面 CORS / 安全 SDK 的 `blockFetch` 限制（页面内 fetch/XHR 一律被拦成 `Failed to fetch`）。
  *
- * 关键点（都是实测结论）：
- * - **鉴权靠 cookie**：请求头只有 `content-type` 与 `referer`，没有自定义 token 头
- * - **必须在页面上下文里发**（`page.evaluate(fetch)`）：cookie、`msToken`、指纹都由浏览器提供，
- *   我们**不自己造签名**
- * - `conversation_id` 来自**入站帧**（`0:1:<self>:<peer>`），所以出站不再依赖会话列表
+ * 只换 `body.send_message_body`（会话 + 正文），其余字段照模板 —— 实测返回 `status_code=0 OK`。
  */
 
+import { readFileSync } from "node:fs";
 import protobuf from "protobufjs";
-import type { Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import type { BrowserLogger } from "./browser.js";
 import { OutboundError } from "./protocol.js";
 
-/** 发送接口地址（实测）。 */
-const SEND_URL = "https://imapi.douyin.com/v1/message/send";
+/** 发送接口。 */
+const SEND_PATH = "/v1/message/send";
+const SEND_URL = "https://imapi.douyin.com" + SEND_PATH;
 
-/** `IMCMD.SEND_MESSAGE`（实测 100）。 */
+/** 页面里用来签名的 SDK 全局（实测存在）。 */
+const SIGNER_GLOBAL = "ucSecureConsumerSDK";
+
+/** `IMCMD.SEND_MESSAGE`。 */
 const CMD_SEND_MESSAGE = 100;
 
-/** 页面自己上报的客户端标识（照抄实测值；平台用它做兼容判断，别乱改）。 */
-const SDK_VERSION = "0.1.8";
-const BUILD_NUMBER = "0d50935:feat/pc-im-group";
-
-/** 一次会话的可发送坐标（全部来自入站帧，不靠 DOM）。 */
+/** 一次会话的可发送坐标（入站帧里学，出站只用它）。 */
 export interface ConversationRef {
   conversationId: string;
   conversationShortId?: string;
   /** `im_proto` 的 conversation_type：1=私聊 2=群。 */
   conversationType: number;
-  /**
-   * 最后一条**入站**文本（截断）。
-   *
-   * 用途：API 走不通时的 DOM 兜底要「点开那个会话」——
-   * 抖音的会话行预览里就有这条文本，用它定位比用昵称稳（昵称可能重名/为空）。
-   */
+  /** 最后一条**入站**文本（截断）；DOM 兜底定位会话行用。 */
   lastText?: string;
-  /** 我们**最后一次成功发出去**的文本（截断）：再发下一条时会话行预览已经变成它了 */
+  /** 我们最后一次成功发出去的文本（截断）；再发下一条时预览已变成它。 */
   lastSent?: string;
 }
 
-/**
- * 会话登记表：`threadId`(uid/gid) → 可发送坐标。
- *
- * 为什么要它：发送请求只要 `conversation_id`，而它只出现在**入站帧**里。
- * 所以「先收到过对方的消息」才发得出去 —— 拿不到就明确报 `not_found`，不猜。
- */
+/** 会话登记表：`threadId`(uid/gid) → 可发送坐标。 */
 export class ConversationRegistry {
   private readonly map = new Map<string, ConversationRef>();
 
@@ -67,14 +52,14 @@ export class ConversationRegistry {
       return;
     }
 
-    this.map.set(threadId, ref);
+    this.map.set(threadId, { ...this.map.get(threadId), ...ref });
   }
 
   get(threadId: string): ConversationRef | undefined {
     return this.map.get(threadId);
   }
 
-  /** 记下「刚发出去的那条」——多段发送时下一段靠它定位（预览已被它覆盖）。 */
+  /** 记下「刚发出去的那条」——多段发送时下一段靠它定位（会话行预览已被它覆盖）。 */
   noteSent(threadId: string, text: string): void {
     const current = this.map.get(threadId);
     if (!current || !text) {
@@ -96,45 +81,86 @@ export interface SendApiResult {
   statusCode: number;
   /** 平台给的原因（失败时原样带出）。 */
   errorDesc?: string;
+  /** 平台 logId（排查用，不是机密）。 */
+  logId?: string;
 }
 
 /**
- * 构造发送请求的二进制体（**纯函数**，单测用它锁字段形状）。
+ * 会话模板：页面自己请求体里可复用的那部分（会话凭证 + 客户端标识）。
  *
- * @param requestType `im_proto.Request`
- * @param target 会话坐标
- * @param text 文本
- * @param clientMessageId 幂等键（UUID）
- * @param sequenceId 序列号（配对响应）
- * @param nowMs 时间戳（`s:stime`）
+ * 只保留**能复用**的字段；`sequence_id` / `body` / `cmd` 每次重算。
  */
-export function encodeSendRequest(
+interface SessionTemplate {
+  sdkVersion?: string;
+  refer?: number;
+  buildNumber?: string;
+  channel?: string;
+  deviceId?: string;
+  devicePlatform?: string;
+  deviceType?: string;
+  osVersion?: string;
+  versionCode?: string;
+  authType?: number;
+  configId?: number;
+  headers: Record<string, string>;
+  capturedAt: number;
+}
+
+/**
+ * 按模板构造发送请求体（**纯函数**，单测用它锁字段形状）。
+ *
+ * 模板给「会话凭证 + 客户端标识」，我们只覆盖 `sequence_id` 与 `body.send_message_body`。
+ */
+export function buildSendPayload(
   requestType: protobuf.Type,
+  template: {
+    sdkVersion?: string;
+    refer?: number;
+    inboxType?: number;
+    buildNumber?: string;
+    channel?: string;
+    deviceId?: string;
+    devicePlatform?: string;
+    deviceType?: string;
+    osVersion?: string;
+    versionCode?: string;
+    authType?: number;
+    headers: Record<string, string>;
+  },
   target: ConversationRef,
   text: string,
   clientMessageId: string,
   sequenceId: number,
   nowMs: number,
 ): Buffer {
-  const content = JSON.stringify({
-    aweType: 700,
-    type: 0,
-    richTextInfos: [],
-    text,
-  });
-
   const message = requestType.create({
     cmd: CMD_SEND_MESSAGE,
     sequenceId,
-    sdkVersion: SDK_VERSION,
-    refer: 3,
-    buildNumber: BUILD_NUMBER,
+    sdkVersion: template.sdkVersion ?? "0.1.8",
+    refer: template.refer ?? 3,
+    // 发送家族固定 0：页面轮询用的是 1，照抄会被判 `invalid access param`（2026-11-21 实测）
+    inboxType: 0,
+    buildNumber: template.buildNumber ?? "0d50935:feat/pc-im-group",
+    // 实测发送家族**不带 channel**；带了会被判 invalid access param
+    channel: template.channel,
+    deviceId: template.deviceId,
+    devicePlatform: template.devicePlatform,
+    deviceType: template.deviceType,
+    osVersion: template.osVersion,
+    versionCode: template.versionCode || "360000",
+    authType: template.authType ?? 1,
+    // 这两个字段平台会校验：缺了就是 `invalid access param`（2026-11-21 实测定位）
+    biz: "douyin_web",
+    access: "web_sdk",
+    // 空串也要写（proto2 的存在性）
+    token: "",
+    headers: template.headers,
     body: {
       sendMessageBody: {
         conversationId: target.conversationId,
         conversationType: target.conversationType,
         conversationShortId: target.conversationShortId,
-        content,
+        content: JSON.stringify({ aweType: 700, type: 0, richTextInfos: [], text }),
         messageType: 7,
         ext: {
           "s:client_message_id": clientMessageId,
@@ -148,36 +174,152 @@ export function encodeSendRequest(
   return Buffer.from(requestType.encode(message).finish());
 }
 
-/** 带重试语义的 API 出站器。 */
+/** API 出站器（模板 + 签名 + Node 侧请求）。 */
 export class DouyinSendApi {
   private readonly log: BrowserLogger;
   private readonly protoPath: string;
+  private readonly seedPath?: string;
+  private seed: Record<string, string> | null = null;
   private requestType: protobuf.Type | null = null;
-  private responseType: protobuf.Type | null = null;
+  private template: SessionTemplate | null = null;
+  private readonly attached = new WeakSet<BrowserContext>();
 
-  constructor(options: { log: BrowserLogger; protoPath: string }) {
+  constructor(options: { log: BrowserLogger; protoPath: string; seedPath?: string }) {
     this.log = options.log;
     this.protoPath = options.protoPath;
+    this.seedPath = options.seedPath;
   }
 
-  /** 懒加载 proto（首次发送才读盘）。 */
+  /**
+   * 读「身份凭证种子」（`identity_security_token` 等）。
+   *
+   * 为什么要它：发送家族的 `headers` 里必须有 `identity_security_token`，
+   * 而页面轮询接口的请求体里**没有**它（照抄会被判 `invalid access param`，2026-11-21 实测）。
+   * 这些值来自一次真实发送（seed 文件），长时间有效；失效时平台会明确报错。
+   */
+  private loadSeed(): Record<string, string> {
+    if (this.seed) {
+      return this.seed;
+    }
+
+    this.seed = {};
+    if (!this.seedPath) {
+      return this.seed;
+    }
+
+    try {
+      const raw = readFileSync(this.seedPath, "utf8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === "string" && value.length > 0 && key.startsWith("identity_security_")) {
+          this.seed[key] = value;
+        }
+      }
+
+      this.log.info(`身份凭证种子已加载（${Object.keys(this.seed).length} 项）`);
+    } catch {
+      this.log.warn(`身份凭证种子不可用：${this.seedPath ?? "(未配置)"}`);
+      this.seed = {};
+    }
+
+    return this.seed;
+  }
+
+  /** 懒加载 proto。 */
   async load(): Promise<void> {
-    if (this.requestType && this.responseType) {
+    if (this.requestType) {
       return;
     }
 
     const root = await protobuf.load(this.protoPath);
     this.requestType = root.lookupType("im_proto.Request");
-    this.responseType = root.lookupType("im_proto.Response");
     this.log.info(`出站协议已加载：${this.protoPath}`);
   }
 
   /**
-   * 发一条文本（页面上下文里 fetch，自动带 cookie 与指纹）。
+   * 挂上「采集会话模板」的旁听（幂等：同一个 context 只挂一次）。
    *
-   * @throws {OutboundError} 网络/页面异常；平台拒绝返回 `ok=false`（由调用方转 ack）
+   * 页面每次轮询私信都会 POST `/v1/message/…`，我们只读它的**请求体**（不拦截、不改写）。
+   */
+  attach(context: BrowserContext): void {
+    if (this.attached.has(context)) {
+      return;
+    }
+
+    this.attached.add(context);
+    context.on("request", (request) => {
+      const url = request.url();
+      if (!/imapi\.douyin\.com\/v\d+\/(message|conversation)\//.test(url) || request.method() !== "POST") {
+        return;
+      }
+
+      const body = request.postDataBuffer();
+      if (body && body.length > 0) {
+        this.captureFromRequestBody(body, new URL(url).pathname);
+      }
+    });
+
+    this.log.info("已挂上会话模板采集（旁听页面自己的 imapi 请求体）");
+  }
+
+  /** 是否已有可用模板（没有就发不出去，要等页面自己请求一次）。 */
+  get hasTemplate(): boolean {
+    return this.template !== null;
+  }
+
+  /**
+   * 从页面自己的 imapi 请求体里采集会话模板。
+   *
+   * 调用时机：`page.on("response")` 命中 `/v1/message/…` 或 `/v3/conversation/…` 时。
+   * 好处：**不需要真实发一条消息**就有会话凭证（页面本来就在轮询）。
+   */
+  captureFromRequestBody(body: Buffer, path: string): void {
+    if (!this.requestType || body.length === 0) {
+      return;
+    }
+
+    try {
+      const decoded = this.requestType.toObject(this.requestType.decode(body), {
+        longs: String,
+        bytes: Buffer,
+        defaults: false,
+      }) as Record<string, unknown>;
+
+      const headers = (decoded.headers ?? {}) as Record<string, string>;
+      if (!headers.session_did && !headers.identity_security_token) {
+        // 没有会话凭证的请求体没用（例如匿名接口）
+        return;
+      }
+
+      this.template = {
+        sdkVersion: decoded.sdkVersion as string | undefined,
+        refer: decoded.refer === undefined ? undefined : Number(decoded.refer),
+        buildNumber: decoded.buildNumber as string | undefined,
+        channel: decoded.channel as string | undefined,
+        deviceId: decoded.deviceId as string | undefined,
+        devicePlatform: decoded.devicePlatform as string | undefined,
+        deviceType: decoded.deviceType as string | undefined,
+        osVersion: decoded.osVersion as string | undefined,
+        versionCode: decoded.versionCode as string | undefined,
+        authType: decoded.authType === undefined ? undefined : Number(decoded.authType),
+        configId: decoded.configId === undefined ? undefined : Number(decoded.configId),
+        headers,
+        capturedAt: Date.now(),
+      };
+
+      this.log.debug(`会话模板已采集：${path}（headers=${Object.keys(headers).length} 项）`);
+    } catch (error) {
+      this.log.debug(`会话模板采集失败（${path}）：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * 发一条文本。
+   *
+   * @throws {OutboundError} 模板缺失 / 签名失败 / 网络失败
    */
   async sendText(
+    context: BrowserContext,
     page: Page,
     target: ConversationRef,
     text: string,
@@ -186,14 +328,23 @@ export class DouyinSendApi {
     await this.load();
 
     const requestType = this.requestType;
-    const responseType = this.responseType;
-    if (!requestType || !responseType) {
+    const template = this.template;
+    if (!requestType) {
       throw new OutboundError("page", "出站协议未加载");
     }
 
+    if (!template) {
+      throw new OutboundError(
+        "not_found",
+        "还没有会话凭证模板（等页面自己请求一次私信接口，通常几秒内就有）",
+      );
+    }
+
     const sequenceId = Date.now() % 2_000_000_000;
-    const payload = encodeSendRequest(
+    const payload = buildSendPayload(
       requestType,
+      // 发送家族必须有 identity_security_token：模板（轮询体）里没有，从 seed 补
+      { ...template, headers: { ...template.headers, ...this.loadSeed() } },
       target,
       text,
       clientMessageId,
@@ -201,78 +352,86 @@ export class DouyinSendApi {
       Date.now(),
     );
 
-    const payloadB64 = payload.toString("base64");
+    const bodyB64 = Buffer.from(payload).toString("base64");
 
-    const raw = await page.evaluate(
-      async ({ url, bodyB64 }) => {
-        // 反爬参数从 cookie 取（页面自己也在用这套）
-        const readCookie = (name: string): string => {
-          const hit = document.cookie
-            .split(";")
-            .map((part) => part.trim())
-            .find((part) => part.startsWith(name + "="));
-          return hit ? decodeURIComponent(hit.slice(name.length + 1)) : "";
-        };
+    // 页面里签名（ticket-guard 五件套）
+    const signed = await page.evaluate(
+      async ({ url, path, b64, signerGlobal }) => {
+        const signer = (window as unknown as Record<string, unknown>)[signerGlobal] as
+          | { sign?: (input: unknown) => unknown }
+          | undefined;
 
-        const fp = readCookie("s_v_web_id");
-        const msToken = readCookie("msToken");
-        const query = new URLSearchParams();
-        if (fp) {
-          query.set("verifyFp", fp);
-          query.set("fp", fp);
-        }
-        if (msToken) {
-          query.set("msToken", msToken);
+        if (!signer || typeof signer.sign !== "function") {
+          return { error: "签名器不可用（页面里没有 ucSecureConsumerSDK.sign）" };
         }
 
-        const bytes = Uint8Array.from(atob(bodyB64), (c) => c.charCodeAt(0));
-        const fullUrl = query.toString().length > 0 ? `${url}?${query.toString()}` : url;
-
-        const resp = await fetch(fullUrl, {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/x-protobuf" },
-          body: bytes,
-        });
-
-        const buf = new Uint8Array(await resp.arrayBuffer());
-        let binary = "";
-        for (let i = 0; i < buf.length; i += 1) {
-          binary += String.fromCharCode(buf[i] as number);
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        let result = signer.sign({ url, method: "POST", body: bytes, path });
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          result = await result;
         }
 
-        return { status: resp.status, bodyB64: btoa(binary) };
+        const headers = ((result as { headers?: Record<string, string> }) ?? {}).headers ?? {};
+        return { headers };
       },
-      { url: SEND_URL, bodyB64: payloadB64 },
+      { url: SEND_URL, path: SEND_PATH, b64: bodyB64, signerGlobal: SIGNER_GLOBAL },
     );
 
-    if (raw.status !== 200) {
-      return { ok: false, statusCode: raw.status, errorDesc: `HTTP ${raw.status}` };
+    if ("error" in signed && signed.error) {
+      throw new OutboundError("page", `签名失败：${String(signed.error)}`);
     }
 
-    let decoded: { cmd?: number; statusCode?: number; errorDesc?: string };
+    const signHeaders = "headers" in signed ? (signed.headers ?? {}) : {};
+    if (Object.keys(signHeaders).length === 0) {
+      throw new OutboundError("page", "签名返回空头（ticket-guard 未产出）");
+    }
+
+    // Node 侧发（共享 cookie、不受页面 CORS/SDK 拦截）
+    const response = await context.request.post(SEND_URL, {
+      headers: { "content-type": "application/x-protobuf", ...signHeaders },
+      data: payload,
+      timeout: 20_000,
+    });
+
+    if (response.status() !== 200) {
+      return { ok: false, statusCode: response.status(), errorDesc: `HTTP ${response.status()}` };
+    }
+
+    const raw = await response.body();
+    const decoded = this.decodeResponse(raw);
+    if (decoded.statusCode !== 0) {
+      return { ok: false, statusCode: decoded.statusCode, errorDesc: decoded.errorDesc, logId: decoded.logId };
+    }
+
+    this.log.debug(`API 发送成功：seq=${sequenceId} conv=${target.conversationId} logId=${decoded.logId ?? "-"}`);
+    return { ok: true, statusCode: 0, logId: decoded.logId };
+  }
+
+  /** 解 `im_proto.Response`（只取业务码/原因/logId）。 */
+  private decodeResponse(raw: Buffer): { statusCode: number; errorDesc?: string; logId?: string } {
+    const requestType = this.requestType;
+    if (!requestType?.root) {
+      return { statusCode: -1, errorDesc: "proto 未加载" };
+    }
+
     try {
-      decoded = responseType.toObject(
-        responseType.decode(Buffer.from(raw.bodyB64, "base64")),
-        { longs: String, bytes: Buffer, defaults: false },
-      ) as typeof decoded;
-    } catch (error) {
-      throw new OutboundError(
-        "unknown",
-        `发送响应解不出来：${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+      const responseType = requestType.root.lookupType("im_proto.Response");
+      const decoded = responseType.toObject(responseType.decode(raw), {
+        longs: String,
+        bytes: Buffer,
+        defaults: false,
+      }) as { statusCode?: number; errorDesc?: string; logId?: string };
 
-    const statusCode = Number(decoded.statusCode ?? 0);
-    if (statusCode !== 0) {
       return {
-        ok: false,
-        statusCode,
-        errorDesc: decoded.errorDesc || `status=${statusCode}`,
+        statusCode: Number(decoded.statusCode ?? 0),
+        errorDesc: decoded.errorDesc,
+        logId: decoded.logId,
+      };
+    } catch (error) {
+      return {
+        statusCode: -1,
+        errorDesc: `响应解不出来：${error instanceof Error ? error.message : String(error)}`,
       };
     }
-
-    this.log.debug(`API 发送成功：seq=${sequenceId} conv=${target.conversationId}`);
-    return { ok: true, statusCode: 0 };
   }
 }
