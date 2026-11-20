@@ -105,7 +105,10 @@ export class OutboundSender {
     try {
       let chunks = 0;
       for (const chunk of plan.chunks) {
-        const result = await this.api.sendText(context, page, target, chunk, crypto.randomUUID());
+        const result = await this.api.sendText(context, page, target, chunk, crypto.randomUUID(), {
+          mentions: plan.mentions,
+          replyTo: plan.replyTo,
+        });
         if (!result.ok) {
           throw new OutboundError(
             result.statusCode === 10509 ? "risk" : "unknown",
@@ -147,8 +150,15 @@ export class OutboundSender {
       degraded.push("image");
     }
 
-    if (plan.mentions.length > 0 && !degraded.includes("mention")) {
+    // @ 与引用现在会真正写进请求（mentioned_users / ref_msg_info），
+    // 只有「拿不到可用的用户 id / 消息 id」才算降级
+    const usableMentions = plan.mentions.filter((m) => /^\d+$/.test(m.userId)).length;
+    if (plan.mentions.length > 0 && usableMentions < plan.mentions.length && !degraded.includes("mention")) {
       degraded.push("mention");
+    }
+
+    if (plan.replyTo && !/^\d+$/.test(plan.replyTo) && !degraded.includes("reply")) {
+      degraded.push("reply");
     }
 
     return degraded;

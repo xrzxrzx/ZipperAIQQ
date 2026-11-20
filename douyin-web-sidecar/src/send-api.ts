@@ -15,7 +15,7 @@
  * 只换 `body.send_message_body`（会话 + 正文），其余字段照模板 —— 实测返回 `status_code=0 OK`。
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import protobuf from "protobufjs";
 import type { BrowserContext, Page } from "playwright";
 import type { BrowserLogger } from "./browser.js";
@@ -103,6 +103,8 @@ interface SessionTemplate {
   authType?: number;
   configId?: number;
   headers: Record<string, string>;
+  /** 是否来自**发送家族**的请求体（`cmd=100`）——它的 headers 带全，最可信 */
+  fromSend: boolean;
   capturedAt: number;
 }
 
@@ -132,7 +134,15 @@ export function buildSendPayload(
   clientMessageId: string,
   sequenceId: number,
   nowMs: number,
+  extras: { mentions?: { userId: string; label: string }[]; replyTo?: string | null } = {},
 ): Buffer {
+  // @：`mentioned_users` 是 int64 列表（真正的 @，不用敲 @ 再选人）
+  const mentionedUsers = (extras.mentions ?? [])
+    .map((mention) => Number(mention.userId))
+    .filter((id) => Number.isFinite(id) && id > 0);
+
+  // 引用：`ref_msg_info` 需要被引用消息的 serverMessageId（纯数字）
+  const replyTo = extras.replyTo && /^\d+$/.test(extras.replyTo) ? extras.replyTo : null;
   const message = requestType.create({
     cmd: CMD_SEND_MESSAGE,
     sequenceId,
@@ -162,6 +172,8 @@ export function buildSendPayload(
         conversationShortId: target.conversationShortId,
         content: JSON.stringify({ aweType: 700, type: 0, richTextInfos: [], text }),
         messageType: 7,
+        mentionedUsers,
+        refMsgInfo: replyTo ? { referencedMessageId: replyTo, hint: "" } : undefined,
         ext: {
           "s:client_message_id": clientMessageId,
           "s:stime": String(nowMs),
@@ -262,6 +274,96 @@ export class DouyinSendApi {
     this.log.info("已挂上会话模板采集（旁听页面自己的 imapi 请求体）");
   }
 
+  /**
+   * 把 `identity_security_*` 落盘（token 会过期，靠真实发送自愈）。
+   *
+   * 为什么要落盘：模板只在内存里，重启后第一次发送就没凭证；
+   * 存下来下次启动直接可用，等到真的失效再由一次真实发送刷新。
+   */
+  private persistSeed(headers: Record<string, string>): void {
+    if (!this.seedPath) {
+      return;
+    }
+
+    const picked: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      if (key.startsWith("identity_security_") && typeof value === "string") {
+        picked[key] = value;
+      }
+    }
+
+    if (!picked["identity_security_token"]) {
+      return;
+    }
+
+    this.seed = { ...(this.seed ?? {}), ...picked };
+
+    try {
+      writeFileSync(this.seedPath, JSON.stringify({ refreshedAt: new Date().toISOString(), ...picked }, null, 2), "utf8");
+      this.log.info(`身份凭证 seed 已刷新（${Object.keys(picked).length} 项）`);
+    } catch (error) {
+      this.log.warn(`seed 落盘失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * 兜底模板：页面没轮询过（WS 在线时可能完全不轮询）也能发。
+   *
+   * 这些 `headers` 的非敏感值来自真机抓包（2026-11-21），敏感凭证由 seed 提供；
+   * `user_agent` / 屏幕尺寸从页面取，取不到就用抓包常量。
+   */
+  private fallbackTemplate(pageValues: Partial<Record<string, string>> = {}): SessionTemplate {
+    const userAgent = pageValues.userAgent ?? "";
+
+    return {
+      sdkVersion: "0.1.8",
+      refer: 3,
+      buildNumber: "0d50935:feat/pc-im-group",
+      devicePlatform: "douyin_pc",
+      deviceId: "0",
+      versionCode: "360000",
+      authType: 1,
+      fromSend: false,
+      capturedAt: Date.now(),
+      headers: {
+        app_name: "douyin_pc",
+        browser_language: pageValues.browserLanguage ?? "zh-CN",
+        browser_name: "Mozilla",
+        browser_online: "true",
+        browser_platform: pageValues.browserPlatform ?? "Win32",
+        browser_version: userAgent.replace(/^Mozilla\//, ""),
+        cookie_enabled: "true",
+        deviceId: "0",
+        "is-retry": "0",
+        priority_region: "cn",
+        referer: "",
+        screen_height: pageValues.screenHeight ?? "950",
+        screen_width: pageValues.screenWidth ?? "1400",
+        session_aid: "6383",
+        session_did: "0",
+        timezone_name: pageValues.timezone ?? "Asia/Shanghai",
+        user_agent: userAgent,
+        ...this.loadSeed(),
+      },
+    };
+  }
+
+  /** 从页面取兜底模板需要的环境值（取不到就用常量）。 */
+  private async readPageEnv(page: Page): Promise<Partial<Record<string, string>>> {
+    try {
+      return await page.evaluate(() => ({
+        userAgent: navigator.userAgent,
+        browserLanguage: navigator.language,
+        browserPlatform: navigator.platform,
+        screenWidth: String(window.screen?.width ?? 1400),
+        screenHeight: String(window.screen?.height ?? 950),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }));
+    } catch {
+      return {};
+    }
+  }
+
   /** 是否已有可用模板（没有就发不出去，要等页面自己请求一次）。 */
   get hasTemplate(): boolean {
     return this.template !== null;
@@ -291,6 +393,19 @@ export class DouyinSendApi {
         return;
       }
 
+      const cmd = Number(decoded.cmd ?? 0);
+      const fromSend = cmd === CMD_SEND_MESSAGE;
+
+      // 发送家族的请求体里带 identity_security_*：顺手把 seed 刷新并落盘（token 会过期）
+      if (fromSend) {
+        this.persistSeed(headers);
+      }
+
+      // 发送家族的模板更完整；已有发送家族模板时不被轮询体覆盖
+      if (!fromSend && this.template?.fromSend) {
+        return;
+      }
+
       this.template = {
         sdkVersion: decoded.sdkVersion as string | undefined,
         refer: decoded.refer === undefined ? undefined : Number(decoded.refer),
@@ -304,10 +419,13 @@ export class DouyinSendApi {
         authType: decoded.authType === undefined ? undefined : Number(decoded.authType),
         configId: decoded.configId === undefined ? undefined : Number(decoded.configId),
         headers,
+        fromSend,
         capturedAt: Date.now(),
       };
 
-      this.log.debug(`会话模板已采集：${path}（headers=${Object.keys(headers).length} 项）`);
+      this.log.info(
+        `会话模板已采集：${path}（${fromSend ? "发送家族" : "轮询家族"}，headers=${Object.keys(headers).length} 项）`,
+      );
     } catch (error) {
       this.log.debug(`会话模板采集失败（${path}）：${error instanceof Error ? error.message : String(error)}`);
     }
@@ -324,19 +442,21 @@ export class DouyinSendApi {
     target: ConversationRef,
     text: string,
     clientMessageId: string,
+    extras: { mentions?: { userId: string; label: string }[]; replyTo?: string | null } = {},
   ): Promise<SendApiResult> {
     await this.load();
 
     const requestType = this.requestType;
-    const template = this.template;
     if (!requestType) {
       throw new OutboundError("page", "出站协议未加载");
     }
 
-    if (!template) {
+    // 有页面采到的模板优先（它的 headers 最贴近真实）；没有就用兜底模板 + seed
+    const template = this.template ?? this.fallbackTemplate(await this.readPageEnv(page));
+    if (!template.fromSend && !this.loadSeed()["identity_security_token"]) {
       throw new OutboundError(
         "not_found",
-        "还没有会话凭证模板（等页面自己请求一次私信接口，通常几秒内就有）",
+        "既没有页面采到的会话模板，也没有身份凭证 seed —— 先让页面请求一次私信接口",
       );
     }
 
@@ -350,6 +470,7 @@ export class DouyinSendApi {
       clientMessageId,
       sequenceId,
       Date.now(),
+      extras,
     );
 
     const bodyB64 = Buffer.from(payload).toString("base64");

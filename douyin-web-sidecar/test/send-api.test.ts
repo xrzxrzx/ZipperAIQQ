@@ -120,6 +120,41 @@ test("buildSendPayload：content 是网页端同款 JSON，ext 带幂等键与�
   assert.equal(ext["s:mentioned_users"], "");
 });
 
+test("buildSendPayload：@ 与引用写进请求（mentioned_users / ref_msg_info）", () => {
+  const bytes = buildSendPayload(
+    Request,
+    TEMPLATE,
+    TARGET,
+    "在吗",
+    "cid",
+    1,
+    1,
+    { mentions: [{ userId: "88892527967", label: "拉链" }], replyTo: "7710297718429976122" },
+  );
+
+  const decoded = Request.toObject(Request.decode(bytes), { longs: String, bytes: Buffer, defaults: false }) as {
+    body?: { sendMessageBody?: { mentionedUsers?: string[]; refMsgInfo?: { referencedMessageId: string; hint: string } } };
+  };
+  const send = decoded.body?.sendMessageBody;
+
+  assert.deepEqual((send?.mentionedUsers ?? []).map(String), ["88892527967"]);
+  assert.equal(String(send?.refMsgInfo?.referencedMessageId), "7710297718429976122");
+  assert.equal(send?.refMsgInfo?.hint, "");
+});
+
+test("buildSendPayload：非法 id 不进请求（留降级给上层）", () => {
+  const bytes = buildSendPayload(Request, TEMPLATE, TARGET, "x", "cid", 1, 1, {
+    mentions: [{ userId: "abc", label: "x" }],
+    replyTo: "not-a-number",
+  });
+  const decoded = Request.toObject(Request.decode(bytes), { longs: String, bytes: Buffer, defaults: false }) as {
+    body?: { sendMessageBody?: { mentionedUsers?: string[]; refMsgInfo?: unknown } };
+  };
+
+  assert.deepEqual(decoded.body?.sendMessageBody?.mentionedUsers ?? [], []);
+  assert.equal(decoded.body?.sendMessageBody?.refMsgInfo, undefined);
+});
+
 test("ConversationRegistry：记住 / 取出 / 空值不登记 / noteSent 只改 lastSent", () => {
   const registry = new ConversationRegistry();
 
