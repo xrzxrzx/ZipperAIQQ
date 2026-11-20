@@ -54,6 +54,17 @@ public static class DouyinFrameTypes
 
     /// <summary>sidecar → Server：登录状态变化（online / waitingQr / loggedOut / error）。</summary>
     public const string LoginState = "login.state";
+
+    // ── 浏览器底座（2026-11-20 B1）：登录挑战与页面体征 ──
+
+    /// <summary>sidecar → Server：登录需要人工介入（短信验证码 / 滑块）。</summary>
+    public const string LoginChallenge = "login.challenge";
+
+    /// <summary>Server → sidecar：用户回填的挑战答案。</summary>
+    public const string LoginChallengeAnswer = "login.challenge.answer";
+
+    /// <summary>sidecar → Server：浏览器页面体征（可用性 / 内存 / 上次动作）。</summary>
+    public const string BrowserState = "browser.state";
 }
 
 /// <summary>抖音登录状态（字符串常量，进 JSON 也进 API 响应）。</summary>
@@ -79,6 +90,39 @@ public static class DouyinLoginState
 /// <param name="QrCodeBase64">PNG 的 base64（无 data: 前缀）。</param>
 public sealed record DouyinLoginQr(string QrCodeBase64);
 
+/// <summary>登录挑战的两种形态（<c>login.challenge</c> 的 <c>kind</c>）。</summary>
+public static class DouyinChallengeKind
+{
+    /// <summary>短信验证码：用户在客户端输入 6 位码。</summary>
+    public const string Sms = "sms";
+
+    /// <summary>滑块：用户给缺口水平偏移（px）。</summary>
+    public const string Slider = "slider";
+
+    /// <summary>是否认得（不认得的挑战**不假装能处理**，交回人工）。</summary>
+    public static bool IsKnown(string? kind) =>
+        string.Equals(kind, Sms, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, Slider, StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>登录挑战帧体（<c>login.challenge</c>）。</summary>
+/// <param name="Kind">见 <see cref="DouyinChallengeKind"/>。</param>
+/// <param name="Hint">给用户看的提示（如「输入手机收到的 6 位验证码」）。</param>
+/// <param name="BgBase64">滑块背景图（PNG base64，可空）。</param>
+/// <param name="PieceBase64">滑块拼图块（PNG base64，可空）。</param>
+public sealed record DouyinLoginChallenge(
+    string Kind,
+    string? Hint,
+    string? BgBase64,
+    string? PieceBase64);
+
+/// <summary>浏览器体征帧体（<c>browser.state</c>）。</summary>
+/// <param name="Page"><c>ok</c> / <c>recycling</c> / <c>crashed</c> / <c>closed</c> / <c>unknown</c>。</param>
+/// <param name="MemoryMb">渲染堆占用（MB）；0 = 未测到。</param>
+/// <param name="LastAction">上一个动作（人话，便于对照日志）。</param>
+/// <param name="Note">补充说明（回收 / 崩溃原因）。</param>
+public sealed record DouyinBrowserState(string? Page, int MemoryMb, string? LastAction, string? Note);
+
 /// <summary>登录状态帧体（<c>login.state</c>）。</summary>
 /// <param name="State">见 <see cref="DouyinLoginState"/>。</param>
 /// <param name="SelfId">登录成功后的 uid。</param>
@@ -96,17 +140,31 @@ public sealed record DouyinFrame(string Type, JsonObject Data);
 /// <param name="Platform">sidecar 声明的平台标识（应为 <c>douyin</c>）。</param>
 /// <param name="SelfId">当前登录的抖音账号 uid；未登录时为 <c>null</c>。</param>
 /// <param name="Capabilities">sidecar 支持的能力（<c>text</c> / <c>image</c> / <c>mention</c> / <c>reply</c>）。</param>
+/// <param name="Driver">
+/// 底座驱动（<c>im</c> / <c>web</c>）；老 sidecar 不带这个字段 → <c>null</c>（按 <c>im</c> 处理）。
+/// </param>
 public sealed record DouyinHello(
     string? Version,
     string? Platform,
     string? SelfId,
-    IReadOnlyList<string> Capabilities);
+    IReadOnlyList<string> Capabilities,
+    string? Driver = null);
 
 /// <summary>出站结果帧（<c>ack</c>）。</summary>
 /// <param name="RequestId">配对键；缺了就没法配对（会被丢弃）。</param>
 /// <param name="Ok">是否成功。</param>
 /// <param name="Error">失败原因（sidecar 给的原文，如 <c>conversation-risk</c> 拒绝）。</param>
-public sealed record DouyinAck(string? RequestId, bool Ok, string? Error);
+/// <param name="Code">
+/// 失败码（<c>auth</c> / <c>risk</c> / <c>not_found</c> / <c>timeout</c> / <c>readback</c> / <c>page</c> / <c>unknown</c>）。
+/// 浏览器底座才有；老 sidecar 不带 → <c>null</c>。用于让日志与模型区分「该不该重试」。
+/// </param>
+/// <param name="Degraded">降级项（如 <c>reply_to</c>）：**发出去了但没原样还原**，必须让上层知道。</param>
+public sealed record DouyinAck(
+    string? RequestId,
+    bool Ok,
+    string? Error,
+    string? Code = null,
+    string? Degraded = null);
 
 /// <summary>查询结果帧（<c>result</c>）。</summary>
 /// <param name="RequestId">配对键。</param>
@@ -224,7 +282,8 @@ public static class DouyinProtocol
             Version: GetNonEmpty(data, "version"),
             Platform: GetNonEmpty(data, "platform"),
             SelfId: GetNonEmpty(data, "selfId"),
-            Capabilities: capabilities);
+            Capabilities: capabilities,
+            Driver: GetNonEmpty(data, "driver"));
     }
 
     /// <summary>
@@ -326,7 +385,12 @@ public static class DouyinProtocol
         // 缺 ok 视为成功：只在明确 false 时才算失败，别让老 sidecar 的不完整帧全变失败。
         var ok = GetBool(data, "ok") ?? true;
 
-        return new DouyinAck(requestId, ok, GetNonEmpty(data, "error"));
+        return new DouyinAck(
+            requestId,
+            ok,
+            GetNonEmpty(data, "error"),
+            GetNonEmpty(data, "code"),
+            GetNonEmpty(data, "degraded"));
     }
 
     /// <summary>解析 <c>result</c> 帧体；缺 <c>requestId</c> 无法配对，返回 <c>null</c>。</summary>
@@ -885,6 +949,57 @@ public static class DouyinProtocol
     {
         var base64 = GetNonEmpty(data, "qrcodeBase64") ?? GetNonEmpty(data, "qrCodeBase64");
         return base64 is null ? null : new DouyinLoginQr(base64);
+    }
+
+    /// <summary>
+    /// 解析登录挑战帧（<c>login.challenge</c>）。
+    /// 缺 <c>kind</c> 或 kind 认不出 → <c>null</c>（**不假装能处理**不认识的挑战）。
+    /// </summary>
+    public static DouyinLoginChallenge? ParseChallenge(JsonObject? data)
+    {
+        var kind = GetNonEmpty(data, "kind");
+        if (kind is null || !DouyinChallengeKind.IsKnown(kind))
+        {
+            return null;
+        }
+
+        return new DouyinLoginChallenge(
+            kind.Trim().ToLowerInvariant(),
+            GetNonEmpty(data, "hint"),
+            GetNonEmpty(data, "bgBase64"),
+            GetNonEmpty(data, "pieceBase64"));
+    }
+
+    /// <summary>拼一帧 <c>login.challenge.answer</c>（Server → sidecar）。</summary>
+    /// <param name="kind">挑战类型（<see cref="DouyinChallengeKind"/>）。</param>
+    /// <param name="value">用户答案（短信码 / 滑块偏移像素）。</param>
+    public static string BuildChallengeAnswer(string kind, string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(kind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+
+        return Frame(DouyinFrameTypes.LoginChallengeAnswer, new JsonObject
+        {
+            ["kind"] = kind,
+            ["value"] = value,
+        });
+    }
+
+    /// <summary>解析浏览器体征帧（<c>browser.state</c>）。缺 page 时返回 <c>null</c>。</summary>
+    public static DouyinBrowserState? ParseBrowserState(JsonObject? data)
+    {
+        var page = GetNonEmpty(data, "page");
+        if (page is null)
+        {
+            return null;
+        }
+
+        var memory = GetLong(data, "memoryMb") ?? 0;
+        return new DouyinBrowserState(
+            Page: page,
+            MemoryMb: (int)Math.Clamp(memory, 0, int.MaxValue),
+            LastAction: GetNonEmpty(data, "lastAction"),
+            Note: GetNonEmpty(data, "note"));
     }
 
     /// <summary>解析登录状态帧（<c>login.state</c>）。缺 state 时返回 null。</summary>

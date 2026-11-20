@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ZipperAIQQ.Channel;
+using ZipperAIQQ.Channel.Failures;
 using ZipperAIQQ.Server.Access;
 using ZipperAIQQ.Server.Channels;
 using ZipperAIQQ.Server.Dto;
@@ -119,6 +120,18 @@ public sealed class GetPlatformsAction : IApiAction
                 // 登录管理（2026-10-28）：online / waitingQr / loggedOut / error / unknown
                 loginState = _douyin.LoginState,
                 loginMessage = _douyin.LoginMessage,
+                // 底座（2026-11-20 B1）：客户端要知道"现在用的是哪套底座、页面还好不好"
+                driver = _douyin.Driver,
+                driverRejectNote = _douyin.DriverRejectNote,
+                browser = _douyin.BrowserState is { } state
+                    ? new
+                    {
+                        page = state.Page,
+                        memoryMb = state.MemoryMb,
+                        lastAction = state.LastAction,
+                        note = state.Note,
+                    }
+                    : null,
             },
         };
     }
@@ -211,15 +224,37 @@ public sealed class SaveDouyinAction : IApiAction
             token = tokenElement.GetString()?.Trim() ?? string.Empty;
         }
 
+        // 底座驱动（2026-11-20 B1）：web / im。认不出的值由服务层抛 ArgumentException → 400。
+        string? driver = null;
+        if (payload.TryGetProperty("driver", out var driverElement) && driverElement.ValueKind != JsonValueKind.Null)
+        {
+            if (driverElement.ValueKind != JsonValueKind.String)
+            {
+                throw new ApiException(ApiResponse.BadRequest, "driver 必须是字符串（web / im）。");
+            }
+
+            driver = driverElement.GetString()?.Trim() ?? string.Empty;
+        }
+
         // 会话白名单不在这里改（2026-10-28）：统一走 setAccess 的 access.douyin.whitelist，
         // 配置入口在客户端「人员与名单」。老的 allowedSessions 入参**忽略**（不报错，兼容旧客户端）。
-        var changed = await _options.UpdateAsync(
-            enabled,
-            token,
-            ReadPositiveInt(payload, "sendTimeoutMs"),
-            ReadPositiveInt(payload, "maxTextLength"),
-            ReadPositiveInt(payload, "queryTimeoutMs"),
-            ct).ConfigureAwait(false);
+        IReadOnlyList<string> changed;
+        try
+        {
+            changed = await _options.UpdateAsync(
+                enabled,
+                token,
+                ReadPositiveInt(payload, "sendTimeoutMs"),
+                ReadPositiveInt(payload, "maxTextLength"),
+                ReadPositiveInt(payload, "queryTimeoutMs"),
+                driver,
+                ct).ConfigureAwait(false);
+        }
+        catch (ArgumentException ex)
+        {
+            // 驱动值非法：明确 400 + 原因（别让用户以为"保存成功了但没生效"）
+            throw new ApiException(ApiResponse.BadRequest, ex.Message);
+        }
 
         if (changed.Count == 0)
         {
@@ -351,14 +386,33 @@ public sealed class GetDouyinLoginAction : IApiAction
     public string Name => "getDouyinLogin";
 
     public Task<object?> HandleAsync(JsonElement payload, CancellationToken ct) =>
-        Task.FromResult<object?>(new
-        {
-            state = _channel.LoginState,
-            selfId = _channel.SelfId,
-            qrcodeBase64 = _channel.LoginQrBase64,
-            qrcodeAt = _channel.LoginQrAt?.ToUnixTimeMilliseconds(),
-            message = _channel.LoginMessage,
-        });
+        Task.FromResult<object?>(LoginPayload(_channel));
+
+    /// <summary>
+    /// 登录态响应体（<c>getDouyinLogin</c> / <c>startDouyinLogin</c> / <c>submitDouyinChallenge</c> 共用一个形状）。
+    /// </summary>
+    /// <remarks>
+    /// 三处共用一份：客户端只维护一个 DTO，字段加减不会出现"某个 action 少一个字段"这种漂移
+    /// （<c>saveDouyin</c> 的 <c>saved</c> 事故就是两边各写一套导致的）。
+    /// </remarks>
+    internal static object LoginPayload(IChannelLogin channel) => new
+    {
+        state = channel.LoginState,
+        selfId = channel.SelfId,
+        qrcodeBase64 = channel.LoginQrBase64,
+        qrcodeAt = channel.LoginQrAt?.ToUnixTimeMilliseconds(),
+        message = channel.LoginMessage,
+        // 登录挑战（短信 / 滑块）：有新对象才有值，客户端据此弹输入框 / 拖滑块
+        challenge = channel.Challenge is { } challenge
+            ? new
+            {
+                kind = challenge.Kind,
+                hint = challenge.Hint,
+                bgBase64 = challenge.BgBase64,
+                pieceBase64 = challenge.PieceBase64,
+            }
+            : null,
+    };
 }
 
 /// <summary>让 sidecar 发起抖音登录（<c>startDouyinLogin</c>）。</summary>
@@ -391,14 +445,7 @@ public sealed class StartDouyinLoginAction : IApiAction
         await _channel.RequestLoginAsync(ct).ConfigureAwait(false);
         await _configs.AppendAuditAsync("startDouyinLogin", Actor, "start", ct).ConfigureAwait(false);
 
-        return new
-        {
-            state = _channel.LoginState,
-            selfId = _channel.SelfId,
-            qrcodeBase64 = _channel.LoginQrBase64,
-            qrcodeAt = _channel.LoginQrAt?.ToUnixTimeMilliseconds(),
-            message = _channel.LoginMessage,
-        };
+        return GetDouyinLoginAction.LoginPayload(_channel);
     }
 }
 
@@ -433,5 +480,74 @@ public sealed class LogoutDouyinAction : IApiAction
         await _configs.AppendAuditAsync("logoutDouyin", Actor, "logout", ct).ConfigureAwait(false);
 
         return new { state = _channel.LoginState, loggedOut = true };
+    }
+}
+
+/// <summary>
+/// 回填抖音登录挑战（<c>submitDouyinChallenge</c>）：短信验证码 / 滑块偏移。
+/// </summary>
+/// <remarks>
+/// payload：<c>{ "kind": "sms"|"slider", "value": "123456"|"128" }</c>。
+/// 响应形状与 <c>getDouyinLogin</c> 完全一致 —— 客户端提交后直接拿新状态刷新界面，
+/// 不必再单独轮询一次。
+/// </remarks>
+public sealed class SubmitDouyinChallengeAction : IApiAction
+{
+    private const string Actor = "http-client";
+
+    private readonly IChannelLogin _channel;
+    private readonly IConfigStore _configs;
+
+    public SubmitDouyinChallengeAction(IChannelLogin channel, IConfigStore configs)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(configs);
+
+        _channel = channel;
+        _configs = configs;
+    }
+
+    public string Name => "submitDouyinChallenge";
+
+    public async Task<object?> HandleAsync(JsonElement payload, CancellationToken ct)
+    {
+        if (payload.ValueKind != JsonValueKind.Object)
+        {
+            throw new ApiException(ApiResponse.BadRequest, "payload 必须是对象。");
+        }
+
+        var kind = payload.TryGetProperty("kind", out var kindElement)
+            && kindElement.ValueKind == JsonValueKind.String
+                ? kindElement.GetString()?.Trim()
+                : null;
+
+        var value = payload.TryGetProperty("value", out var valueElement)
+            && valueElement.ValueKind == JsonValueKind.String
+                ? valueElement.GetString()?.Trim()
+                : null;
+
+        if (string.IsNullOrWhiteSpace(kind) || string.IsNullOrWhiteSpace(value))
+        {
+            throw new ApiException(ApiResponse.BadRequest, "需要 kind（sms / slider）与 value。");
+        }
+
+        if (!DouyinChallengeKind.IsKnown(kind))
+        {
+            throw new ApiException(ApiResponse.BadRequest, $"不支持的挑战类型：{kind}（只支持 sms / slider）。");
+        }
+
+        try
+        {
+            await _channel.SubmitChallengeAsync(kind, value, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ChannelUnavailableException)
+        {
+            // 「没连上」「没有待回填的挑战」：都是用户能自己处理的，给 400 + 原因
+            throw new ApiException(ApiResponse.BadRequest, ex.Message);
+        }
+
+        await _configs.AppendAuditAsync("submitDouyinChallenge", Actor, kind, ct).ConfigureAwait(false);
+
+        return GetDouyinLoginAction.LoginPayload(_channel);
     }
 }

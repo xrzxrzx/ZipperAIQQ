@@ -15,8 +15,14 @@ public sealed class SidecarHealthMonitorTests
         public string? LoginMessage => null;
         public string? LoginQrBase64 => null;
         public DateTimeOffset? LoginQrAt => null;
+        public string? Driver => null;
+        public string? DriverRejectNote => null;
+        public DouyinBrowserState? BrowserState => null;
+        public DouyinLoginChallenge? Challenge => null;
         public Task RequestLoginAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task LogoutAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task SubmitChallengeAsync(string kind, string value, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class FakeAlerts : IAlertSink

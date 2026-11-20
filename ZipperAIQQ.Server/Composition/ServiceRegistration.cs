@@ -219,6 +219,7 @@ public static partial class ServiceRegistration
         services.AddSingleton<IApiAction, PurgeSessionAction>();
         services.AddSingleton<IApiAction, GetDouyinLoginAction>();
         services.AddSingleton<IApiAction, StartDouyinLoginAction>();
+        services.AddSingleton<IApiAction, SubmitDouyinChallengeAction>();
         services.AddSingleton<IApiAction, LogoutDouyinAction>();
 
         // ── M2-E：回复触发模式（FR-11）：every / mention / jev（判断失败降级 mention）──

@@ -33,7 +33,10 @@ namespace ZipperAIQQ.Server.External;
 public static class WsChannelEndpoint
 {
     /// <summary>单帧上限（1 MB）：抖音图片/长文本够用，同时挡住恶意的超大帧。</summary>
-    /// <remarks>internal 而非 private：同文件的连接包装类也要用它（私有常量跨类不可见）。</remarks>
+    /// <remarks>
+    /// internal：同目录的 <see cref="ForwardWsClient"/>（正向 WS）与 <see cref="WsDouyinTransport"/>
+    /// 都按这个口径判，避免两处写出不一致的上限。
+    /// </remarks>
     internal const int MaxFrameBytes = 1024 * 1024;
 
     public static void Map(WebApplication app)
@@ -78,7 +81,10 @@ public static class WsChannelEndpoint
             var channel = services.GetRequiredService<DouyinChannel>();
 
             using var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-            var connection = new WebSocketDouyinConnection(socket, logger);
+            var peer = context.Connection.RemoteIpAddress is { } remote
+                ? $"{remote}:{context.Connection.RemotePort}"
+                : "unknown";
+            var connection = new WsDouyinTransport(socket, peer, logger);
 
             logger.Information("sidecar 已连入 /ws/channel（remote={Remote}）", context.Connection.RemoteIpAddress);
 
@@ -129,7 +135,7 @@ public static class WsChannelEndpoint
     /// 但**收到帧本身就刷新它的存活判定**。取消（连接结束）时安静退出。
     /// </remarks>
     private static async Task SendHeartbeatsAsync(
-        IDouyinConnection connection,
+        IDouyinTransport connection,
         ILogger logger,
         CancellationToken ct)
     {
@@ -152,135 +158,6 @@ public static class WsChannelEndpoint
         {
             // 心跳失败不能把端点带崩：连接本身会由通道层的断开检测处理
             logger.Warning(ex, "向 sidecar 发送心跳失败");
-        }
-    }
-}
-
-/// <summary>
-/// 把一条 <see cref="WebSocket"/> 包成 <see cref="IDouyinConnection"/>。
-/// </summary>
-/// <remarks>
-/// 只做"文本帧的收与发"，不解释帧语义（协议在 <see cref="DouyinChannel"/> 里）——
-/// 这样协议逻辑可以脱离网络单测。
-/// </remarks>
-internal sealed class WebSocketDouyinConnection : IDouyinConnection
-{
-    private readonly WebSocket _socket;
-    private readonly ILogger _logger;
-    private readonly SemaphoreSlim _sendGate = new(1, 1);
-
-    /// <summary>收到的帧先进通道：端点与通道两侧的读写节奏不必对齐。</summary>
-    private readonly Channel<string> _inbound = System.Threading.Channels.Channel.CreateUnbounded<string>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
-
-    private readonly Task _pump;
-
-    public WebSocketDouyinConnection(WebSocket socket, ILogger logger)
-    {
-        ArgumentNullException.ThrowIfNull(socket);
-        ArgumentNullException.ThrowIfNull(logger);
-
-        _socket = socket;
-        _logger = logger;
-        _pump = Task.Run(PumpAsync);
-    }
-
-    public async Task SendAsync(string json, CancellationToken ct)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(json);
-
-        await _sendGate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            var bytes = Encoding.UTF8.GetBytes(json);
-            await _socket
-                .SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, ct)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            _sendGate.Release();
-        }
-    }
-
-    public IAsyncEnumerable<string> ReceiveAsync(CancellationToken ct) =>
-        _inbound.Reader.ReadAllAsync(ct);
-
-    public async Task CloseAsync(CancellationToken ct)
-    {
-        if (_socket.State is WebSocketState.Closed or WebSocketState.Aborted)
-        {
-            return;
-        }
-
-        try
-        {
-            await _socket
-                .CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", ct)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            // 已断开的连接再关会抛 —— 关闭路径不该反过来炸调用方
-            _logger.Debug(ex, "关闭 sidecar 连接时出错（忽略）");
-        }
-        finally
-        {
-            _inbound.Writer.TryComplete();
-        }
-    }
-
-    /// <summary>读循环：把文本帧推进通道；连接关闭/出错就结束通道。</summary>
-    private async Task PumpAsync()
-    {
-        var buffer = new byte[WsChannelEndpoint.MaxFrameBytes];
-
-        try
-        {
-            while (!_socket.CloseStatus.HasValue)
-            {
-                using var ms = new MemoryStream();
-                WebSocketReceiveResult result;
-
-                do
-                {
-                    result = await _socket
-                        .ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None)
-                        .ConfigureAwait(false);
-
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        _inbound.Writer.TryComplete();
-                        return;
-                    }
-
-                    ms.Write(buffer, 0, result.Count);
-                    if (ms.Length > WsChannelEndpoint.MaxFrameBytes)
-                    {
-                        _logger.Warning("sidecar 单帧超过 {Max} 字节，已丢弃该连接", WsChannelEndpoint.MaxFrameBytes);
-                        await _socket
-                            .CloseAsync(WebSocketCloseStatus.MessageTooBig, "frame too big", CancellationToken.None)
-                            .ConfigureAwait(false);
-                        _inbound.Writer.TryComplete();
-                        return;
-                    }
-                }
-                while (!result.EndOfMessage);
-
-                var json = Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
-                if (!string.IsNullOrWhiteSpace(json))
-                {
-                    await _inbound.Writer.WriteAsync(json).ConfigureAwait(false);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.Debug(ex, "sidecar 连接读循环结束");
-        }
-        finally
-        {
-            _inbound.Writer.TryComplete();
         }
     }
 }

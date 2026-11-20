@@ -80,6 +80,23 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
     private string? _loginQrBase64;
     private DateTimeOffset? _loginQrAt;
 
+    // ── 浏览器底座（2026-11-20 B1）：驱动身份 / 登录挑战 / 页面体征 ──
+
+    /// <summary>已接受 sidecar 自报的驱动（`im` / `web`）；未握手时为 `null`。</summary>
+    private volatile string? _driver;
+
+    /// <summary>最近一次被拒的 sidecar 说明（状态页与日志用）。</summary>
+    private volatile string? _driverRejectNote;
+
+    /// <summary>当前等待回填的登录挑战。</summary>
+    private volatile DouyinLoginChallenge? _challenge;
+
+    /// <summary>最近一次浏览器体征。</summary>
+    private volatile DouyinBrowserState? _browserState;
+
+    /// <summary>连接对端（日志用；不含凭据）。</summary>
+    private volatile string? _transportPeer;
+
     private bool _disposed;
 
     /// <summary>构造通道（不连接，等 <see cref="AttachAsync"/>）。</summary>
@@ -138,6 +155,21 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
     /// <summary>最近一次二维码的生成时间。</summary>
     public DateTimeOffset? LoginQrAt => _loginQrAt;
 
+    /// <summary>已接受 sidecar 的驱动（`im` / `web`）；没握手时为 `null`。</summary>
+    public string? Driver => _driver;
+
+    /// <summary>最近一次被拒连接的说明（驱动不匹配时非空）。</summary>
+    public string? DriverRejectNote => _driverRejectNote;
+
+    /// <summary>连接对端（`ip:port` / `unknown`）。</summary>
+    public string? TransportPeer => _transportPeer;
+
+    /// <summary>当前等待用户回填的登录挑战（短信 / 滑块）；没有则 `null`。</summary>
+    public DouyinLoginChallenge? Challenge => _challenge;
+
+    /// <summary>最近一次浏览器体征（`browser.state` 帧）。</summary>
+    public DouyinBrowserState? BrowserState => _browserState;
+
     /// <summary>
     /// 让 sidecar 开始登录（客户端点「登录」时调）。
     /// </summary>
@@ -152,6 +184,7 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         _loginQrAt = null;
         _loginState = DouyinLoginState.WaitingQr;
         _loginMessage = null;
+        _challenge = null;
 
         await connection
             .SendAsync(DouyinProtocol.BuildLoginCommand(DouyinFrameTypes.LoginStart), ct)
@@ -175,9 +208,46 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         _loginQrAt = null;
         _loginState = DouyinLoginState.LoggedOut;
         _loginMessage = null;
+        _challenge = null;
         ClearSelfId();
 
         _logger.Information("已请求 sidecar 退出抖音登录");
+    }
+
+    /// <summary>
+    /// 回填登录挑战答案（短信码 / 滑块偏移），下发给 sidecar。
+    /// </summary>
+    /// <remarks>
+    /// 三条拒绝路径都要响（不静默丢）：没连上、没有待回填的挑战、类型不匹配 ——
+    /// 用户点完「提交」却毫无反应，比报错更难受。
+    /// </remarks>
+    public async Task SubmitChallengeAsync(string kind, string value, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(kind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+
+        var connection = RequireConnection();
+        var pending = _challenge;
+
+        if (pending is null)
+        {
+            throw new InvalidOperationException(
+                "当前没有等待回填的登录挑战（可能已自动通过或已超时）；刷新登录状态看看。");
+        }
+
+        if (!string.Equals(pending.Kind, kind.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"挑战类型不匹配：当前在等 {pending.Kind}，收到 {kind}。");
+        }
+
+        await connection
+            .SendAsync(DouyinProtocol.BuildChallengeAnswer(pending.Kind, value.Trim()), ct)
+            .ConfigureAwait(false);
+
+        // 已经交出去了：先清掉本地挑战，避免用户连点两次把同一个答案发两遍
+        _challenge = null;
+        _logger.Information("已回填抖音登录挑战：kind={Kind}", pending.Kind);
     }
 
     /// <summary>
@@ -193,7 +263,8 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
 
         _options = options;
         _logger.Information(
-            "抖音通道参数已更新：白名单 {White} 条 / 黑名单 {Black} 条 / 发送超时 {Send}ms / 文本上限 {Text} 字",
+            "抖音通道参数已更新：驱动 {Driver} / 白名单 {White} 条 / 黑名单 {Black} 条 / 发送超时 {Send}ms / 文本上限 {Text} 字",
+            options.Driver,
             _filter.WhitelistCount(PlatformName),
             _filter.BlacklistCount(PlatformName),
             options.SendTimeoutMs,
@@ -245,9 +316,14 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
             _connectionCts = cts;
             _receiveLoop = Task.Run(() => RunReceiveLoopAsync(connection, cts.Token), CancellationToken.None);
 
+            if (connection is IDouyinTransport transport)
+            {
+                _transportPeer = $"{transport.Peer}（{transport.Kind}）";
+            }
+
             if (previous is null)
             {
-                _logger.Information("抖音 sidecar 已连接");
+                _logger.Information("抖音 sidecar 已连接（peer={Peer}）", _transportPeer ?? "unknown");
                 return;
             }
 
@@ -418,7 +494,7 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
         {
             await foreach (var json in connection.ReceiveAsync(ct).ConfigureAwait(false))
             {
-                await HandleFrameAsync(json, ct).ConfigureAwait(false);
+                await HandleFrameAsync(json, connection, ct).ConfigureAwait(false);
             }
 
             _logger.Information("抖音连接已关闭（sidecar 断开），等待重连");
@@ -443,7 +519,7 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
     }
 
     /// <summary>处理一帧；**未知类型 / 畸形帧只记日志，绝不抛出**。</summary>
-    private async Task HandleFrameAsync(string json, CancellationToken ct)
+    private async Task HandleFrameAsync(string json, IDouyinConnection connection, CancellationToken ct)
     {
         if (!DouyinProtocol.TryParseFrame(json, out var frame, out var error) || frame is null)
         {
@@ -483,9 +559,10 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
 
                 if (state.State == DouyinLoginState.Online)
                 {
-                    // 登录成功：二维码失效，清掉避免界面还挂着旧码
+                    // 登录成功：二维码与挑战都失效，清掉避免界面还挂着旧码 / 旧弹窗
                     _loginQrBase64 = null;
                     _loginQrAt = null;
+                    _challenge = null;
                     UpdateSelfId(state.SelfId);
                     _logger.Information("抖音登录成功：{Nickname}（selfId={SelfId}）", state.Nickname, state.SelfId);
                 }
@@ -493,12 +570,60 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
                 {
                     _loginQrBase64 = null;
                     _loginQrAt = null;
+                    _challenge = null;
                     ClearSelfId();
                     _logger.Information("抖音已退出登录（sidecar 仍在运行）");
                 }
                 else if (state.State == DouyinLoginState.Error)
                 {
                     _logger.Warning("抖音登录出错：{Message}", state.Message);
+                }
+
+                break;
+            }
+
+            case DouyinFrameTypes.LoginChallenge:
+            {
+                var challenge = DouyinProtocol.ParseChallenge(frame.Data);
+                if (challenge is null)
+                {
+                    _logger.Warning("抖音 login.challenge 帧体缺 kind 或类型不认识，已忽略（交回人工）");
+                    break;
+                }
+
+                _challenge = challenge;
+                _logger.Information(
+                    "抖音登录需要人工介入：kind={Kind} 提示={Hint}",
+                    challenge.Kind,
+                    challenge.Hint ?? "-");
+                break;
+            }
+
+            case DouyinFrameTypes.BrowserState:
+            {
+                var state = DouyinProtocol.ParseBrowserState(frame.Data);
+                if (state is null)
+                {
+                    _logger.Debug("抖音 browser.state 帧体缺 page，已忽略");
+                    break;
+                }
+
+                var previous = _browserState;
+                _browserState = state;
+
+                // 只在"状态变了"时打 Info，其余时候 Debug（这个帧每 15 分钟就会来一次）
+                if (!string.Equals(previous?.Page, state.Page, StringComparison.Ordinal))
+                {
+                    _logger.Information(
+                        "抖音浏览器状态：{Page}（内存 {MemoryMb}MB，上次动作：{Action}）{Note}",
+                        state.Page,
+                        state.MemoryMb,
+                        state.LastAction ?? "-",
+                        string.IsNullOrWhiteSpace(state.Note) ? string.Empty : $"；{state.Note}");
+                }
+                else
+                {
+                    _logger.Debug("抖音浏览器体征：{Page} / {MemoryMb}MB", state.Page, state.MemoryMb);
                 }
 
                 break;
@@ -512,6 +637,31 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
                     _logger.Warning("抖音 hello 帧体为空，忽略");
                     break;
                 }
+
+                // 驱动闸门（实施方案 B1）：两个 sidecar 共用同一套帧，靠自报 driver 区分。
+                // 不匹配就**拒掉这条连接**（不是只记日志）：否则旧 sidecar 连上来会把新 sidecar 顶掉，
+                // 表现成"刚切过去就又开始 10509"。老 sidecar 不带 driver → 按 im 处理。
+                var announced = DouyinDriver.Normalize(hello.Driver) ?? DouyinDriver.Im;
+                var expected = DouyinDriver.Normalize(_options.Driver) ?? DouyinDriver.Im;
+
+                if (!string.Equals(announced, expected, StringComparison.Ordinal))
+                {
+                    _driverRejectNote =
+                        $"已拒绝 {announced} 底座的 sidecar（自报 driver={announced}，当前 douyin.driver={expected}）";
+                    _logger.Warning(
+                        "拒绝抖音 sidecar：自报驱动 {Announced}，当前配置 {Expected}（peer={Peer}）；" +
+                        "要切换底座请改 douyin.driver",
+                        announced,
+                        expected,
+                        _transportPeer ?? "unknown");
+
+                    await RejectConnectionAsync(connection).ConfigureAwait(false);
+                    return;
+                }
+
+                _driver = announced;
+                _driverRejectNote = null;
+                _logger.Information("抖音 sidecar 驱动已确认：{Driver}（peer={Peer}）", announced, _transportPeer ?? "unknown");
 
                 if (hello.Version is { Length: > 0 } version
                     && !string.Equals(version, DouyinProtocol.Version, StringComparison.Ordinal))
@@ -824,6 +974,23 @@ public sealed class DouyinChannel : IMessageChannel, IContactDirectory, IChannel
             ?? throw new ChannelUnavailableException(
                 "douyin",
                 "抖音未连接：sidecar 尚未连入 /ws/channel（或已断开），无法发送。");
+    }
+
+    /// <summary>
+    /// 拒掉一条连接：关掉它，并把当前连接指针清掉（如果指向它）。
+    /// </summary>
+    /// <remarks>
+    /// 不清指针的话，`SendAsync` 会继续往这条"已被拒绝"的连接上发，
+    /// 用户看到的是"发送超时"而不是"底座配错了"，排查方向直接跑偏。
+    /// </remarks>
+    private async Task RejectConnectionAsync(IDouyinConnection connection)
+    {
+        if (ReferenceEquals(Volatile.Read(ref _connection), connection))
+        {
+            _connection = null;
+        }
+
+        await CloseQuietlyAsync(connection, CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task CloseQuietlyAsync(IDouyinConnection connection, CancellationToken ct)

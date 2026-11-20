@@ -16,7 +16,8 @@ public sealed record DouyinSnapshot(
     string? Token,
     int SendTimeoutMs,
     int MaxTextLength,
-    int QueryTimeoutMs)
+    int QueryTimeoutMs,
+    string Driver = DouyinDriver.Im)
 {
     /// <summary>转成通道用的不可变配置。</summary>
     public DouyinOptions ToOptions() => new()
@@ -26,6 +27,7 @@ public sealed record DouyinSnapshot(
         SendTimeoutMs = SendTimeoutMs,
         MaxTextLength = MaxTextLength,
         QueryTimeoutMs = QueryTimeoutMs,
+        Driver = Driver,
     };
 }
 
@@ -60,6 +62,9 @@ public sealed class DouyinOptionsService
     public const string MaxTextLengthKey = "douyin.maxTextLength";
     public const string QueryTimeoutKey = "douyin.queryTimeoutMs";
 
+    /// <summary>底座驱动（<c>web</c> / <c>im</c>）：见 <see cref="DouyinDriver"/>。</summary>
+    public const string DriverKey = "douyin.driver";
+
     /// <summary>迁移目标平台名（与通道一致）。</summary>
     private const string PlatformName = DouyinChannel.PlatformName;
 
@@ -88,7 +93,7 @@ public sealed class DouyinOptionsService
 
         var d = bootstrap.Douyin;
         _current = new DouyinSnapshot(
-            d.Enabled, d.Token, d.SendTimeoutMs, d.MaxTextLength, d.QueryTimeoutMs);
+            d.Enabled, d.Token, d.SendTimeoutMs, d.MaxTextLength, d.QueryTimeoutMs, d.Driver);
     }
 
     /// <summary>当前生效的配置。</summary>
@@ -112,6 +117,7 @@ public sealed class DouyinOptionsService
         var sendRaw = await _settings.GetAsync(SendTimeoutKey, ct).ConfigureAwait(false);
         var lengthRaw = await _settings.GetAsync(MaxTextLengthKey, ct).ConfigureAwait(false);
         var queryRaw = await _settings.GetAsync(QueryTimeoutKey, ct).ConfigureAwait(false);
+        var driverRaw = await _settings.GetAsync(DriverKey, ct).ConfigureAwait(false);
 
         var bootstrap = _bootstrap.Douyin;
 
@@ -141,12 +147,17 @@ public sealed class DouyinOptionsService
             Token: token,
             SendTimeoutMs: ParseInt(sendRaw, bootstrap.SendTimeoutMs),
             MaxTextLength: ParseInt(lengthRaw, bootstrap.MaxTextLength),
-            QueryTimeoutMs: ParseInt(queryRaw, bootstrap.QueryTimeoutMs));
+            QueryTimeoutMs: ParseInt(queryRaw, bootstrap.QueryTimeoutMs),
+            Driver: ParseDriver(driverRaw, bootstrap.Driver));
 
         _logger.Information(
             "抖音配置已加载：启用={Enabled} token={TokenState}",
             _current.Enabled ? "是" : "否",
             string.IsNullOrWhiteSpace(_current.Token) ? "未配置" : "已配置");
+
+        _logger.Information("抖音底座驱动：{Driver}（{Meaning}）",
+            _current.Driver,
+            _current.Driver == DouyinDriver.Web ? "浏览器 / douyin-web-sidecar" : "douyin-im / douyin-sidecar");
     }
 
     /// <summary>
@@ -187,6 +198,7 @@ public sealed class DouyinOptionsService
     /// <param name="sendTimeoutMs"><c>null</c> = 不改。</param>
     /// <param name="maxTextLength"><c>null</c> = 不改。</param>
     /// <param name="queryTimeoutMs"><c>null</c> = 不改。</param>
+    /// <param name="driver">底座驱动（<c>web</c> / <c>im</c>）；<c>null</c> = 不改，认不出的值抛错。</param>
     /// <param name="ct">取消令牌。</param>
     /// <returns>实际改动的键（供审计与回显）。</returns>
     public async Task<IReadOnlyList<string>> UpdateAsync(
@@ -195,6 +207,7 @@ public sealed class DouyinOptionsService
         int? sendTimeoutMs,
         int? maxTextLength,
         int? queryTimeoutMs,
+        string? driver,
         CancellationToken ct = default)
     {
         var changed = new List<string>();
@@ -249,12 +262,27 @@ public sealed class DouyinOptionsService
             changed.Add("queryTimeoutMs");
         }
 
+        var nextDriver = current.Driver;
+        if (driver is not null)
+        {
+            // 认不出的值**当场拒绝**：写进去只会让下一次握手莫名被拒，排查成本极高
+            var normalized = DouyinDriver.Normalize(driver)
+                ?? throw new ArgumentException($"未知的底座驱动：{driver}（只支持 web / im）。", nameof(driver));
+
+            if (!string.Equals(normalized, current.Driver, StringComparison.Ordinal))
+            {
+                await _settings.SetAsync(DriverKey, normalized, ct).ConfigureAwait(false);
+                nextDriver = normalized;
+                changed.Add("driver");
+            }
+        }
+
         if (changed.Count == 0)
         {
             return changed;
         }
 
-        _current = new DouyinSnapshot(nextEnabled, nextToken, nextSend, nextLength, nextQuery);
+        _current = new DouyinSnapshot(nextEnabled, nextToken, nextSend, nextLength, nextQuery, nextDriver);
 
         _logger.Information("抖音配置已更新：{Changed}", string.Join(",", changed));
         Changed?.Invoke();
@@ -266,4 +294,25 @@ public sealed class DouyinOptionsService
 
     private static int ParseInt(string? raw, int fallback) =>
         int.TryParse(raw, out var value) && value > 0 ? value : fallback;
+
+    /// <summary>
+    /// 驱动解析：库里的值优先；认不出（老版本 / 手改错）就退回启动配置，
+    /// **不猜** —— 猜错会让 sidecar 一直"连上了但不收发"，比报错更难查。
+    /// </summary>
+    private string ParseDriver(string? raw, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return DouyinDriver.Normalize(fallback) ?? DouyinDriver.Im;
+        }
+
+        var normalized = DouyinDriver.Normalize(raw);
+        if (normalized is null)
+        {
+            _logger.Warning("抖音驱动配置 {Raw} 无法识别，回退到启动配置 {Fallback}", raw, fallback);
+            return DouyinDriver.Normalize(fallback) ?? DouyinDriver.Im;
+        }
+
+        return normalized;
+    }
 }
