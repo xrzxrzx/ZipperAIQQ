@@ -718,3 +718,57 @@ export async function findConversationRowByAny(
 
   return null;
 }
+
+/**
+ * 在当前已打开的会话里发一张图片（**DOM 通道**，2026-11-21 真机验证成功）。
+ *
+ * 实测三步（缺一不可）：
+ * 1. 往页面里的 `input[type=file]` 塞文件
+ * 2. 页面弹出确认框「发送给 XX / 文件名 / 取消 / **发送（N）**」
+ * 3. 点「发送（N）」——不点它永远不会上传，也不会有 `message/send`
+ *
+ * 为什么图片走 DOM 而不走 API：API 路径要先做
+ * `upload/config/v2 → ApplyUploadInner → TOS 上传（STS 签名）→ CommitUploadInner`，
+ * 然后发 `messageType=27` + `resource_url{oid,skey,md5}`；TOS 那步签名成本高，
+ * 而 DOM 通道已经稳定可用。
+ *
+ * @returns 是否点到了「发送（N）」并成功提交
+ */
+export async function sendImageInOpenConversation(page: Page, filePath: string): Promise<boolean> {
+  const inputs = page.locator("input[type=file]");
+  const count = await inputs.count();
+  if (count === 0) {
+    return false;
+  }
+
+  await inputs.nth(count - 1).setInputFiles(filePath);
+
+  // 确认框的按钮文案是「发送（1）」「发送（2）」…（全角括号）
+  const confirm = page.getByText(/^发送（\d+）$/).first();
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if ((await confirm.count()) > 0) {
+      break;
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  if ((await confirm.count()) === 0) {
+    return false;
+  }
+
+  await confirm.click({ timeout: SITE.actionTimeoutMs });
+
+  // 确认框消失 ≈ 已提交（上传在后台继续）
+  const gone = Date.now() + 10_000;
+  while (Date.now() < gone) {
+    if ((await confirm.count()) === 0) {
+      return true;
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  return false;
+}

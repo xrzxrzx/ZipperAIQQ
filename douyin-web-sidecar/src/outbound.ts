@@ -25,6 +25,7 @@ import {
   findConversationRowByAny,
   isConversationOpen,
   reloadChatPage,
+  sendImageInOpenConversation,
   sendTextInOpenConversation,
   SITE,
   type ConversationNameCache,
@@ -119,9 +120,12 @@ export class OutboundSender {
         chunks += 1;
       }
 
-      const degraded = this.collectDegraded(plan);
-      this.log.info(`API 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
-      return { chunks, images: 0, degraded };
+      const images = await this.sendImages(page, plan, target);
+      const degraded = this.collectDegraded(plan, images.sent);
+      this.log.info(
+        `API 出站完成：${session} 文本=${chunks} 图片=${images.sent} 降级=${degraded.join(",") || "无"}`,
+      );
+      return { chunks, images: images.sent, degraded };
     } catch (error) {
       const apiFailure = error instanceof Error ? error.message : String(error);
       this.log.warn(`API 出站失败，改用 DOM 兜底：${apiFailure}`);
@@ -129,9 +133,12 @@ export class OutboundSender {
       // ② 兜底：DOM（重载 → 按线索定位会话 → 点开 → 输入 → 回读）
       try {
         const chunks = await this.sendByDom(page, plan, target);
-        const degraded = this.collectDegraded(plan);
-        this.log.info(`DOM 出站完成：${session} 文本=${chunks} 降级=${degraded.join(",") || "无"}`);
-        return { chunks, images: 0, degraded };
+        const images = await this.sendImages(page, plan, target);
+        const degraded = this.collectDegraded(plan, images.sent);
+        this.log.info(
+          `DOM 出站完成：${session} 文本=${chunks} 图片=${images.sent} 降级=${degraded.join(",") || "无"}`,
+        );
+        return { chunks, images: images.sent, degraded };
       } catch (domError) {
         const domFailure = domError instanceof Error ? domError.message : String(domError);
         throw new OutboundError(
@@ -142,11 +149,99 @@ export class OutboundSender {
     }
   }
 
-  /** 两条路共用的降级清单（@ 与图片本期都没还原，必须留痕）。 */
-  private collectDegraded(plan: OutboundPlan): string[] {
+  /**
+   * 发图片（DOM 通道）：落盘 → 确保会话已打开 → 塞文件 → 点「发送（N）」。
+   *
+   * 一张失败不拖垮整条消息：失败的那几张计入 `degraded:"image"`。
+   */
+  private async sendImages(
+    page: Awaited<ReturnType<DouyinBrowser["ensureChatPage"]>>,
+    plan: OutboundPlan,
+    target: { lastText?: string; lastSent?: string },
+  ): Promise<{ sent: number }> {
+    const media = [
+      ...plan.imageData.map((data) => ({ kind: "data" as const, data })),
+      ...plan.imageUrls.map((url) => ({ kind: "url" as const, url })),
+    ];
+
+    if (media.length === 0) {
+      return { sent: 0 };
+    }
+
+    // 图片必须在「已打开的会话」里塞：文本走 API 时页面根本没开会话
+    const opened = await this.openConversationForMedia(page, plan, target);
+    if (!opened) {
+      this.log.warn(`发图前打不开会话（threadId=${plan.threadId}），图片全部记降级`);
+      return { sent: 0 };
+    }
+
+    let sent = 0;
+    for (const item of media) {
+      const file = await this.materialize(item);
+      try {
+        const ok = await sendImageInOpenConversation(page, file);
+        if (ok) {
+          sent += 1;
+        } else {
+          this.log.warn("图片没发出去：没等到「发送（N）」确认框");
+        }
+      } catch (error) {
+        this.log.warn(`图片发送异常：${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        await rm(file, { force: true }).catch(() => undefined);
+      }
+    }
+
+    return { sent };
+  }
+
+  /**
+   * 为发图打开会话：重载 → 按线索找行 → 点开 → 断言输入框出现。
+   *
+   * 为什么要单独一条：文本走 API 时不碰 DOM，页面可能从没打开过这个会话；
+   * 而发图必须在「已打开会话」的输入区里塞文件。
+   */
+  private async openConversationForMedia(
+    page: Awaited<ReturnType<DouyinBrowser["ensureChatPage"]>>,
+    plan: OutboundPlan,
+    target: { lastText?: string; lastSent?: string },
+  ): Promise<boolean> {
+    const nameHint = this.names.get(plan.threadId);
+    const needles = [target.lastSent, target.lastText, nameHint].filter(
+      (value): value is string => Boolean(value && value.trim().length > 0),
+    );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (await isConversationOpen(page, needles)) {
+        return true;
+      }
+
+      await reloadChatPage(page).catch(() => undefined);
+      const row = await findConversationRowByAny(page, needles);
+      if (row) {
+        await clickConversationRow(page, row);
+      } else if (nameHint) {
+        // 列表行标题就是昵称：直接用 Playwright 文本定位（比坐标稳）
+        await page.locator(`text=${nameHint}`).first().click({ timeout: 8_000 }).catch(() => undefined);
+        await page.waitForTimeout(2_000);
+      }
+
+      if (await isConversationOpen(page, needles)) {
+        return true;
+      }
+
+      await page.waitForTimeout(2_000);
+    }
+
+    return false;
+  }
+
+  /** 两条路共用的降级清单（@ 与图片按实际结果留痕）。 */
+  private collectDegraded(plan: OutboundPlan, imagesSent = 0): string[] {
     const degraded = [...plan.degraded];
 
-    if (plan.imageData.length + plan.imageUrls.length > 0 && !degraded.includes("image")) {
+    const mediaTotal = plan.imageData.length + plan.imageUrls.length;
+    if (imagesSent < mediaTotal && !degraded.includes("image")) {
       degraded.push("image");
     }
 
