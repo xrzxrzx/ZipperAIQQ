@@ -68,8 +68,8 @@ test("帧编解码闭环：service=5 的私信帧 → 归一化出文本", () =>
   const Response = root.lookupType("im_proto.Response");
   const Frame = root.lookupType("im_proto.Frame");
 
-  const self = "88892527967";
-  const peer = "4106032998778416";
+  const self = "1000000000";
+  const peer = "1234567890";
 
   const responsePayload = Response.encode(
     Response.create({
@@ -87,7 +87,7 @@ test("帧编解码闭环：service=5 的私信帧 → 归一化出文本", () =>
             serverMessageId: "7709523357389440570",
             conversationShortId: "7400863009431650827",
             messageType: 7,
-            sender: "88892527967",
+            sender: "1000000000",
             content: '{"text":"舅舅家","aweType":700}',
             createTime: "1795013288293",
           },

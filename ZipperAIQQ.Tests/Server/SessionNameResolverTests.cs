@@ -83,15 +83,15 @@ public sealed class SessionNameResolverTests
         // 现在按平台取目录，标签统一走 PlatformLabels（QQ / 抖音）。
         var douyin = new FakeContacts
         {
-            Friends = [new ContactInfo("88892527967", "抖音好友", null)],
+            Friends = [new ContactInfo("1000000000", "抖音好友", null)],
             Groups = [new GroupInfo("9001", "抖音群", 3, 500)],
         };
 
         var resolver = NewResolver(new FakeContacts(), douyin);
 
-        var names = await resolver.ResolveAsync(["douyin:p88892527967", "douyin:g9001"]);
+        var names = await resolver.ResolveAsync(["douyin:p1000000000", "douyin:g9001"]);
 
-        Assert.Equal("抖音 · 抖音好友", names["douyin:p88892527967"]);
+        Assert.Equal("抖音 · 抖音好友", names["douyin:p1000000000"]);
         Assert.Equal("抖音群 · 抖音群", names["douyin:g9001"]);
     }
 

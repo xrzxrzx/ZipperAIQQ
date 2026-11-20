@@ -87,7 +87,7 @@ test("buildOutboundPlan：文本 + 图片 URL + 引用降级", () => {
   const plan = buildOutboundPlan({
     type: "outbound",
     data: {
-      session: "douyin:p4106032998778416",
+      session: "douyin:p1234567890",
       requestId: "r1",
       replyTo: "7709523357389440570",
       segments: [
@@ -98,7 +98,7 @@ test("buildOutboundPlan：文本 + 图片 URL + 引用降级", () => {
   });
 
   assert.equal(plan.chatType, "private");
-  assert.equal(plan.threadId, "4106032998778416");
+  assert.equal(plan.threadId, "1234567890");
   assert.deepEqual(plan.chunks, ["收到～"]);
   assert.deepEqual(plan.imageUrls, ["https://p3.douyinpic.com/a.jpg"]);
   assert.equal(plan.replyTo, "7709523357389440570");
@@ -162,8 +162,8 @@ const EMOJI_CONTENT =
   '"url":{"uri":"https://p26-sign.douyinpic.com/obj/im-resource/x.png",' +
   '"url_list":["https://p11-sign.douyinpic.com/obj/im-resource/x.png"]},"width":100,"height":100}';
 
-const SELF = "88892527967";
-const PEER = "4106032998778416";
+const SELF = "1000000000";
+const PEER = "1234567890";
 const CONVERSATION = `0:1:${SELF}:${PEER}`;
 
 test("normalizePrivateMessage：文本消息（真实抓包形状）", () => {
@@ -331,7 +331,7 @@ test("buildOutboundPlan：@ 段一律降级留痕（网页版按 uid 精确 @ �
       session: "douyin:g777",
       segments: [
         { type: "text", text: "在吗" },
-        { type: "mention", userId: "4106032998778416" },
+        { type: "mention", userId: "1234567890" },
       ],
     },
   });

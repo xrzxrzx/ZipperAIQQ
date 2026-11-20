@@ -103,7 +103,7 @@ public sealed class CrossPlatformToolsTests
     {
         var platforms = new FakePlatforms(new()
         {
-            ["qq"] = new FakeDirectory(groups: [new GroupInfo("1031435008", "测试群", 12, 200)]),
+            ["qq"] = new FakeDirectory(groups: [new GroupInfo("1234567890", "测试群", 12, 200)]),
             ["douyin"] = new FakeDirectory(fail: true),
         });
 

@@ -156,11 +156,11 @@ public sealed class ChatFilterTests
     public void Blacklist_prefix_wildcard_denies_matching_sessions()
     {
         var filter = new ChatFilter(new ChatFilterOptions());
-        filter.Update("qq", new ChatFilterOptions { Blacklist = ["qq:g8*"] });
+        filter.Update("qq", new ChatFilterOptions { Blacklist = ["qq:g1*"] });
         filter.Update("douyin", new ChatFilterOptions { Blacklist = ["douyin:g9*"] });
 
-        Assert.False(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "839201154" }));
-        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "123456" }));
+        Assert.False(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "1234567890" }));
+        Assert.True(filter.IsAllowed(new ChatRef { Platform = "qq", Type = ChatType.Group, Id = "999999" }));
         Assert.False(filter.IsAllowed(new ChatRef { Platform = "douyin", Type = ChatType.Group, Id = "999" }));
     }
 

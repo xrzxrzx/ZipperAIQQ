@@ -390,7 +390,7 @@ export function normalizeInbound(raw: unknown): NormalizedInbound | null {
     str(senderRecord0?.userId) ?? str(senderRecord0?.uid);
 
   // 私聊的 threadId 常常是 conversationId（形如 0:1:xxx:yyy），那样会话标题会变成一串数字
-  // （2026-10-28 实测：douyin:p0:1:88892527967:4106032998778416）。私聊优先用**对方 uid**。
+  // （2026-10-28 实测：douyin:p0:1:1000000000:1234567890，号码已脱敏）。私聊优先用**对方 uid**。
   const rawThreadId =
     str(body.threadId) ??
     str(body.thread_id) ??
