@@ -189,40 +189,34 @@ export class OutboundSender {
     for (const item of media) {
       const file = await this.materialize(item);
       try {
-        // ① **DOM 优先**：页面 SDK 上传 + 页面自己发 —— 真机验证对方能看到
-        //    （纯 API 上传拿不到平台加密密钥 skey，对方渲染不出来，2026-11-22 真机）
+        // ① **纯 API**：上传（STS + SigV4 + TOS + Commit 加密）→ 发 message_type=27
+        //    关键：`s` 随机 11 位、签名不带 host、Commit 带 Functions 加密配置（对齐旧基座）
+        const uploaded = await this.uploader.upload(context, page, file);
+        const result = await this.api.sendImage(context, page, target as never, uploaded, crypto.randomUUID());
+
+        if (result.ok) {
+          this.conversations.noteSent(plan.threadId, "[图片]");
+          sent += 1;
+          this.log.info(`图片已用 API 发出（skey ${uploaded.skey.length} 字符）`);
+          continue;
+        }
+
+        this.log.warn(`API 发图被拒：status=${result.statusCode} ${result.errorDesc ?? ""}`);
+      } catch (error) {
+        this.log.warn(`API 发图失败，改用 DOM 兜底：${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      // ② 兜底：DOM（塞文件 → 点「发送（N）」）
+      try {
         const opened = await this.openConversationForMedia(page, plan, target);
         if (opened && (await sendImageInOpenConversation(page, file))) {
           this.conversations.noteSent(plan.threadId, "[图片]");
           sent += 1;
-          continue;
+        } else {
+          this.log.warn("图片没发出去（API 与 DOM 都没成功）");
         }
-
-        // ② 兜底：页面 SDK 上传 + 我们 API 发（万一 DOM 点不到确认框）
-        const viaPage = await uploadImageViaPageApiAware(page, file);
-        if (viaPage) {
-          const local = await import("node:fs/promises").then((m) => m.readFile(file));
-          const { readImageSize } = await import("./image-upload.js");
-          const { createHash } = await import("node:crypto");
-          viaPage.width = readImageSize(local).width;
-          viaPage.height = readImageSize(local).height;
-          viaPage.md5 = createHash("md5").update(local).digest("hex");
-          viaPage.size = local.length;
-
-          const result = await this.api.sendImage(context, page, target as never, viaPage, crypto.randomUUID());
-          if (result.ok) {
-            this.conversations.noteSent(plan.threadId, "[图片]");
-            sent += 1;
-            this.log.info(`图片已用 API 发出（上传由页面 SDK 完成）`);
-            continue;
-          }
-
-          this.log.warn(`API 发图被拒：status=${result.statusCode} ${result.errorDesc ?? ""}`);
-        }
-
-        this.log.warn("图片没发出去（DOM 与 API 都没成功）");
       } catch (error) {
-        this.log.warn(`图片发送异常：${error instanceof Error ? error.message : String(error)}`);
+        this.log.warn(`DOM 发图异常：${error instanceof Error ? error.message : String(error)}`);
       } finally {
         await rm(file, { force: true }).catch(() => undefined);
       }

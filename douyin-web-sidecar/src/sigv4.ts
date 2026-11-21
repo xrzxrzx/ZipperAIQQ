@@ -1,101 +1,107 @@
 /**
- * AWS Signature V4（VOD 内网上传用）。
+ * VOD 请求签名（AWS SigV4）——**照 旧基座 `douyin-im` 的实现逐行对齐**。
  *
- * 为什么需要它：抖音的图片上传走 `vod.bytedanceapi.com`，Authorization 头是
- * `AWS4-HMAC-SHA256 Credential=…/20261120/cn-north-1/vod/aws4_request, SignedHeaders=…, Signature=…`
- * —— 这是标准 SigV4（2026-11-21 真机抓包确认）。复刻它才能在 Node 侧上传，不必碰 DOM。
+ * 为什么重写：之前我们自签的 Apply 请求总是 `SignatureDoesNotMatch`，因为我们把 `host`
+ * 也放进了 SignedHeaders。旧基座（真机验证过能拿到 `Encryption.SecretKey`）只签三个头：
  *
- * 只实现本项目用到的子集：单次签名、无 chunked、payload 直接 hash。
+ * - 恒签：`x-amz-date`、`x-amz-security-token`
+ * - **只有 POST** 才签 `x-amz-content-sha256`
+ * - **不签 `host`**
+ *
+ * canonical URI 固定 `/`；query 按 key 排序后 RFC3986 编码（`s` 是随机 11 位，
+ * 参与签名 —— 旧基座 `randomId(11)`）。
  */
 
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 
 /** STS 临时凭证（来自 `/aweme/v1/web/im/upload/config/v2`）。 */
 export interface StsCredentials {
   accessKeyId: string;
   secretAccessKey: string;
   sessionToken: string;
-  region: string;
-  service: string;
 }
 
-const sha256Hex = (data: Buffer | string): string => createHash("sha256").update(data).digest("hex");
+const VOD_REGION = "cn-north-1";
+const VOD_SERVICE = "vod";
 
-const hmac = (key: Buffer | string, data: string): Buffer =>
-  createHmac("sha256", key).update(data, "utf8").digest();
+const hashHex = (data: Buffer | string): string => createHash("sha256").update(data).digest("hex");
 
-/** RFC3986 编码（SigV4 要求）。 */
-const uriEncode = (value: string): string =>
+const hmac = (key: Buffer | string, value: string): Buffer =>
+  createHmac("sha256", key).update(value).digest();
+
+const rfc3986 = (value: string): string =>
   encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 
-/**
- * 给一次请求签名。
- *
- * @param method HTTP 方法
- * @param url 完整 URL（签名用它的 path 与 query）
- * @param headers 已有请求头（`host` 会补上）
- * @param body 请求体（空则空串）
- */
-export function signV4(
-  method: string,
-  url: URL,
-  headers: Record<string, string>,
-  body: Buffer,
-  creds: StsCredentials,
-  now = new Date(),
-  excludeFromCanonicalQuery: string[] = [],
-): Record<string, string> {
-  const amzDate = `${now.toISOString().replace(/[:-]|\.\d{3}/g, "")}`;
-  const dateStamp = amzDate.slice(0, 8);
-  const payloadHash = sha256Hex(body);
+/** 排序 + RFC3986 编码的 canonical query。 */
+export function canonicalUploadQuery(query: Record<string, string>): string {
+  return Object.keys(query)
+    .sort()
+    .map((key) => `${rfc3986(key)}=${rfc3986(query[key]!)}`)
+    .join("&");
+}
 
-  const signed: Record<string, string> = {
-    ...headers,
-    host: url.host,
-    "x-amz-content-sha256": payloadHash,
+/** 11 位随机小写字母/数字（`s` 参数）。 */
+export function randomUploadId(length = 11): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
+}
+
+/** 签名结果：canonical query + 需要带上的头 + Authorization。 */
+export interface SignedVodRequest {
+  canonicalQuery: string;
+  headers: Record<string, string>;
+  authorization: string;
+}
+
+/** 给一次 VOD 请求签名（与旧基座 `signVodRequest` 完全一致）。 */
+export function signVodRequest(options: {
+  method: "GET" | "POST";
+  query: Record<string, string>;
+  body?: Buffer;
+  credentials: StsCredentials;
+  date?: Date;
+}): SignedVodRequest {
+  const canonicalQuery = canonicalUploadQuery(options.query);
+  const amzDate = (options.date ?? new Date()).toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const dateStamp = amzDate.slice(0, 8);
+  const payloadHash = hashHex(options.body ?? Buffer.alloc(0));
+
+  const headers: Record<string, string> = {
     "x-amz-date": amzDate,
-    "x-amz-security-token": creds.sessionToken,
+    "x-amz-security-token": options.credentials.sessionToken,
   };
 
-  // canonical query：按 key 排序后重新编码
-  const queryPairs = [...url.searchParams.entries()]
-    // 有些参数是**签名之后**追加的（真机：`s=` 加上后 SignatureDoesNotMatch），
-    // 它们必须出现在最终 URL 里，但不能进 canonical query
-    .filter(([k]) => !excludeFromCanonicalQuery.includes(k))
-    .map(([k, v]) => [uriEncode(k), uriEncode(v)] as const)
-    .sort((a, b) => (a[0] === b[0] ? a[1].localeCompare(b[1]) : a[0].localeCompare(b[0])));
-  const canonicalQuery = queryPairs.map(([k, v]) => `${k}=${v}`).join("&");
+  if (options.method === "POST") {
+    headers["x-amz-content-sha256"] = payloadHash;
+  }
 
-  const signedHeaderNames = Object.keys(signed)
-    .map((k) => k.toLowerCase())
-    .sort();
-  const canonicalHeaders = signedHeaderNames
-    .map((name) => `${name}:${String(signed[name] ?? "").trim()}\n`)
-    .join("");
-  const signedHeaders = signedHeaderNames.join(";");
+  const headerNames = Object.keys(headers).sort();
+  const canonicalHeaders = headerNames.map((name) => `${name}:${headers[name]}\n`).join("");
+  const signedHeaders = headerNames.join(";");
 
   const canonicalRequest = [
-    method.toUpperCase(),
-    url.pathname || "/",
+    options.method,
+    "/",
     canonicalQuery,
     canonicalHeaders,
     signedHeaders,
     payloadHash,
   ].join("\n");
 
-  const scope = `${dateStamp}/${creds.region}/${creds.service}/aws4_request`;
-  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n");
+  const scope = `${dateStamp}/${VOD_REGION}/${VOD_SERVICE}/aws4_request`;
+  const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${hashHex(canonicalRequest)}`;
 
-  const kDate = hmac(`AWS4${creds.secretAccessKey}`, dateStamp);
-  const kRegion = hmac(kDate, creds.region);
-  const kService = hmac(kRegion, creds.service);
-  const kSigning = hmac(kService, "aws4_request");
-  const signature = createHmac("sha256", kSigning).update(stringToSign, "utf8").digest("hex");
+  let signingKey = hmac(`AWS4${options.credentials.secretAccessKey}`, dateStamp);
+  signingKey = hmac(signingKey, VOD_REGION);
+  signingKey = hmac(signingKey, VOD_SERVICE);
+  signingKey = hmac(signingKey, "aws4_request");
+  const signature = hmac(signingKey, stringToSign).toString("hex");
 
   return {
-    ...signed,
+    canonicalQuery,
+    headers,
     authorization:
-      `AWS4-HMAC-SHA256 Credential=${creds.accessKeyId}/${scope}, ` +
+      `AWS4-HMAC-SHA256 Credential=${options.credentials.accessKeyId}/${scope}, ` +
       `SignedHeaders=${signedHeaders}, Signature=${signature}`,
   };
 }

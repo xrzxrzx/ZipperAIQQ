@@ -1,21 +1,21 @@
 /**
- * 图片上传（**纯 API**，不碰 DOM）。
+ * 图片上传（**纯 API**）——实现与旧基座 `douyin-im` 的 `services/im/upload.js` 逐段对齐。
  *
- * 链路（2026-11-21 真机抓包 + 逐条复刻）：
+ * 四步（真机验证过能拿到加密结果 `Encryption{Uri,SecretKey}`）：
  *
  * ```
- * ① GET  www.douyin.com/aweme/v1/web/im/upload/config/v2
- *         → public_image_config{space_name, access_key_id, secret_access_key, session_token}
- * ② GET  vod.bytedanceapi.com/?Action=ApplyUploadInner&Version=2020-11-19&SpaceName=…
- *         &FileType=image&IsInner=1&NeedFallback=true&FileSize=<size>     （SigV4 签名）
- *         → Result.UploadAddress.StoreInfos[0]{StoreUri, Auth, UploadID} + Result.SessionKey
- * ③ POST https://<tos host>/upload/v1/<StoreUri>   Authorization: <Auth>   传文件字节
- * ④ POST vod.bytedanceapi.com/?Action=CommitUploadInner&Version=2020-11-19&SpaceName=…
- *         body {"SessionKey": "…"}                                  （SigV4 签名）
- *         → Result.Results[0]{Uri, SourceMd5, Extra…} + SecretKey(=skey)
+ * ① GET  /aweme/v1/web/im/upload/config/v2   → STS 临时凭证（必须页面同源 fetch，否则被 WAF 判 blocked）
+ * ② GET  vod.bytedanceapi.com?Action=ApplyUploadInner&…&s=<随机11位>
+ * ③ POST https://<host>/upload/v1/<StoreUri>   Authorization / Content-CRC32 / X-Storage-U / UploadHeader
+ * ④ POST vod.bytedanceapi.com?Action=CommitUploadInner
+ *         body {SessionKey, Functions:[{name:"Encryption", input:{Config:{copies:"cipher_v2"}, PolicyParams:{…}}}]}
+ *         → Result.Results[0].Encryption{Uri, SecretKey, SourceMd5, Extra{img_size,img_width,img_height}}
  * ```
  *
- * 产出直接喂给出站：`content` 里的 `resource_url{oid,skey,data_size,md5}`。
+ * 关键点（之前踩过的坑）：
+ * - `s` 是**随机 11 位**（旧基座 `randomId(11)`），参与签名；写死常量会 `SignatureDoesNotMatch`
+ * - 签名**只签** `x-amz-date`/`x-amz-security-token`（POST 再加 `x-amz-content-sha256`），**不签 host**
+ * - **`Functions` 里的 Encryption 配置**才是平台返回 `skey` 的开关；少了它 Commit 只回 Uri
  */
 
 import { createHash } from "node:crypto";
@@ -23,317 +23,364 @@ import { readFile } from "node:fs/promises";
 import type { BrowserContext, Page } from "playwright";
 import type { BrowserLogger } from "./browser.js";
 import { OutboundError } from "./protocol.js";
-import { signV4, type StsCredentials } from "./sigv4.js";
+import { randomUploadId, signVodRequest, type StsCredentials } from "./sigv4.js";
 
 /** 上传结果（发消息时用）。 */
 export interface UploadedImage {
-  /** `StoreUri`，即 content 里的 `resource_url.oid`。 */
+  /** `Encryption.Uri`，即 content 里的 `resource_url.oid`。 */
   oid: string;
-  /** `SecretKey`，即 `resource_url.skey`。 */
+  /** `Encryption.SecretKey`，即 `resource_url.skey`。 */
   skey: string;
-  /** 文件 md5（hex）。 */
+  /** 明文 md5（content.md5 / resource_url.md5 都用它）。 */
   md5: string;
-  /** 字节数。 */
+  /** 明文字节数。 */
   size: number;
   width: number;
   height: number;
 }
 
 const CONFIG_PATH = "/aweme/v1/web/im/upload/config/v2";
-const VOD_HOST = "https://vod.bytedanceapi.com/";
+const VOD_URL = "https://vod.bytedanceapi.com/";
 
-/** CRC32（TOS 上传要求 `content-crc32`，缺了平台不认这份文件）。 */
+/** 图片上传的加密/转码配置（照抄旧基座 `uploadProcessFunctions('image', format)`）。 */
+export function uploadProcessFunctions(imageFormat: string): unknown[] {
+  return [
+    {
+      name: "Encryption",
+      input: {
+        Config: { copies: "cipher_v2" },
+        PolicyParams:
+          imageFormat === "gif"
+            ? { "policy-set": "still", "still-width": "480", "still-height": "480" }
+            : { "policy-set": "check,thumb,medium,large" },
+      },
+    },
+  ];
+}
+
+/** 图片格式嗅探（决定 `aweType` 与加密参数）。 */
+export function sniffImageFormat(data: Buffer): "png" | "jpeg" | "gif" | "unknown" {
+  if (data.length >= 24 && data.subarray(1, 4).toString() === "PNG") {
+    return "png";
+  }
+
+  if (data.length > 4 && data[0] === 0xff && data[1] === 0xd8) {
+    return "jpeg";
+  }
+
+  if (data.length >= 10 && ["GIF87a", "GIF89a"].includes(data.subarray(0, 6).toString())) {
+    return "gif";
+  }
+
+  return "unknown";
+}
+
+/** 宽高（PNG / JPEG / GIF）。 */
+export function readImageSize(data: Buffer): { width: number; height: number } {
+  if (data.length >= 24 && data.subarray(1, 4).toString() === "PNG") {
+    return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
+  }
+
+  if (data.length > 4 && data[0] === 0xff && data[1] === 0xd8) {
+    let pos = 2;
+    while (pos + 9 < data.length) {
+      if (data[pos] !== 0xff) {
+        pos += 1;
+        continue;
+      }
+
+      const marker = data[pos + 1] ?? 0;
+      if (marker >= 0xc0 && marker <= 0xc3) {
+        return { width: data.readUInt16BE(pos + 7), height: data.readUInt16BE(pos + 5) };
+      }
+
+      const size = data.readUInt16BE(pos + 2);
+      if (size < 2) {
+        break;
+      }
+
+      pos += 2 + size;
+    }
+  }
+
+  if (data.length >= 10 && ["GIF87a", "GIF89a"].includes(data.subarray(0, 6).toString())) {
+    return { width: data.readUInt16LE(6), height: data.readUInt16LE(8) };
+  }
+
+  throw new OutboundError("unknown", "读不出图片尺寸（支持 PNG/JPEG/GIF）");
+}
+
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i += 1) {
-    let c = i;
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
     for (let k = 0; k < 8; k += 1) {
       c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
     }
 
-    table[i] = c >>> 0;
+    table[n] = c >>> 0;
   }
 
   return table;
 })();
 
+/** CRC32（TOS 上传头 `Content-CRC32`）。 */
 export function crc32Hex(data: Buffer): string {
   let crc = 0xffffffff;
   for (const byte of data) {
-    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ byte) & 0xff]!;
+    crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
   }
 
   return ((crc ^ 0xffffffff) >>> 0).toString(16).padStart(8, "0");
 }
 
-/** 从 PNG/JPEG 头里读宽高（避免为了尺寸再引依赖）。 */
-export function readImageSize(data: Buffer): { width: number; height: number } {
-  // PNG：IHDR 在 16..24
-  if (data.length > 24 && data[0] === 0x89 && data[1] === 0x50) {
-    return { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
-  }
-
-  // JPEG：扫 SOF 段
-  if (data.length > 4 && data[0] === 0xff && data[1] === 0xd8) {
-    let offset = 2;
-    while (offset + 9 < data.length) {
-      if (data[offset] !== 0xff) {
-        offset += 1;
-        continue;
-      }
-
-      const marker = data[offset + 1] ?? 0;
-      const length = data.readUInt16BE(offset + 2);
-      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-        return { height: data.readUInt16BE(offset + 5), width: data.readUInt16BE(offset + 7) };
-      }
-
-      offset += 2 + length;
-    }
-  }
-
-  throw new OutboundError("unknown", "读不出图片尺寸（只支持 PNG/JPEG）");
+/** 上传地址（Apply 的两种形态：直传 UploadAddress / 内网 UploadNodes）。 */
+interface UploadAddress {
+  storeUri: string;
+  authorization: string;
+  host: string;
+  sessionKey: string;
+  uploadHeaders: Record<string, string>;
 }
 
-/** `UploadHeader` / `StorageHeader` 可能是 JSON 字符串或对象，统一成头字典。 */
-function parseHeaderField(value: Record<string, string> | string | undefined): Record<string, string> {
-  if (!value) {
-    return {};
-  }
-
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value) as Record<string, unknown>;
-      const out: Record<string, string> = {};
-      for (const [k, v] of Object.entries(parsed)) {
-        if (typeof v === "string") {
-          out[k.toLowerCase()] = v;
-        }
-      }
-
-      return out;
-    } catch {
-      return {};
-    }
-  }
-
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(value)) {
-    if (typeof v === "string") {
-      out[k.toLowerCase()] = v;
-    }
-  }
-
-  return out;
-}
-
-/** 图片上传器（STS + SigV4 + TOS）。 */
+/** 图片上传器（STS + SigV4 + TOS + Commit 加密）。 */
 export class DouyinImageUploader {
   private readonly log: BrowserLogger;
-  private creds: (StsCredentials & { spaceName: string; expireAt: number }) | null = null;
-
   private readonly selfUid: () => string | null;
+  private creds: (StsCredentials & { spaceName: string; expireAt: number }) | null = null;
 
   constructor(options: { log: BrowserLogger; selfUid?: () => string | null }) {
     this.log = options.log;
     this.selfUid = options.selfUid ?? (() => null);
   }
 
-  /**
-   * 上传一张本地图片。
-   *
-   * @param context 浏览器 context（复用 cookie，且不受页面 CORS 限制）
-   */
+  /** 上传一张本地图片，返回可直接用于 `message_type=27` 的 oid/skey。 */
   async upload(context: BrowserContext, page: Page, filePath: string): Promise<UploadedImage> {
     const data = await readFile(filePath);
+    const format = sniffImageFormat(data);
+    if (format === "unknown") {
+      throw new OutboundError("unknown", "不支持的图片格式（PNG/JPEG/GIF）");
+    }
+
     const { width, height } = readImageSize(data);
     const creds = await this.ensureCredentials(page);
 
-    // ② ApplyUploadInner
-    const applyUrl = new URL(VOD_HOST);
-    applyUrl.searchParams.set("Action", "ApplyUploadInner");
-    applyUrl.searchParams.set("Version", "2020-11-19");
-    applyUrl.searchParams.set("SpaceName", creds.spaceName);
-    applyUrl.searchParams.set("FileType", "image");
-    applyUrl.searchParams.set("IsInner", "1");
-    applyUrl.searchParams.set("NeedFallback", "true");
-    applyUrl.searchParams.set("FileSize", String(data.length));
+    const address = await this.apply(context, creds, data.length);
+    await this.putObject(context, address, data);
+    const committed = await this.commit(context, creds, address.sessionKey, format);
 
+    return {
+      oid: committed.uri,
+      skey: committed.secretKey,
+      md5: createHash("md5").update(data).digest("hex"),
+      size: committed.imageSize ?? data.length,
+      width: committed.imageWidth ?? width,
+      height: committed.imageHeight ?? height,
+    };
+  }
 
-    const applyHeaders = signV4(
-      "GET",
-      applyUrl,
-      { accept: "application/json" },
-      Buffer.alloc(0),
-      creds,
-      new Date(),
-      ["s"],
-    );
-    const applyRes = await context.request.fetch(applyUrl.toString(), {
-      method: "GET",
-      headers: applyHeaders,
-      timeout: 30_000,
-    });
-    if (!applyRes.ok()) {
-      throw new OutboundError("unknown", `ApplyUploadInner 失败：HTTP ${applyRes.status()}`);
-    }
+  /** ② ApplyUploadInner（`s` 随机，参与签名）。 */
+  private async apply(
+    context: BrowserContext,
+    creds: StsCredentials & { spaceName: string },
+    fileSize: number,
+  ): Promise<UploadAddress> {
+    const query: Record<string, string> = {
+      Action: "ApplyUploadInner",
+      Version: "2020-11-19",
+      SpaceName: creds.spaceName,
+      FileType: "image",
+      IsInner: "1",
+      NeedFallback: "true",
+      FileSize: String(fileSize),
+      s: randomUploadId(11),
+    };
 
-    const applyText = await applyRes.text();
-    let applyJson: {
+    const json = (await this.signedVodJson(context, "GET", query, undefined, creds)) as {
       Result?: {
-        SessionKey?: string;
         UploadAddress?: {
-          StoreInfos?: {
-            StoreUri?: string;
-            Auth?: string;
-            UploadID?: string;
-            Host?: string;
-            UploadHeader?: Record<string, string> | string;
-            StorageHeader?: Record<string, string> | string;
+          StoreInfos?: { StoreUri?: string; Auth?: string }[];
+          UploadHosts?: string[];
+          SessionKey?: string;
+        };
+        InnerUploadAddress?: {
+          UploadNodes?: {
+            UploadHost?: string;
+            StoreInfos?: { StoreUri?: string; Auth?: string }[];
+            SessionKey?: string;
+            UploadHeader?: Record<string, string>;
           }[];
         };
       };
     };
-    try {
-      applyJson = JSON.parse(applyText) as typeof applyJson;
-    } catch {
-      throw new OutboundError("unknown", `ApplyUploadInner 返回非 JSON：${applyText.slice(0, 120)}`);
+
+    const direct = json.Result?.UploadAddress;
+    const nodes = json.Result?.InnerUploadAddress?.UploadNodes;
+
+    if (!nodes?.length && direct?.StoreInfos?.length && direct.UploadHosts?.length) {
+      const store = direct.StoreInfos[0]!;
+      return {
+        storeUri: store.StoreUri ?? "",
+        authorization: store.Auth ?? "",
+        host: direct.UploadHosts[0]!,
+        sessionKey: direct.SessionKey ?? "",
+        uploadHeaders: {},
+      };
     }
 
-    const result = applyJson.Result as
-      | (typeof applyJson.Result & {
-          InnerUploadAddress?: {
-            SessionKey?: string;
-            StoreInfos?: {
-              StoreUri?: string;
-              Auth?: string;
-              UploadID?: string;
-              Host?: string;
-              UploadHeader?: Record<string, string> | string;
-              StorageHeader?: Record<string, string> | string;
-            }[];
-          };
-          SDKParam?: unknown;
-        })
-      | undefined;
-    const store = result?.UploadAddress?.StoreInfos?.[0] ?? result?.InnerUploadAddress?.StoreInfos?.[0];
-    // SessionKey 有时在 Result 顶层，有时塞在 SDKParam 里（真机两种都见过）
-    // 真机命中：SessionKey 在 `Result.UploadAddress.SessionKey`
-    let sessionKey =
-      (result?.UploadAddress as { SessionKey?: string } | undefined)?.SessionKey ??
-      result?.SessionKey ??
-      result?.InnerUploadAddress?.SessionKey;
-    if (!sessionKey && result?.SDKParam) {
-      const sdk = result.SDKParam;
-      if (typeof sdk === "string") {
-        const matched = /"SessionKey"\s*:\s*"([^"]+)"/.exec(sdk);
-        sessionKey = matched?.[1];
-      } else if (sdk && typeof sdk === "object") {
-        const record = sdk as Record<string, unknown>;
-        for (const key of Object.keys(record)) {
-          if (/session/i.test(key) && typeof record[key] === "string") {
-            sessionKey = record[key] as string;
-            break;
-          }
-        }
-      }
-    }
-    if (!store?.StoreUri || !store.Auth || !sessionKey) {
-      throw new OutboundError(
-        "unknown",
-        `ApplyUploadInner 失败；原文=${applyText.slice(0, 400)}`,
-      );
+    const node = nodes?.[0];
+    const store = node?.StoreInfos?.[0];
+    const address: UploadAddress = {
+      storeUri: store?.StoreUri ?? "",
+      authorization: store?.Auth ?? "",
+      host: node?.UploadHost ?? "",
+      sessionKey: node?.SessionKey ?? "",
+      uploadHeaders: Object.fromEntries(
+        Object.entries(node?.UploadHeader ?? {}).map(([key, value]) => [key, String(value)]),
+      ),
+    };
+
+    if (!address.storeUri || !address.authorization || !address.host || !address.sessionKey) {
+      throw new OutboundError("unknown", "VOD ApplyUploadInner 没给出上传地址（StoreUri/Auth/Host/SessionKey）");
     }
 
-    // ③ 传文件到 TOS（Host 优先用响应给的，其次用固定域名族）
-    const tosHost = store.Host ? `https://${store.Host}` : "https://tos-d-cm-lf.douyin.com";
-    const uploadUrl = `${tosHost}/upload/v1/${store.StoreUri}`;
-    const uploadRes = await context.request.post(uploadUrl, {
-      headers: {
-        authorization: store.Auth,
-        "content-type": "application/octet-stream",
-        // 这三项是抓包里的真实请求头：缺 content-crc32 时平台不认文件，
-        // Commit 就不会返回 Encryption → 发出去的图是空的（2026-11-22 真机定位）
-        "content-crc32": crc32Hex(data),
-        // 平台通过这两个字段下发「服务端加密」所需的头（抓包里页面也带）
-        ...parseHeaderField(store.UploadHeader),
-        ...parseHeaderField(store.StorageHeader),
-        "content-disposition": 'attachment; filename="undefined"',
-        ...(this.selfUid() ? { "x-storage-u": this.selfUid() as string } : {}),
-      },
-      data: data,
+    return address;
+  }
+
+  /** ③ 传文件字节到 TOS。 */
+  private async putObject(
+    context: BrowserContext,
+    address: UploadAddress,
+    data: Buffer,
+  ): Promise<void> {
+    const uid = this.selfUid();
+    const headers: Record<string, string> = {
+      authorization: address.authorization,
+      "content-type": "application/octet-stream",
+      "content-crc32": crc32Hex(data),
+      ...(uid ? { "x-storage-u": uid } : {}),
+      ...address.uploadHeaders,
+    };
+
+    const response = await context.request.post(`https://${address.host}/upload/v1/${address.storeUri}`, {
+      headers,
+      data,
       timeout: 60_000,
     });
-    if (!uploadRes.ok()) {
-      throw new OutboundError("unknown", `TOS 上传失败：HTTP ${uploadRes.status()}`);
+
+    if (!response.ok()) {
+      throw new OutboundError("unknown", `TOS 上传失败：HTTP ${response.status()}`);
     }
 
-    // ④ CommitUploadInner
-    const commitUrl = new URL(VOD_HOST);
-    commitUrl.searchParams.set("Action", "CommitUploadInner");
-    commitUrl.searchParams.set("Version", "2020-11-19");
-    commitUrl.searchParams.set("SpaceName", creds.spaceName);
+    const json = (await response.json().catch(() => ({}))) as { code?: number };
+    if (Number(json.code) !== 2000) {
+      throw new OutboundError("unknown", `TOS 上传被拒：code=${json.code ?? "?"}`);
+    }
+  }
 
-    const commitBody = Buffer.from(JSON.stringify({ SessionKey: sessionKey }), "utf8");
-    const commitHeaders = signV4(
-      "POST",
-      commitUrl,
-      { "content-type": "text/plain;charset=UTF-8" },
-      commitBody,
-      creds,
+  /** ④ CommitUploadInner（带 Functions 加密配置）。 */
+  private async commit(
+    context: BrowserContext,
+    creds: StsCredentials & { spaceName: string },
+    sessionKey: string,
+    imageFormat: string,
+  ): Promise<{ uri: string; secretKey: string; imageSize?: number; imageWidth?: number; imageHeight?: number }> {
+    const body = Buffer.from(
+      JSON.stringify({
+        SessionKey: sessionKey,
+        Functions: uploadProcessFunctions(imageFormat),
+      }),
+      "utf8",
     );
-    const commitRes = await context.request.post(commitUrl.toString(), {
-      headers: commitHeaders,
-      data: commitBody,
-      timeout: 30_000,
-    });
-    if (!commitRes.ok()) {
-      throw new OutboundError("unknown", `CommitUploadInner 失败：HTTP ${commitRes.status()}`);
-    }
 
-    const commitText = await commitRes.text();
-    const commitJson = JSON.parse(commitText) as {
+    const json = (await this.signedVodJson(
+      context,
+      "POST",
+      { Action: "CommitUploadInner", Version: "2020-11-19", SpaceName: creds.spaceName },
+      body,
+      creds,
+    )) as {
       Result?: {
         Results?: {
-          Uri?: string;
-          SourceMd5?: string;
-          Encryption?: { Uri?: string; SecretKey?: string; encryption_md5?: string; encryption_size?: number };
+          Encryption?: {
+            Uri?: string;
+            SecretKey?: string;
+            SourceMd5?: string;
+            Extra?: Record<string, string | number>;
+          };
         }[];
-        SecretKey?: string;
       };
-      SecretKey?: string;
     };
-    const committed = commitJson.Result?.Results?.[0];
-    // 真机命中：发消息用的 oid/skey 是**加密后的 Uri / SecretKey**（Encryption 子对象）
-    const encryption = committed?.Encryption;
-    const oid = encryption?.Uri ?? committed?.Uri;
-    // 有时平台不做服务端加密：这时没有 Encryption 子对象，也没有 skey（空串发出去试试）
-    const skey = encryption?.SecretKey ?? commitJson.SecretKey ?? commitJson.Result?.SecretKey ?? "";
-    if (!oid) {
-      throw new OutboundError(
-        "unknown",
-        `CommitUploadInner 缺字段；itemKeys=${Object.keys((committed ?? {}) as object).join(",")}`,
-      );
+
+    const encryption = json.Result?.Results?.[0]?.Encryption;
+    if (!encryption?.Uri || !encryption.SecretKey) {
+      throw new OutboundError("unknown", "VOD CommitUploadInner 没回加密信息（Uri/SecretKey）");
     }
 
-    this.log.info(`图片上传完成：oid=${oid.slice(0, 24)}… size=${data.length}`);
+    const extra = encryption.Extra ?? {};
+    const num = (value: unknown): number | undefined => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+    };
+
+    this.log.info(`图片上传完成：oid=${encryption.Uri.slice(0, 24)}… skey=${encryption.SecretKey.length} 字符`);
 
     return {
-      oid,
-      skey,
-      md5: createHash("md5").update(data).digest("hex"),
-      size: data.length,
-      width,
-      height,
+      uri: encryption.Uri,
+      secretKey: encryption.SecretKey,
+      imageSize: num(extra["img_size"]),
+      imageWidth: num(extra["img_width"]),
+      imageHeight: num(extra["img_height"]),
     };
   }
 
-  /**
-   * 取（并缓存）STS 凭证。
-   *
-   * 为什么必须在**页面里**发：`context.request` 直接打这个接口会被 WAF 判风险，
-   * 回一个纯文本 "blocked"（2026-11-21 实测）；页面同源 fetch 带齐浏览器头与 cookie 就正常。
-   */
+  /** 签 + 发一次 VOD 请求，并检查平台错误码。 */
+  private async signedVodJson(
+    context: BrowserContext,
+    method: "GET" | "POST",
+    query: Record<string, string>,
+    body: Buffer | undefined,
+    creds: StsCredentials,
+  ): Promise<unknown> {
+    const signed = signVodRequest({ method, query, ...(body ? { body } : {}), credentials: creds });
+    const url = `${VOD_URL}?${signed.canonicalQuery}`;
+
+    const response =
+      method === "GET"
+        ? await context.request.get(url, {
+            headers: { ...signed.headers, authorization: signed.authorization },
+            timeout: 30_000,
+          })
+        : await context.request.post(url, {
+            headers: {
+              ...signed.headers,
+              authorization: signed.authorization,
+              "content-type": "text/plain;charset=UTF-8",
+            },
+            data: body,
+            timeout: 30_000,
+          });
+
+    if (!response.ok()) {
+      throw new OutboundError("unknown", `VOD ${query.Action} 失败：HTTP ${response.status()}`);
+    }
+
+    const json = (await response.json().catch(() => ({}))) as {
+      ResponseMetadata?: { Error?: { Code?: string; CodeN?: number; Message?: string } };
+    };
+
+    const error = json.ResponseMetadata?.Error;
+    if (error?.Code || error?.CodeN) {
+      throw new OutboundError(
+        "unknown",
+        `VOD ${query.Action} 失败：${error.Code ?? error.CodeN} ${error.Message ?? ""}`.trim(),
+      );
+    }
+
+    return json;
+  }
+
+  /** 取（并缓存）STS 凭证（必须页面同源 fetch，否则被 WAF 回 "blocked"）。 */
   private async ensureCredentials(
     page: Page,
   ): Promise<StsCredentials & { spaceName: string; expireAt: number }> {
@@ -342,7 +389,6 @@ export class DouyinImageUploader {
       return this.creds;
     }
 
-    // 参数要与页面一致（缺了会被 WAF 判风险，直接返回 "blocked" —— 2026-11-21 实测）
     const url = new URL(`https://www.douyin.com${CONFIG_PATH}`);
     const params: Record<string, string> = {
       device_platform: "webapp",
@@ -373,8 +419,7 @@ export class DouyinImageUploader {
     const raw = await page.evaluate(async (target) => {
       try {
         const response = await fetch(target, { credentials: "include" });
-        const text = await response.text();
-        return { status: response.status, text };
+        return { status: response.status, text: await response.text() };
       } catch (error) {
         return { status: 0, text: String(error) };
       }
@@ -408,8 +453,6 @@ export class DouyinImageUploader {
       accessKeyId: cfg.access_key_id,
       secretAccessKey: cfg.secret_access_key,
       sessionToken: cfg.session_token,
-      region: "cn-north-1",
-      service: "vod",
       spaceName: cfg.space_name ?? "zhenzhen",
       expireAt: cfg.expire_at ?? Math.floor(Date.now() / 1000) + 3600,
     };
