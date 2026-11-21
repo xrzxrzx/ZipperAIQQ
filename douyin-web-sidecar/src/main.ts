@@ -567,7 +567,7 @@ async function main(): Promise<void> {
   });
 
   // ── 出站 ──
-  const uploader = new DouyinImageUploader({ log });
+  const uploader = new DouyinImageUploader({ log, selfUid: () => currentSelfUid() });
 
   const outbound = new OutboundSender({
     browser,
