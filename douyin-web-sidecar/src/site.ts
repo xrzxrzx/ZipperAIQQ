@@ -801,3 +801,71 @@ export async function openMostRecentConversation(page: Page): Promise<string | n
   await page.waitForTimeout(1_500);
   return first.name;
 }
+
+/**
+ * 用页面 SDK **只做上传**，返回加密后的 oid/skey（不点发送按钮）。
+ *
+ * 为什么要借页面：我们自己走 `ApplyUploadInner/CommitUploadInner` 时平台不回
+ * `Encryption{Uri,SecretKey}`（缺页面 SDK 的加密开关），导致发出去的图对方渲染不出来。
+ * 页面 SDK 上传完会弹「发送（N）」确认框 —— 我们只取它上传得到的
+ * `Encryption.Uri / Encryption.SecretKey`，**点取消**，消息仍由我们用 API 发。
+ *
+ * @returns 上传结果；超时/失败返回 `null`（调用方回落纯 API 或 DOM 发送）
+ */
+export async function uploadImageViaPageApiAware(
+  page: Page,
+  filePath: string,
+  timeoutMs = 30_000,
+): Promise<{ oid: string; skey: string; md5: string; size: number; width: number; height: number } | null> {
+  const inputs = page.locator("input[type=file]");
+  const count = await inputs.count();
+  if (count === 0) {
+    return null;
+  }
+
+  let uploaded: { oid: string; skey: string; md5: string; size: number; width: number; height: number } | null = null;
+  const onResponse = async (response: import("playwright").Response): Promise<void> => {
+    if (!/CommitUploadInner/.test(response.url())) {
+      return;
+    }
+
+    try {
+      const json = (await response.json()) as {
+        Result?: { Results?: { Uri?: string; Encryption?: { Uri?: string; SecretKey?: string; encryption_md5?: string; encryption_size?: number } }[] };
+      };
+      const item = json.Result?.Results?.[0];
+      const encryption = item?.Encryption;
+      if (encryption?.Uri && encryption.SecretKey) {
+        uploaded = {
+          oid: encryption.Uri,
+          skey: encryption.SecretKey,
+          md5: encryption.encryption_md5 ?? "",
+          size: encryption.encryption_size ?? 0,
+          // 宽高在发消息的 content 里要用：这里从确认框里的缩略图量不出来，
+          // 交给调用方用本地文件补齐（见 outbound），先占位 0。
+          width: 0,
+          height: 0,
+        };
+      }
+    } catch {
+      // 不是 JSON / 结构不对：忽略，让超时兜底
+    }
+  };
+
+  page.on("response", onResponse);
+  try {
+    await inputs.nth(count - 1).setInputFiles(filePath);
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline && !uploaded) {
+      await page.waitForTimeout(500);
+    }
+
+    // 关掉确认框：这条消息由 API 发，页面不要再发一遍
+    await page.getByText(/^取消$/).first().click({ timeout: 3_000 }).catch(() => undefined);
+
+    return uploaded;
+  } finally {
+    page.off("response", onResponse);
+  }
+}

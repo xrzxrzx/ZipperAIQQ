@@ -42,6 +42,30 @@ export interface UploadedImage {
 const CONFIG_PATH = "/aweme/v1/web/im/upload/config/v2";
 const VOD_HOST = "https://vod.bytedanceapi.com/";
 
+/** CRC32（TOS 上传要求 `content-crc32`，缺了平台不认这份文件）。 */
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let c = i;
+    for (let k = 0; k < 8; k += 1) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+
+    table[i] = c >>> 0;
+  }
+
+  return table;
+})();
+
+export function crc32Hex(data: Buffer): string {
+  let crc = 0xffffffff;
+  for (const byte of data) {
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ byte) & 0xff]!;
+  }
+
+  return ((crc ^ 0xffffffff) >>> 0).toString(16).padStart(8, "0");
+}
+
 /** 从 PNG/JPEG 头里读宽高（避免为了尺寸再引依赖）。 */
 export function readImageSize(data: Buffer): { width: number; height: number } {
   // PNG：IHDR 在 16..24
@@ -76,8 +100,11 @@ export class DouyinImageUploader {
   private readonly log: BrowserLogger;
   private creds: (StsCredentials & { spaceName: string; expireAt: number }) | null = null;
 
-  constructor(options: { log: BrowserLogger }) {
+  private readonly selfUid: () => string | null;
+
+  constructor(options: { log: BrowserLogger; selfUid?: () => string | null }) {
     this.log = options.log;
+    this.selfUid = options.selfUid ?? (() => null);
   }
 
   /**
@@ -99,6 +126,9 @@ export class DouyinImageUploader {
     applyUrl.searchParams.set("IsInner", "1");
     applyUrl.searchParams.set("NeedFallback", "true");
     applyUrl.searchParams.set("FileSize", String(data.length));
+    // 抓包里真实请求带的常量参数：平台用它决定是否走服务端加密
+    // （缺了它 Commit 只回 Uri/UriStatus，没有 Encryption → 发出去的图对方渲染不出来）
+    applyUrl.searchParams.set("s", "sfhwtpaupd");
 
     const applyHeaders = signV4("GET", applyUrl, { accept: "application/json" }, Buffer.alloc(0), creds);
     const applyRes = await context.request.fetch(applyUrl.toString(), {
@@ -165,6 +195,11 @@ export class DouyinImageUploader {
       headers: {
         authorization: store.Auth,
         "content-type": "application/octet-stream",
+        // 这三项是抓包里的真实请求头：缺 content-crc32 时平台不认文件，
+        // Commit 就不会返回 Encryption → 发出去的图是空的（2026-11-22 真机定位）
+        "content-crc32": crc32Hex(data),
+        "content-disposition": 'attachment; filename="undefined"',
+        ...(this.selfUid() ? { "x-storage-u": this.selfUid() as string } : {}),
       },
       data: data,
       timeout: 60_000,

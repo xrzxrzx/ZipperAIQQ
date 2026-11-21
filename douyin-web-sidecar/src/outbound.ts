@@ -29,6 +29,7 @@ import {
   reloadChatPage,
   sendImageInOpenConversation,
   sendTextInOpenConversation,
+  uploadImageViaPageApiAware,
   SITE,
   type ConversationNameCache,
 } from "./site.js";
@@ -188,7 +189,42 @@ export class OutboundSender {
     for (const item of media) {
       const file = await this.materialize(item);
       try {
-        // ① 纯 API：上传（SigV4 + TOS）→ 发 message_type=27
+        // ① 首选：**页面 SDK 只做上传**（能拿到平台加密的 oid/skey）→ 我们自己用 API 发消息。
+        //    为什么不用纯 API 上传：我们签的 ApplyUploadInner 平台不回 Encryption，
+        //    发出去的图对方渲染不出来（2026-11-22 真机：status=0 但对方看不到）。
+        try {
+          const viaPage = await uploadImageViaPageApiAware(page, file);
+          if (viaPage) {
+            // 页面 SDK 只给了 oid/skey（和加密后的 md5/size）；宽高与原件 md5 用本地文件补
+            const local = await import("node:fs/promises").then((m) => m.readFile(file));
+            const { readImageSize } = await import("./image-upload.js");
+            const dimensions = readImageSize(local);
+            viaPage.width = dimensions.width;
+            viaPage.height = dimensions.height;
+
+            // md5/size 必须是**明文**的：抓包里 content.md5 与原件一致，
+            // 而 Commit 返回的 encryption_md5 是密文的（用它对方会对不上）
+            const { createHash } = await import("node:crypto");
+            viaPage.md5 = createHash("md5").update(local).digest("hex");
+            viaPage.size = local.length;
+          }
+
+          if (viaPage) {
+            const result = await this.api.sendImage(context, page, target as never, viaPage, crypto.randomUUID());
+            if (result.ok) {
+              this.conversations.noteSent(plan.threadId, "[图片]");
+              sent += 1;
+              this.log.info(`图片已用 API 发出（上传由页面 SDK 完成，oid=${viaPage.oid.slice(0, 20)}…）`);
+              continue;
+            }
+
+            this.log.warn(`API 发图被拒：status=${result.statusCode} ${result.errorDesc ?? ""}`);
+          }
+        } catch (error) {
+          this.log.warn(`页面 SDK 上传失败：${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        // ② 次选：纯 API 上传（无加密密钥，对方可能看不到图）
         try {
           const uploaded = await this.uploader.upload(context, page, file);
           const result = await this.api.sendImage(
