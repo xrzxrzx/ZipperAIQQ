@@ -744,6 +744,8 @@ async function main(): Promise<void> {
   });
 
   // ── 定时体检：刷新会话名（入站补昵称用）+ 播状态 + DOM 兜底 ──
+  let lastKeepAliveAt = 0;
+
   const healthTimer = setInterval(() => {
     void (async () => {
       try {
@@ -769,6 +771,27 @@ async function main(): Promise<void> {
         const rows = await listConversations(page).catch(() => []);
         if (rows.length > 0) {
           names.refreshFromRows(rows);
+        }
+
+        // ── 会话保活（对齐旧基座的长连语义）───────────────────────────
+        // 旧基座 douyin-im 自己维护协议长连，不存在「没人订阅」的问题；
+        // 浏览器底座是蹭页面会话：页面掉回列表页后抖音就不再推帧。
+        // 这里在「入站静默超过 3 分钟」时重新打开最近会话，把订阅接回来。
+        if (inbound.silenceMs > 3 * 60 * 1000) {
+          const now = Date.now();
+          if (now - lastKeepAliveAt > 2 * 60 * 1000) {
+            lastKeepAliveAt = now;
+            log.warn(
+              `入站已静默 ${Math.round(inbound.silenceMs / 1000)}s，尝试重新打开最近会话（保活）`,
+            );
+            const reopened = await openMostRecentConversation(page).catch(() => null);
+            if (reopened) {
+              log.info(`保活：已重新打开会话 ${reopened}`);
+              await page.bringToFront().catch(() => undefined);
+            } else {
+              log.warn("保活：没能打开会话（列表为空？稍后重试）");
+            }
+          }
         }
 
         await inbound.scanDom(page);
