@@ -772,3 +772,32 @@ export async function sendImageInOpenConversation(page: Page, filePath: string):
 
   return false;
 }
+
+/**
+ * 打开「最近的一个会话」。
+ *
+ * 为什么启动后必须做这一步：网页版私信页停在**会话列表**时，
+ * 抖音不会把新消息推到我们旁听的 WS 上（2026-11-22 真机：重启后入站全哑，
+ * 打开一个会话后立刻恢复）。所以启动/重建后主动点开最近一条。
+ *
+ * @returns 是否成功打开（列表为空 / 没渲染都会返回 false，调用方只记日志）
+ */
+export async function openMostRecentConversation(page: Page): Promise<string | null> {
+  const ready = await waitForConversationList(page, 20_000);
+  if (!ready) {
+    return null;
+  }
+
+  // 列表里会混进顶部导航行（标题「抖音聊天」），它不是会话，点它等于白点
+  const rows = (await listConversations(page)).filter(
+    (row) => row.name.trim().length >= 1 && !row.name.includes("抖音聊天"),
+  );
+  const first = rows[0];
+  if (!first) {
+    return null;
+  }
+
+  await clickConversationRow(page, first);
+  await page.waitForTimeout(1_500);
+  return first.name;
+}

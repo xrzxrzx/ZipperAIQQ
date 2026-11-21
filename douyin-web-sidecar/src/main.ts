@@ -40,7 +40,14 @@ import {
   str,
   type Frame,
 } from "./protocol.js";
-import { ConversationNameCache, listConversations, openChatPage, pageHealth, SITE } from "./site.js";
+import {
+  ConversationNameCache,
+  listConversations,
+  openChatPage,
+  openMostRecentConversation,
+  pageHealth,
+  SITE,
+} from "./site.js";
 
 // ═══════════════════════════ 配置 ═══════════════════════════
 
@@ -811,9 +818,30 @@ async function main(): Promise<void> {
 
     // 走 startLogin：它发现已登录 → markOnline（上报 login.state=online）+ 打开 /chat。
     // 之前这里只 emitState()，状态还是 unknown —— 服务端/客户端一直显示"未知"（2026-11-20 真机发现）。
-    void login.startLogin().catch((error: unknown) => {
-      log.warn(`补报登录态失败：${error instanceof Error ? error.message : String(error)}`);
-    });
+    void login
+      .startLogin()
+      .then(async () => {
+        // 启动/重建后**必须点开一个会话**：停在列表页时抖音不往 WS 推新消息
+        //（2026-11-22 真机：重启后入站全哑，点开会话立刻恢复）
+        // 列表渲染有延迟：重试几次，别一次没看到就放弃（真机上首屏常要 5–15 秒）
+        try {
+          let opened: string | null = null;
+          for (let attempt = 1; attempt <= 6 && !opened; attempt += 1) {
+            const page = await browser.ensureChatPage(SITE.chatUrl);
+            opened = await openMostRecentConversation(page).catch(() => null);
+            if (!opened) {
+              await page.waitForTimeout(3_000);
+            }
+          }
+
+          log.info(opened ? `已打开最近会话：${opened}（入站订阅就绪）` : "连续 6 次都没打开最近会话（列表一直为空）");
+        } catch (error) {
+          log.warn(`打开最近会话失败：${error instanceof Error ? error.message : String(error)}`);
+        }
+      })
+      .catch((error: unknown) => {
+        log.warn(`补报登录态失败：${error instanceof Error ? error.message : String(error)}`);
+      });
   }
 
   await link.start();
