@@ -649,6 +649,7 @@ async function main(): Promise<void> {
 
       log.info(
         `出站成功：session=${plan.session} 文本=${result.chunks} 图片=${result.images} ` +
+          `通道=${result.via} status=${result.status ?? "-"} ` +
           `降级=${result.degraded.join(",") || "无"} requestId=${requestId ?? "(无)"}`,
       );
 
@@ -659,6 +660,10 @@ async function main(): Promise<void> {
             ok: true,
             error: null,
             degraded: result.degraded.length > 0 ? result.degraded.join(",") : null,
+            // 让服务端/模型看到「这条是怎么发出去的」：api=HTTP 接口，dom=页面操作
+            via: result.via,
+            status: result.status,
+            images: result.images,
           }),
         );
       }

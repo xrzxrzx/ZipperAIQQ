@@ -84,6 +84,10 @@ public sealed class ThrottledMessageChannel : IMessageChannel, IContactDirectory
     public string? TakeLastDegraded(string platform, string sessionId) =>
         _inner is ISendNoticeSink sink ? sink.TakeLastDegraded(platform, sessionId) : null;
 
+    /// <inheritdoc />
+    public string? TakeLastDelivery(string platform, string sessionId) =>
+        _inner is ISendNoticeSink sink ? sink.TakeLastDelivery(platform, sessionId) : null;
+
     public IAsyncEnumerable<InboundEvent> ReceiveAsync(CancellationToken ct) => _inner.ReceiveAsync(ct);
 
     public async Task SendAsync(OutgoingMessage message, CancellationToken ct)

@@ -218,6 +218,17 @@ public sealed class CompositeMessageChannel : IMessageChannel, IContactDirectory
         return channel is ISendNoticeSink sink ? sink.TakeLastDegraded(platform, sessionId) : null;
     }
 
+    /// <inheritdoc />
+    public string? TakeLastDelivery(string platform, string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(platform) || !_byPlatform.TryGetValue(platform, out var channel))
+        {
+            return null;
+        }
+
+        return channel is ISendNoticeSink sink ? sink.TakeLastDelivery(platform, sessionId) : null;
+    }
+
     /// <summary>把一条子通道的事件搬进合并流；该通道断了不影响其他通道。</summary>
     private async Task PumpAsync(IMessageChannel channel, CancellationToken ct)
     {

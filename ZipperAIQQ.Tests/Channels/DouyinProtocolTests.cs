@@ -54,6 +54,49 @@ public sealed class DouyinProtocolTests
     }
 
     [Fact]
+    public void Local_file_image_is_inlined_as_data_segment()
+    {
+        // 表情目录里的 `file` 允许写本地路径（QQ 侧直接交给 NapCat）；
+        // 抖音这边必须由服务端读字节内联 —— 否则 sidecar 拿不到文件（2026-11-22）。
+        var path = Path.Combine(Path.GetTempPath(), $"zipper-img-{Guid.NewGuid():N}.png");
+        File.WriteAllBytes(path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        try
+        {
+            var frame = Outbound(new ImageSegment(path, null));
+
+            var segment = frame["segments"]!.AsArray()[0]!.AsObject();
+            Assert.Equal("image", segment["type"]!.GetValue<string>());
+            Assert.Equal(
+                Convert.ToBase64String(File.ReadAllBytes(path)),
+                segment["data"]!.GetValue<string>());
+            Assert.Null(segment["url"]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Local_file_image_via_file_id_is_inlined_too()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"zipper-img-{Guid.NewGuid():N}.png");
+        File.WriteAllBytes(path, [0x89, 0x50, 0x4E, 0x47]);
+        try
+        {
+            var frame = Outbound(new ImageSegment(null, path));
+
+            var segment = frame["segments"]!.AsArray()[0]!.AsObject();
+            Assert.Equal("image", segment["type"]!.GetValue<string>());
+            Assert.False(string.IsNullOrEmpty(segment["data"]!.GetValue<string>()));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Text_then_image_keeps_order()
     {
         var frame = Outbound(new TextSegment("看图"), new ImageSegment(null, "base64://QUJD"));

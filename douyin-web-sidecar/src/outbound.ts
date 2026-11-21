@@ -47,6 +47,10 @@ export interface OutboundResult {
   images: number;
   /** 降级项（`reply_to` / `mention` / `image` 等）。 */
   degraded: string[];
+  /** 文本实际走的路（`api` = HTTP 接口，`dom` = 页面操作）。 */
+  via: "api" | "dom";
+  /** 平台业务码（0 = 成功；DOM 路径没有这个码，给 `null`）。 */
+  status: number | null;
 }
 
 export interface OutboundSenderOptions {
@@ -104,6 +108,8 @@ export class OutboundSender {
 
     const page = await this.browser.page;
     const context = this.browser.browserContext;
+    let via: "api" | "dom" = "api";
+    let status: number | null = null;
 
     // 挂号：旁听页面自己的 imapi 请求体，攒「会话凭证模板」
     this.api.attach(context);
@@ -116,6 +122,7 @@ export class OutboundSender {
           mentions: plan.mentions,
           replyTo: plan.replyTo,
         });
+        status = result.statusCode;
         if (!result.ok) {
           throw new OutboundError(
             result.statusCode === 10509 ? "risk" : "unknown",
@@ -131,9 +138,10 @@ export class OutboundSender {
       this.log.info(
         `API 出站完成：${session} 文本=${chunks} 图片=${images.sent} 降级=${degraded.join(",") || "无"}`,
       );
-      return { chunks, images: images.sent, degraded };
+      return { chunks, images: images.sent, degraded, via, status: status ?? 0 };
     } catch (error) {
       const apiFailure = error instanceof Error ? error.message : String(error);
+      via = "dom";
       this.log.warn(`API 出站失败，改用 DOM 兜底：${apiFailure}`);
 
       // ② 兜底：DOM（重载 → 按线索定位会话 → 点开 → 输入 → 回读）
@@ -144,7 +152,7 @@ export class OutboundSender {
         this.log.info(
           `DOM 出站完成：${session} 文本=${chunks} 图片=${images.sent} 降级=${degraded.join(",") || "无"}`,
         );
-        return { chunks, images: images.sent, degraded };
+        return { chunks, images: images.sent, degraded, via, status: null };
       } catch (domError) {
         const domFailure = domError instanceof Error ? domError.message : String(domError);
         throw new OutboundError(

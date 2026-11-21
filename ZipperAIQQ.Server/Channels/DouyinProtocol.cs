@@ -164,7 +164,10 @@ public sealed record DouyinAck(
     bool Ok,
     string? Error,
     string? Code = null,
-    string? Degraded = null);
+    string? Degraded = null,
+    string? Via = null,
+    int? Status = null,
+    int? Images = null);
 
 /// <summary>查询结果帧（<c>result</c>）。</summary>
 /// <param name="RequestId">配对键。</param>
@@ -390,7 +393,16 @@ public static class DouyinProtocol
             ok,
             GetNonEmpty(data, "error"),
             GetNonEmpty(data, "code"),
-            GetNonEmpty(data, "degraded"));
+            GetNonEmpty(data, "degraded"),
+            GetNonEmpty(data, "via"),
+            GetInt(data, "status"),
+            GetInt(data, "images"));
+    }
+
+    /// <summary>取整数（缺失/非数字 → <c>null</c>）。</summary>
+    private static int? GetInt(JsonObject data, string name)
+    {
+        return data[name] is JsonValue value && value.TryGetValue<int>(out var number) ? number : null;
     }
 
     /// <summary>解析 <c>result</c> 帧体；缺 <c>requestId</c> 无法配对，返回 <c>null</c>。</summary>
@@ -417,6 +429,40 @@ public static class DouyinProtocol
     }
 
     // ─────────────────────────── 序列化：出站 / 查询 ───────────────────────────
+
+    /// <summary>
+    /// 本地图片 → base64（不含 `data:` 前缀），供出站 `data` 段直接上传。
+    /// </summary>
+    /// <remarks>
+    /// 为什么需要它：表情目录里的 `file` 允许写**本地路径**（QQ 侧就把路径直接交给 NapCat），
+    /// 但 sidecar 在服务器上不保证能访问同一个路径 —— 所以由服务端把字节读出来内联。
+    /// 只在「确实存在、且 ≤20 MB」时返回；URL / base64 / 不存在的路径一律 <c>null</c>，
+    /// 让调用方走原来的分支，不猜、不吞。
+    /// </remarks>
+    private static string? TryReadLocalImage(string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate)
+            || candidate.StartsWith("base64://", StringComparison.Ordinal)
+            || candidate.Contains("://", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            var info = new FileInfo(candidate);
+            if (!info.Exists || info.Length == 0 || info.Length > 20L * 1024 * 1024)
+            {
+                return null;
+            }
+
+            return Convert.ToBase64String(File.ReadAllBytes(candidate));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// 从 <see cref="ImageSegment.FileId"/> 里取出服务器内联的 base64。
@@ -473,7 +519,19 @@ public static class DouyinProtocol
                     break;
 
                 case ImageSegment image:
-                    if (!string.IsNullOrEmpty(image.Url))
+                    // 本地路径（表情目录里的 `file`、或 `/status` 生成的临时图）：
+                    // QQ 那边直接把路径交给 NapCat；抖音这边必须**把字节读出来**内联成 base64，
+                    // 因为 sidecar 在服务器上不保证能访问同一个路径（2026-11-22）。
+                    var localInline = TryReadLocalImage(image.Url) ?? TryReadLocalImage(image.FileId);
+                    if (localInline is { Length: > 0 })
+                    {
+                        array.Add(new JsonObject
+                        {
+                            ["type"] = "image",
+                            ["data"] = localInline,
+                        });
+                    }
+                    else if (!string.IsNullOrEmpty(image.Url))
                     {
                         array.Add(Segment("image", "url", image.Url));
                     }

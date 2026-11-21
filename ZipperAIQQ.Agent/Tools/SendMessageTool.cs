@@ -131,13 +131,18 @@ public static class SendMessageTool
                 {
                     // 发成功 ≠ 原样发出：抖音的引用 / @ 会降级（ack.degraded）。
                     // 不说这一句，模型就会以为「@ 到了」「引用上了」，下一轮还会问"对方怎么没反应"。
-                    var degraded = channel is ISendNoticeSink sink
-                        ? sink.TakeLastDegraded(chat.Platform, chat.SessionId)
-                        : null;
+                    var sink = channel as ISendNoticeSink;
+                    var degraded = sink?.TakeLastDegraded(chat.Platform, chat.SessionId);
+                    var delivery = sink?.TakeLastDelivery(chat.Platform, chat.SessionId);
+
+                    var summary = string.IsNullOrWhiteSpace(delivery)
+                        ? $"已发送 {sent} 条消息。"
+                        : $"已发送 {sent} 条消息（{delivery}）。";
 
                     return string.IsNullOrWhiteSpace(degraded)
-                        ? $"已发送 {sent} 条消息。"
-                        : $"已发送 {sent} 条消息。注意：部分内容未能原样发出（降级：{degraded}），"
+                        ? summary
+                        : summary
+                          + $"注意：部分内容未能原样发出（降级：{degraded}），"
                           + "对方看到的是降级后的版本（例如引用变成了普通消息、@ 没有生效）。";
                 }
 
@@ -153,7 +158,9 @@ public static class SendMessageTool
             description:
                 "向**当前会话**发送消息。只有调用这个工具，你说的话才会真正发出去。" +
                 $"可以一次发送多条（最多 {cap} 条），用于模拟真人把一句话分几条发。" +
-                "不需要也不能指定发给谁 —— 会话是固定的。");
+                "不需要也不能指定发给谁 —— 会话是固定的。" +
+                "发图片和发文字**用同一个工具**：先 list_faces 查到名字，再把 [表情:名字] 写进消息里即可" +
+                "（单独一条只写 [表情:名字] 会作为大图发出）。图片的实际发送方式由通道自行处理，你不用管。");
     }
 
     /// <summary>

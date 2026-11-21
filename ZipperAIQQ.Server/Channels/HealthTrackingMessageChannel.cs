@@ -55,6 +55,10 @@ public sealed class HealthTrackingMessageChannel : IMessageChannel, ISendNoticeS
     public string? TakeLastDegraded(string platform, string sessionId) =>
         _inner is ISendNoticeSink sink ? sink.TakeLastDegraded(platform, sessionId) : null;
 
+    /// <inheritdoc />
+    public string? TakeLastDelivery(string platform, string sessionId) =>
+        _inner is ISendNoticeSink sink ? sink.TakeLastDelivery(platform, sessionId) : null;
+
     public string? SelfIdFor(string platform) => _inner.SelfIdFor(platform);
 
     public ChannelCapabilities Capabilities => _inner.Capabilities;

@@ -58,6 +58,9 @@ public sealed class DouyinChannel
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
     /// <summary>最近一次发送的降级说明（会话 → 说明）。**读即清**，见 <see cref="ISendNoticeSink"/>。</summary>
+    /// <summary>最近一次投递详情（`通道=api,status=0,图片=1`），供工具层回显。</summary>
+    private readonly ConcurrentDictionary<string, string> _lastDelivery = new(StringComparer.Ordinal);
+
     private readonly ConcurrentDictionary<string, string> _lastDegraded = new(StringComparer.Ordinal);
 
     /// <summary>出站 <c>ack</c> 配对表（requestId → 等待者）。超时 / 失败都会移除，不泄漏。</summary>
@@ -388,6 +391,7 @@ public sealed class DouyinChannel
         // 先清掉上一次的降级说明：代发路径（ChatAgent.TrySendAsync）不会来读，
         // 留着会被下一次**完全正常**的发送读走 → 模型被告知"这次降级了"（审查 T-4）。
         _lastDegraded.TryRemove(DegradedKey(session), out _);
+        _lastDelivery.TryRemove(DegradedKey(session), out _);
 
         for (var index = 0; index < batches.Count; index++)
         {
@@ -400,8 +404,13 @@ public sealed class DouyinChannel
                 index == 0 ? replyTo : null,
                 requestId);
 
-            var degraded = await SendAndAwaitAckAsync(connection, requestId, json, index + 1, batches.Count, ct)
+            var (degraded, delivery) = await SendAndAwaitAckAsync(connection, requestId, json, index + 1, batches.Count, ct)
                 .ConfigureAwait(false);
+
+            if (!string.IsNullOrWhiteSpace(delivery))
+            {
+                _lastDelivery[DegradedKey(session)] = delivery;
+            }
 
             if (!string.IsNullOrWhiteSpace(degraded))
             {
@@ -436,6 +445,17 @@ public sealed class DouyinChannel
         }
 
         return _lastDegraded.TryRemove(DegradedKey(sessionId), out var degraded) ? degraded : null;
+    }
+
+    /// <inheritdoc />
+    public string? TakeLastDelivery(string platform, string sessionId)
+    {
+        if (!string.Equals(platform, PlatformName, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return _lastDelivery.TryRemove(DegradedKey(sessionId), out var delivery) ? delivery : null;
     }
 
     /// <summary>
@@ -869,7 +889,7 @@ public sealed class DouyinChannel
 
     /// <summary>发一帧并等 ack；超时/失败抛异常（不吞）。</summary>
     /// <returns>降级说明（<c>reply_to</c> 等）；没有降级返回 <c>null</c>。</returns>
-    private async Task<string?> SendAndAwaitAckAsync(
+    private async Task<(string? Degraded, string? Delivery)> SendAndAwaitAckAsync(
         IDouyinConnection connection,
         string requestId,
         string json,
@@ -879,6 +899,7 @@ public sealed class DouyinChannel
     {
         var completion = new TaskCompletionSource<DouyinAck>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var delivery = string.Empty;
 
         // 先登记再发：ack 可能比 SendAsync 的返回还快
         _pendingAcks[requestId] = completion;
@@ -921,14 +942,24 @@ public sealed class DouyinChannel
                     + (string.IsNullOrWhiteSpace(ack.Code) ? string.Empty : $"（失败码 {ack.Code}）"));
             }
 
+            // 把「这条是怎么发出去的」一并带回去（调用方按会话记账）
+            delivery = string.Join(
+                ",",
+                new[]
+                {
+                    string.IsNullOrWhiteSpace(ack.Via) ? null : $"通道={ack.Via}",
+                    ack.Status is null ? null : $"status={ack.Status}",
+                    ack.Images is > 0 ? $"图片={ack.Images}" : null,
+                }.Where(part => part is not null));
+
             if (!string.IsNullOrWhiteSpace(ack.Degraded))
             {
                 // 发是发出去了，但**不是原样**：日志留痕 + 通知出口留给工具层（模型要知道少了什么）
                 _logger.Warning("抖音发送降级：{Degraded}（第 {Sequence}/{Total} 帧）", ack.Degraded, sequence, total);
-                return ack.Degraded;
+                return (ack.Degraded, delivery.Length == 0 ? null : delivery);
             }
 
-            return null;
+            return (null, delivery.Length == 0 ? null : delivery);
         }
         finally
         {

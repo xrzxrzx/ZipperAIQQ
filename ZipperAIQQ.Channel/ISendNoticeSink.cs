@@ -24,4 +24,13 @@ public interface ISendNoticeSink
     /// <param name="sessionId">会话（<c>ChatRef.SessionId</c>）。</param>
     /// <returns>降级说明（如 <c>reply_to</c> / <c>mention</c>）；没有则 <c>null</c>。</returns>
     string? TakeLastDegraded(string platform, string sessionId);
+
+    /// <summary>
+    /// 取走最近一次发送的**投递详情**（如 <c>通道=api,status=0,图片=1</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 与 <see cref="TakeLastDegraded"/> 分开：前者说「不是原样」，这里说「怎么发出去的」。
+    /// 默认返回 <c>null</c>（绝大多数平台没有这层信息），需要的通道自行实现。
+    /// </remarks>
+    string? TakeLastDelivery(string platform, string sessionId) => null;
 }
