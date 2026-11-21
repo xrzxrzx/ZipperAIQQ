@@ -479,6 +479,7 @@ async function main(): Promise<void> {
       headless: config.headless,
       viewport: { width: 1400, height: 950 },
       recycleHours: config.recycleHours,
+      storageStatePath: path.join(config.profileDir, "..", "storage-state.json"),
       maxJsHeapMb: config.maxJsHeapMb,
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/159.0.0.0 Safari/537.36",

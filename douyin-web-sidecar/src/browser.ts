@@ -12,12 +12,15 @@
  * 浏览器重建不影响那条连接 —— 重建期间 ack 会失败但不会把通道也带走（实施方案 T1.7）。
  */
 
+import { readFileSync } from "node:fs";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { SITE } from "./site.js";
 import type { QrBox } from "./site.js";
 
 /** 浏览器运行参数（来自 sidecar `config.json` 的 `douyin.*`）。 */
 export interface BrowserOptions {
+  /** `storage-state.json` 路径（启动时恢复登录 cookie，profile 丢了也不怕）。 */
+  storageStatePath?: string;
   /** Chromium 持久 profile 目录（登录态的唯一载体，**必须备份、绝不入库**）。 */
   profileDir: string;
   /** 无头模式。计划任务以 SYSTEM 身份运行，没有交互桌面 → 只能 true。 */
@@ -163,6 +166,10 @@ export class DouyinBrowser {
         this.update({ page: "crashed", lastAction: "context 关闭", note: "context 意外关闭" });
       }
     });
+
+    // 用落盘的 storage-state 恢复登录态：profile 的 cookie 库在硬杀/重建后经常丢
+    // （2026-11-22 真机：重建后页面回到扫码弹窗，入站 WS 从此不建立，消息全收不到）。
+    await this.restoreStorageState();
 
     const page = this.context.pages()[0] ?? (await this.context.newPage());
     this.attachPage(page);
@@ -338,6 +345,36 @@ export class DouyinBrowser {
       return Math.round(used / 1024 / 1024);
     } catch {
       return 0;
+    }
+  }
+
+  /**
+   * 把 `storage-state.json` 里的 cookie 灌回 context。
+   *
+   * 为什么要它：登录态存在两处 —— Chromium profile 的 Cookies 库、以及我们另存的 JSON。
+   * profile 库在进程被硬杀或 context 重建时容易丢，JSON 是兜底；谁新谁赢（这里直接覆盖）。
+   * 文件不存在/读坏都只记一条 warn，不影响启动。
+   */
+  private async restoreStorageState(): Promise<void> {
+    const path = this.options.storageStatePath;
+    if (!path || !this.context) {
+      return;
+    }
+
+    try {
+      const raw = readFileSync(path, "utf8");
+      const parsed = JSON.parse(raw) as { cookies?: unknown[] };
+      const cookies = Array.isArray(parsed.cookies) ? parsed.cookies : [];
+      if (cookies.length === 0) {
+        return;
+      }
+
+      await this.context.addCookies(cookies as Parameters<BrowserContext["addCookies"]>[0]);
+      this.log.info(`已从 storage-state 恢复登录 cookie（${cookies.length} 条）`);
+    } catch (error) {
+      this.log.warn(
+        `storage-state 不可用（${path}）：${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
