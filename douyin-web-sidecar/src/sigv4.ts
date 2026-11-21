@@ -43,6 +43,7 @@ export function signV4(
   body: Buffer,
   creds: StsCredentials,
   now = new Date(),
+  excludeFromCanonicalQuery: string[] = [],
 ): Record<string, string> {
   const amzDate = `${now.toISOString().replace(/[:-]|\.\d{3}/g, "")}`;
   const dateStamp = amzDate.slice(0, 8);
@@ -58,6 +59,9 @@ export function signV4(
 
   // canonical query：按 key 排序后重新编码
   const queryPairs = [...url.searchParams.entries()]
+    // 有些参数是**签名之后**追加的（真机：`s=` 加上后 SignatureDoesNotMatch），
+    // 它们必须出现在最终 URL 里，但不能进 canonical query
+    .filter(([k]) => !excludeFromCanonicalQuery.includes(k))
     .map(([k, v]) => [uriEncode(k), uriEncode(v)] as const)
     .sort((a, b) => (a[0] === b[0] ? a[1].localeCompare(b[1]) : a[0].localeCompare(b[0])));
   const canonicalQuery = queryPairs.map(([k, v]) => `${k}=${v}`).join("&");

@@ -95,6 +95,38 @@ export function readImageSize(data: Buffer): { width: number; height: number } {
   throw new OutboundError("unknown", "读不出图片尺寸（只支持 PNG/JPEG）");
 }
 
+/** `UploadHeader` / `StorageHeader` 可能是 JSON 字符串或对象，统一成头字典。 */
+function parseHeaderField(value: Record<string, string> | string | undefined): Record<string, string> {
+  if (!value) {
+    return {};
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as Record<string, unknown>;
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === "string") {
+          out[k.toLowerCase()] = v;
+        }
+      }
+
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === "string") {
+      out[k.toLowerCase()] = v;
+    }
+  }
+
+  return out;
+}
+
 /** 图片上传器（STS + SigV4 + TOS）。 */
 export class DouyinImageUploader {
   private readonly log: BrowserLogger;
@@ -126,11 +158,17 @@ export class DouyinImageUploader {
     applyUrl.searchParams.set("IsInner", "1");
     applyUrl.searchParams.set("NeedFallback", "true");
     applyUrl.searchParams.set("FileSize", String(data.length));
-    // 抓包里真实请求带的常量参数：平台用它决定是否走服务端加密
-    // （缺了它 Commit 只回 Uri/UriStatus，没有 Encryption → 发出去的图对方渲染不出来）
-    applyUrl.searchParams.set("s", "sfhwtpaupd");
 
-    const applyHeaders = signV4("GET", applyUrl, { accept: "application/json" }, Buffer.alloc(0), creds);
+
+    const applyHeaders = signV4(
+      "GET",
+      applyUrl,
+      { accept: "application/json" },
+      Buffer.alloc(0),
+      creds,
+      new Date(),
+      ["s"],
+    );
     const applyRes = await context.request.fetch(applyUrl.toString(), {
       method: "GET",
       headers: applyHeaders,
@@ -144,7 +182,16 @@ export class DouyinImageUploader {
     let applyJson: {
       Result?: {
         SessionKey?: string;
-        UploadAddress?: { StoreInfos?: { StoreUri?: string; Auth?: string; UploadID?: string; Host?: string }[] };
+        UploadAddress?: {
+          StoreInfos?: {
+            StoreUri?: string;
+            Auth?: string;
+            UploadID?: string;
+            Host?: string;
+            UploadHeader?: Record<string, string> | string;
+            StorageHeader?: Record<string, string> | string;
+          }[];
+        };
       };
     };
     try {
@@ -155,7 +202,17 @@ export class DouyinImageUploader {
 
     const result = applyJson.Result as
       | (typeof applyJson.Result & {
-          InnerUploadAddress?: { SessionKey?: string; StoreInfos?: { StoreUri?: string; Auth?: string; UploadID?: string; Host?: string }[] };
+          InnerUploadAddress?: {
+            SessionKey?: string;
+            StoreInfos?: {
+              StoreUri?: string;
+              Auth?: string;
+              UploadID?: string;
+              Host?: string;
+              UploadHeader?: Record<string, string> | string;
+              StorageHeader?: Record<string, string> | string;
+            }[];
+          };
           SDKParam?: unknown;
         })
       | undefined;
@@ -184,7 +241,7 @@ export class DouyinImageUploader {
     if (!store?.StoreUri || !store.Auth || !sessionKey) {
       throw new OutboundError(
         "unknown",
-        `ApplyUploadInner 缺字段；sdkParamKeys=${Object.keys((result?.SDKParam ?? {}) as object).join(",")} uploadAddrKeys=${Object.keys((result?.UploadAddress ?? {}) as object).join(",")}`,
+        `ApplyUploadInner 失败；原文=${applyText.slice(0, 400)}`,
       );
     }
 
@@ -198,6 +255,9 @@ export class DouyinImageUploader {
         // 这三项是抓包里的真实请求头：缺 content-crc32 时平台不认文件，
         // Commit 就不会返回 Encryption → 发出去的图是空的（2026-11-22 真机定位）
         "content-crc32": crc32Hex(data),
+        // 平台通过这两个字段下发「服务端加密」所需的头（抓包里页面也带）
+        ...parseHeaderField(store.UploadHeader),
+        ...parseHeaderField(store.StorageHeader),
         "content-disposition": 'attachment; filename="undefined"',
         ...(this.selfUid() ? { "x-storage-u": this.selfUid() as string } : {}),
       },
