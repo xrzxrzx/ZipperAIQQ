@@ -547,59 +547,13 @@ export class DouyinSendApi {
       extras,
     );
 
-    const bodyB64 = Buffer.from(payload).toString("base64");
-
-    // 页面里签名（ticket-guard 五件套）
-    const signed = await page.evaluate(
-      async ({ url, path, b64, signerGlobal }) => {
-        const signer = (window as unknown as Record<string, unknown>)[signerGlobal] as
-          | { sign?: (input: unknown) => unknown }
-          | undefined;
-
-        if (!signer || typeof signer.sign !== "function") {
-          return { error: "签名器不可用（页面里没有 ucSecureConsumerSDK.sign）" };
-        }
-
-        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-        let result = signer.sign({ url, method: "POST", body: bytes, path });
-        if (result && typeof (result as Promise<unknown>).then === "function") {
-          result = await result;
-        }
-
-        const headers = ((result as { headers?: Record<string, string> }) ?? {}).headers ?? {};
-        return { headers };
-      },
-      { url: SEND_URL, path: SEND_PATH, b64: bodyB64, signerGlobal: SIGNER_GLOBAL },
-    );
-
-    if ("error" in signed && signed.error) {
-      throw new OutboundError("page", `签名失败：${String(signed.error)}`);
+    // 文本与图片共用同一套「签名（可选）+ 纯 cookie 发送」
+    const result = await this.postSigned(context, page, payload);
+    if (result.ok) {
+      this.log.debug(`API 发送成功：seq=${sequenceId} conv=${target.conversationId} logId=${result.logId ?? "-"}`);
     }
 
-    const signHeaders = "headers" in signed ? (signed.headers ?? {}) : {};
-    if (Object.keys(signHeaders).length === 0) {
-      throw new OutboundError("page", "签名返回空头（ticket-guard 未产出）");
-    }
-
-    // Node 侧发（共享 cookie、不受页面 CORS/SDK 拦截）
-    const response = await context.request.post(SEND_URL, {
-      headers: { "content-type": "application/x-protobuf", ...signHeaders },
-      data: payload,
-      timeout: 20_000,
-    });
-
-    if (response.status() !== 200) {
-      return { ok: false, statusCode: response.status(), errorDesc: `HTTP ${response.status()}` };
-    }
-
-    const raw = await response.body();
-    const decoded = this.decodeResponse(raw);
-    if (decoded.statusCode !== 0) {
-      return { ok: false, statusCode: decoded.statusCode, errorDesc: decoded.errorDesc, logId: decoded.logId };
-    }
-
-    this.log.debug(`API 发送成功：seq=${sequenceId} conv=${target.conversationId} logId=${decoded.logId ?? "-"}`);
-    return { ok: true, statusCode: 0, logId: decoded.logId };
+    return result;
   }
 
   /**
