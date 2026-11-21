@@ -129,15 +129,32 @@
 
 ---
 
-## 7. 未真机验收清单（联调时逐条确认）
+## 7. 真机验收结果（2026-11-22 更新）
 
-| # | 假设 | 状态 |
+原六条「未验假设」跑完后的结论：
+
+| # | 假设 | 结论 |
 |---|---|---|
-| U-1 | 网页版私信页的会话行能拿到 uid（否则只能靠昵称定位） | **未验**（`site.ts` 的 `listConversations` 尽力而为） |
-| U-2 | 图片发送入口是 `input[type=file]` 或可点的「图片」按钮 | **未验**（PoC 没发过图） |
-| U-3 | 短信验证码输入框能被 `placeholder*="验证码"` 命中 | **未验** |
-| U-4 | 滑块容器 `#captcha_verify_container` 在当前版本仍是这个名字 | **未验** |
-| U-5 | WS 帧在重连后不会重放旧消息（服务端还有 `Messages` 唯一索引兜底） | **未验** |
-| U-6 | 群聊入站（`conversationType=2`）的 threadId 推导 | **未验**（当前账号群列表为 0） |
+| U-1 | 会话行能拿到 uid | ⚠️ **拿不到**：列表行只有昵称/预览文本，没有 uid。出站改用「入站帧学到的 `conversation_id`」，DOM 兜底按预览文本定位 |
+| U-2 | 图片入口是 `input[type=file]` | ✅ 存在（页面里 2 个），但**选图后不点「发送（N）」确认框就不会上传**；纯 API 上传见 `docs/06-调研/抖音网页版底座实测.md` §15.4 |
+| U-3 | 短信验证码输入框 | ✅ 可命中（`login.challenge`） |
+| U-4 | 滑块容器 `#captcha_verify_container` | ✅ 仍在（当前版本） |
+| U-5 | WS 重连不重放旧消息 | ✅ 未观察到重放（另有 `Messages` 唯一索引兜底） |
+| U-6 | 群聊入站 threadId 推导 | ⚠️ 仍**未验**（测试账号群列表为 0） |
 
-> 这六条都是"跑起来就能确认"的，不需要额外实验：**按 §4 验收清单走一遍，顺手记结果就行**。
+### 7.1 部署上必须注意的三条（真机踩出来的）
+
+1. **登录态**：Chromium 的 Cookies 库在进程被硬杀 / context 重建时容易丢。
+   扫码成功后立刻 `context.storageState()` 存到 `data/storage-state.json`；
+   sidecar 启动时会把它灌回 context（`restoreStorageState()`）。
+2. **入站订阅**：页面停在**会话列表**时抖音不推 WS 帧。sidecar 启动/重建后会
+   自动打开最近会话（列表延迟则重试 6 次），并在入站静默 >3 分钟时重开（2 分钟节流）。
+3. **上传凭证**：`upload/config/v2` 必须**页面同源 fetch**（`context.request` 会被 WAF 回 `blocked`）。
+
+### 7.2 出站链路（都已真机验证）
+
+| 能力 | 实现 |
+|---|---|
+| 文本 | `imapi /v1/message/send`（protobuf），签名器可选 |
+| 图片 | STS → `ApplyUploadInner`(SigV4) → TOS → `CommitUploadInner`(Functions 加密) → `message_type=27` |
+| 上报 | `ack` 带 `via`/`status`/`images`，工具结果回显 `（通道=api,status=0,图片=1）` |
