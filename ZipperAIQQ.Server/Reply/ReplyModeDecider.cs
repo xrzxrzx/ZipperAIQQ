@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.AI;
 using Serilog;
@@ -6,6 +7,7 @@ using ZipperAIQQ.Agent;
 using ZipperAIQQ.Agent.Cost;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Server.Ai;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Storage.Config;
 using ZipperAIQQ.Storage.Messages;
@@ -59,6 +61,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
     private readonly IRuntimeSettingsStore _settings;
     private readonly IConfigStore _configs;
     private readonly ISecretProtector _protector;
+    private readonly IDeepSeekKeyProvider _keys;
     private readonly IMetricsStore _metrics;
     private readonly IMessageStore _messages;
     private readonly IPersonaStore _personas;
@@ -74,6 +77,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         IRuntimeSettingsStore settings,
         IConfigStore configs,
         ISecretProtector protector,
+        IDeepSeekKeyProvider keys,
         IMetricsStore metrics,
         IMessageStore messages,
         IPersonaStore personas,
@@ -83,6 +87,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(configs);
         ArgumentNullException.ThrowIfNull(protector);
+        ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(metrics);
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(personas);
@@ -91,6 +96,7 @@ public sealed class ReplyModeDecider : IReplyModeDecider
         _settings = settings;
         _configs = configs;
         _protector = protector;
+        _keys = keys;
         _metrics = metrics;
         _messages = messages;
         _personas = personas;
@@ -351,10 +357,20 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             return null;
         }
 
+        // 密钥收敛（问题记录 06 §5 / 拍板 3）：judge 的 key 解析顺序
+        //   ① 端点自己的留档密文（外部 Decisions API 的 key 不是 DeepSeek 的，必须优先用它）
+        //   ② 全局 DeepSeek key —— **但只在确认是同一个账号时**（判据见 JudgeKeyPolicy）
         var key = _protector.Unprotect(endpoint.KeyCipher);
         if (string.IsNullOrEmpty(key))
         {
-            _logger.Warning("Judge 端点 {Name} 的 key 解不开", endpoint.Name);
+            key = await TryGlobalKeyForJudgeAsync(endpoint, ct).ConfigureAwait(false);
+        }
+
+        if (string.IsNullOrEmpty(key))
+        {
+            _logger.Warning(
+                "Judge 端点 {Name} 没有可用 key（自己没留档、也不能借用全局那把），本轮降级 mention",
+                endpoint.Name);
             return null;
         }
 
@@ -367,7 +383,8 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             return new JudgeBinding(llm, key, null);
         }
 
-        var version = $"{endpoint.Name}|{endpoint.UpdatedAt.ToUnixTimeMilliseconds()}";
+        // 版本里必须并入 **key 指纹**：setApiKey 不动端点行，只看 UpdatedAt 会一直命中旧客户端的缓存
+        var version = $"{endpoint.Name}|{endpoint.UpdatedAt.ToUnixTimeMilliseconds()}|{KeyFingerprint(key)}";
         if (version == _judgeVersion && _judgeClient is not null)
         {
             return new JudgeBinding(llm, key, _judgeClient);
@@ -375,10 +392,15 @@ public sealed class ReplyModeDecider : IReplyModeDecider
 
         try
         {
+            var previous = _judgeClient;
             _judgeClient = ChatClientFactory.Create(llm, key);
             _judgeVersion = version;
             _logger.Information("Judge 客户端已就绪：端点={Name} 模型={Model} 形态={Kind}",
                 endpoint.Name, endpoint.Model, llm.ApiKind);
+
+            // 换 key 后旧客户端没有用了：它内部持有 HttpClient，不释放就是每次轮换漏一组连接
+            (previous as IDisposable)?.Dispose();
+
             return new JudgeBinding(llm, key, _judgeClient);
         }
         catch (Exception ex)
@@ -387,6 +409,44 @@ public sealed class ReplyModeDecider : IReplyModeDecider
             return null;
         }
     }
+
+    /// <summary>
+    /// judge 端点自己没有 key 时，**能不能**借用全局那把 DeepSeek key（判据见 <see cref="JudgeKeyPolicy"/>）。
+    /// </summary>
+    /// <remarks>
+    /// 为什么必须这么严：客户端已经删掉了 judge 的 key 输入框（只有端点地址可改）。
+    /// 没有这层守卫时，随便填一个第三方 baseUrl 就会让服务端把 **DeepSeek key 当 Bearer 发给别人** ——
+    /// 那是凭据外泄，不是「省一个输入框」的副作用。
+    /// </remarks>
+    private async Task<string?> TryGlobalKeyForJudgeAsync(
+        ModelEndpointSetting endpoint, CancellationToken ct)
+    {
+        var global = await _keys.GetAsync(ct).ConfigureAwait(false);
+
+        var roles = await _configs.ListRolesAsync(ct).ConfigureAwait(false);
+        var chatRole = roles.FirstOrDefault(r => r.Role.Equals("Chat", StringComparison.OrdinalIgnoreCase));
+        var primary = chatRole is null
+            ? null
+            : await _configs.GetEndpointAsync(chatRole.EndpointName, ct).ConfigureAwait(false);
+
+        var (borrow, reason) = JudgeKeyPolicy.Decide(endpoint, primary, !string.IsNullOrEmpty(global));
+
+        if (!borrow)
+        {
+            if (reason is not null)
+            {
+                _logger.Warning("{Reason}", reason);
+            }
+
+            return null;
+        }
+
+        return global;
+    }
+
+    /// <summary>key 指纹（SHA-256 前 8 字节的十六进制）：只用于**判缓存失效**，不泄露 key 内容。</summary>
+    private static string KeyFingerprint(string key) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))[..8]);
 
     /// <summary>用 Decisions API（Jev）判断该不该回。</summary>
     private async Task<JevVerdict> JudgeWithDecisionsAsync(JudgeBinding judge, IncomingMessage message, CancellationToken ct)

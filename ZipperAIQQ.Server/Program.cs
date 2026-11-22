@@ -10,6 +10,7 @@ using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Server.Api;
+using ZipperAIQQ.Server.Ai;
 using ZipperAIQQ.Server.External;
 using ZipperAIQQ.Server.Search;
 using ZipperAIQQ.Server.Composition;
@@ -207,6 +208,10 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     // M2-B：首次启动把环境变量种子写进运行配置；之后只认库
     var runtimeConfig = app.Services.GetRequiredService<RuntimeConfigService>();
     await runtimeConfig.SeedFromEnvironmentAsync(options);
+
+    // 密钥收敛（问题记录 06 §5）：先把 legacy 端点密文提升进全局槽位，下游（对话 / 搜索）才有 key 可读。
+    // 顺序不能挪到 ReloadAsync 之后 —— 否则首轮会用「一把 key 都没有」的状态建客户端。
+    await app.Services.GetRequiredService<IDeepSeekKeyProvider>().InitializeAsync();
 
     // 外部 WS 配置（客户端可改）先读回 RuntimeSettings
     await app.Services.GetRequiredService<ExternalOptionsService>().InitializeAsync();

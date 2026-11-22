@@ -19,6 +19,7 @@ using ZipperAIQQ.Channel.Throttling;
 using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Mail;
 using ZipperAIQQ.Server.Access;
+using ZipperAIQQ.Server.Ai;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Mail;
 using ZipperAIQQ.Server.Api;
@@ -100,10 +101,18 @@ public static partial class ServiceRegistration
         // ── M2-B：运行配置（端点 + 角色映射 + 审计），key 加密在 Server 层完成 ──
         services.AddSingleton<IConfigStore, SqliteConfigStore>();
         services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
+
+        // ── 密钥收敛（问题记录 06 §5）：一把 key 走全链路 ──
+        // MS DI 的解析顺序与注册顺序无关（只看"注册存在 + 生命周期可满足"），
+        // 这里挨着 ISecretProtector 放纯粹是为了读起来连贯：provider 要的就是它和 IConfigStore。
+        services.AddSingleton<IApiKeyStore, SqliteApiKeyStore>();
+        services.AddSingleton<IDeepSeekKeyProvider, DeepSeekKeyProvider>();
+
         services.AddSingleton<IChatClientProvider, ChatClientProvider>();
         services.AddSingleton<RuntimeConfigService>();
         services.AddSingleton<IApiAction, GetConfigAction>();
         services.AddSingleton<IApiAction, SetConfigAction>();
+        services.AddSingleton<IApiAction, SetApiKeyAction>();
         services.AddSingleton<IApiAction, GetAuditAction>();
         services.AddSingleton<IApiAction, GetSettingsAction>();
         services.AddSingleton<IApiAction, SetSettingsAction>();

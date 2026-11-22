@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 18;
+    public const int CurrentSchemaVersion = 19;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -54,6 +54,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, CallMetricsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, ScheduleTasksTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, ConfigTables, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, AiTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, RuntimeSettingsTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, NoticesTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, MailTables, ct).ConfigureAwait(false);
@@ -478,6 +479,39 @@ public sealed class DatabaseInitializer
         );
 
         CREATE INDEX IF NOT EXISTS IX_AuditLog_At ON AuditLog (AtMs);
+        """;
+
+    /// <summary>
+    /// AI 侧新增的两张表（问题记录 06 · B2，v19）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>ApiKeys</c>：密钥收敛后的槽位表。<c>Slot = 0</c> 是**生效**的那把，其余留档；
+    /// <c>KeyCipher</c> 与端点表同口径，是 Data Protection 密文 —— **明文永不入库**。
+    /// </para>
+    /// <para>
+    /// <c>ToolCalls</c>：全家桶（OCR / TTS / ASR）的**计费单位**计量，与 <c>CallMetrics</c> 并列。
+    /// 为什么不塞进 <c>CallMetrics</c>：那张表的口径是 token / 耗时，混进「页 / 字符 / 秒」
+    /// 会让现有的 `token 用量` 统计整体失真。
+    /// </para>
+    /// </remarks>
+    private const string AiTables = """
+        CREATE TABLE IF NOT EXISTS ApiKeys (
+            Slot        INTEGER PRIMARY KEY,
+            KeyCipher   TEXT    NOT NULL,
+            UpdatedAtMs INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ToolCalls (
+            Id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            Kind      TEXT    NOT NULL,
+            Unit      TEXT    NOT NULL,
+            Amount    REAL    NOT NULL,
+            SessionId TEXT,
+            AtMs      INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_ToolCalls_Kind_At ON ToolCalls (Kind, AtMs);
         """;
 
     /// <summary>

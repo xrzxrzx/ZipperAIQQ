@@ -3,6 +3,7 @@ using Serilog;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Core.Time;
 using ZipperAIQQ.Server.Alerts;
+using ZipperAIQQ.Server.Ai;
 using ZipperAIQQ.Server.Config;
 using ZipperAIQQ.Storage.Billing;
 using ZipperAIQQ.Storage.Config;
@@ -25,6 +26,7 @@ public sealed class BalanceMonitor : BackgroundService
 {
     private readonly IConfigStore _store;
     private readonly ISecretProtector _protector;
+    private readonly IDeepSeekKeyProvider _keys;
     private readonly IHttpClientFactory _httpFactory;
     private readonly IBalanceStore _balance;
     private readonly BillingOptions _options;
@@ -34,6 +36,7 @@ public sealed class BalanceMonitor : BackgroundService
     public BalanceMonitor(
         IConfigStore store,
         ISecretProtector protector,
+        IDeepSeekKeyProvider keys,
         IHttpClientFactory httpFactory,
         IBalanceStore balance,
         BillingOptions options,
@@ -42,6 +45,7 @@ public sealed class BalanceMonitor : BackgroundService
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(protector);
+        ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(httpFactory);
         ArgumentNullException.ThrowIfNull(balance);
         ArgumentNullException.ThrowIfNull(options);
@@ -49,6 +53,7 @@ public sealed class BalanceMonitor : BackgroundService
 
         _store = store;
         _protector = protector;
+        _keys = keys;
         _httpFactory = httpFactory;
         _balance = balance;
         _options = options;
@@ -109,10 +114,17 @@ public sealed class BalanceMonitor : BackgroundService
             return;   // 非 DeepSeek：没有同形态接口，静默跳过
         }
 
-        var key = _protector.Unprotect(endpoint.KeyCipher);
+        // 密钥收敛（问题记录 06 §5）：余额是**账号级**观测，必须用**当前生效**的那把 key。
+        // 只解端点密文的话，轮换 key 后曲线会一直画着旧账号的余额（旧 key 被吊销还会一直 401 报警）。
+        // 解析顺序的唯一实现见 KeyFallback（全局优先 → legacy 回落），别在这里另写一份。
+        var key = await KeyFallback
+            .ResolveAsync(_keys, _protector, _ => Task.FromResult(endpoint.KeyCipher), ct)
+            .ConfigureAwait(false);
+
         if (string.IsNullOrEmpty(key))
         {
-            _logger.Warning("余额采样：端点 {Name} 的 key 解不开，跳过", endpoint.Name);
+            _logger.Warning(
+                "余额采样：全局槽位与端点 {Name} 都没有可用的 key，跳过", endpoint.Name);
             return;
         }
 

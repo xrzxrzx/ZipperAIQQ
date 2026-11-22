@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Server.Config;
 public sealed class ChatClientProvider : IChatClientProvider
 {
     private readonly IConfigStore _store;
-    private readonly ISecretProtector _protector;
+    private readonly ZipperAIQQ.Server.Ai.IDeepSeekKeyProvider _keys;
     private readonly ILogger _logger;
     private readonly ISpendReader _spend;
     private readonly IQuotaOptionsProvider _quota;
@@ -30,20 +30,20 @@ public sealed class ChatClientProvider : IChatClientProvider
 
     public ChatClientProvider(
         IConfigStore store,
-        ISecretProtector protector,
+        ZipperAIQQ.Server.Ai.IDeepSeekKeyProvider keys,
         ILogger logger,
         ISpendReader spend,
         IQuotaOptionsProvider quota,
         IAlertSink? alerts = null)
     {
         ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(protector);
+        ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(spend);
         ArgumentNullException.ThrowIfNull(quota);
 
         _store = store;
-        _protector = protector;
+        _keys = keys;
         _logger = logger;
         _spend = spend;
         _quota = quota;
@@ -75,10 +75,12 @@ public sealed class ChatClientProvider : IChatClientProvider
             return;
         }
 
-        var key = _protector.Unprotect(endpoint.KeyCipher);
+        // 密钥收敛（问题记录 06 §5）：key 从**全局 provider** 取，不再看端点自己的密文。
+        // 端点表里的旧密文只是迁移来源与留档，读完就不参与解析。
+        var key = await _keys.GetAsync(ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(key))
         {
-            _logger.Error("端点 {Name} 的 key 解不开（密钥环被换过？），保留现有 LLM 客户端", endpoint.Name);
+            _logger.Error("没有可用的 API key（槽位表里没有能解开的 key），保留现有 LLM 客户端");
             return;
         }
 

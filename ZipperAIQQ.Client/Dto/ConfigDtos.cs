@@ -25,6 +25,25 @@ public sealed class EndpointDto
     public long UpdatedAt { get; set; }
 }
 
+/// <summary>
+/// 全局 DeepSeek key 的状态（<c>getConfig</c> 的 <c>apiKey</c> 段）。
+/// </summary>
+/// <remarks>
+/// **只有状态与掩码**：明文永不回显（与端点 key 同口径）。
+/// <see cref="Slots"/> 大于 1 说明库里还有留档 key（不生效的那几把）。
+/// </remarks>
+public sealed class ApiKeyStateDto
+{
+    [JsonPropertyName("configured")]
+    public bool Configured { get; set; }
+
+    [JsonPropertyName("masked")]
+    public string Masked { get; set; } = string.Empty;
+
+    [JsonPropertyName("slots")]
+    public int Slots { get; set; }
+}
+
 /// <summary>配置视图（<c>getConfig</c>）。</summary>
 public sealed class ConfigDto
 {
@@ -36,6 +55,10 @@ public sealed class ConfigDto
 
     [JsonPropertyName("hasClient")]
     public bool HasClient { get; set; }
+
+    /// <summary>全局 key 状态（密钥收敛后用这一块，不再看各端点的 keyMasked）。</summary>
+    [JsonPropertyName("apiKey")]
+    public ApiKeyStateDto? ApiKey { get; set; }
 
     /// <summary>固定端点名（#12：界面只读展示 + 下拉）。</summary>
     [JsonPropertyName("endpointNames")]
@@ -51,11 +74,27 @@ public sealed class ConfigDto
             }
 
             var lines = Endpoints.Select(e =>
-                $"- {e.Name}：{e.Model} @ {e.BaseUrl}（key {e.KeyMasked}，apiKind {e.ApiKind}）");
+                $"- {e.Name}：{e.Model} @ {e.BaseUrl}（apiKind {e.ApiKind}）");
             var roles = string.Join("，", Roles.Select(r => $"{r.Key}→{r.Value}"));
-            return string.Join('\n', lines) + $"\n\n角色映射：{roles}\n客户端就绪：{(HasClient ? "是" : "否")}";
+            var key = ApiKey?.Configured == true ? $"已配置（{ApiKey.Masked}）" : "未配置";
+            return string.Join('\n', lines)
+                   + $"\n\nDeepSeek Key：{key}"
+                   + $"\n角色映射：{roles}\n客户端就绪：{(HasClient ? "是" : "否")}";
         }
     }
+}
+
+/// <summary>写入全局 key 的结果（<c>setApiKey</c>）。</summary>
+public sealed class SetApiKeyResultDto
+{
+    [JsonPropertyName("updated")]
+    public bool Updated { get; set; }
+
+    [JsonPropertyName("skipped")]
+    public bool Skipped { get; set; }
+
+    [JsonPropertyName("config")]
+    public ConfigDto? Config { get; set; }
 }
 
 /// <summary>审计条目（<c>getAudit</c>）。</summary>
