@@ -84,6 +84,8 @@ public sealed class PermissionGateTests
             [ToolCapability.WriteProfile] = Role.Admin,
             [ToolCapability.SendPoke] = Role.Admin,
             [ToolCapability.SendToOtherSession] = Role.Admin,
+            [ToolCapability.MediaRead] = Role.Normal,
+            [ToolCapability.MediaSpeak] = Role.Normal,
         };
 
         PermissionGate.ValidateHardFloor(ok);

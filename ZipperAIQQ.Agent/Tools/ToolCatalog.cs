@@ -51,6 +51,10 @@ public static class ToolCatalog
         Item(Search.WebSearchTool.SearchToolName, "网页搜索", null),
         Item(Search.WebSearchTool.FetchToolName, "抓取网页", null),
 
+        // ── 全家桶媒体（B2-b）：只读图 / 只写本地文件，默认 Normal ──
+        Item(MediaTools.OcrToolName, "识别图片文字", ToolCapability.MediaRead),
+        Item(MediaTools.TtsToolName, "文本转语音", ToolCapability.MediaSpeak),
+
         // ── 抖音专用（决策五 / S3-E）：只在抖音会话里对模型可见 ──
         Item(DouyinTools.FriendsToolName, "抖音好友", null, ToolPlatform.Douyin),
         Item(DouyinTools.GroupsToolName, "抖音群", null, ToolPlatform.Douyin),
@@ -118,6 +122,8 @@ public static class ToolCatalog
         ProfileTools.SetSignatureToolName => ToolCapability.WriteProfile,
         ProfileTools.PokeToolName => ToolCapability.SendPoke,
         CrossPlatformTools.ToolName => ToolCapability.QueryContacts,
+        MediaTools.OcrToolName => ToolCapability.MediaRead,
+        MediaTools.TtsToolName => ToolCapability.MediaSpeak,
         _ => null,
     };
 }

@@ -88,4 +88,22 @@ public enum ToolCapability
     /// 硬底线管理员，且实现里还有两道附加限制（必须有历史、每次留审计）。
     /// </remarks>
     SendToOtherSession,
+
+    /// <summary>
+    /// 读图里文字（OCR，<c>ocr_image</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 默认给普通成员：它只**读**用户自己发来的图，不产生对外动作。
+    /// 代价是平台按页计费（1.5 元/千页），所以要能在工具页单独关掉。
+    /// </remarks>
+    MediaRead,
+
+    /// <summary>
+    /// 文本转语音（<c>tts_speak</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 只落文件、不自动发送，但仍按**字符计费**（3 元/万字符）并会写磁盘；
+    /// 默认给普通成员（需求 G6「默认 Normal」），需要收紧时在工具页调。
+    /// </remarks>
+    MediaSpeak,
 }

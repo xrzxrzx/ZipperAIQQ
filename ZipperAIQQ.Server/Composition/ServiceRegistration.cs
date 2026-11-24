@@ -20,6 +20,7 @@ using ZipperAIQQ.Core.Events;
 using ZipperAIQQ.Mail;
 using ZipperAIQQ.Server.Access;
 using ZipperAIQQ.Server.Ai;
+using ZipperAIQQ.Server.Ai.DeepSeekTools;
 using ZipperAIQQ.Server.Configuration;
 using ZipperAIQQ.Server.Mail;
 using ZipperAIQQ.Server.Api;
@@ -192,6 +193,48 @@ public static partial class ServiceRegistration
                 () => search.Current,
                 sp.GetRequiredService<ILogger>());
         });
+
+        // ── 全家桶媒体（B2-b）：OCR / TTS / ASR ──
+        // 三个接口同源同 key：地址与旋钮来自 ai 配置节，key 走全局 provider（问题记录 06 §5）。
+        // HttpClient 在这里定超时：OCR 一页 PDF 可能要几十秒，默认 100 s 太紧。
+        services.AddSingleton(options.Ai);
+        services.AddSingleton(sp =>
+        {
+            var http = sp.GetRequiredService<IHttpClientFactory>()
+                .CreateClient(nameof(OcrClient));
+            http.Timeout = TimeSpan.FromSeconds(Math.Max(10, options.Ai.TimeoutSeconds));
+
+            return new OcrClient(
+                http,
+                sp.GetRequiredService<IDeepSeekKeyProvider>(),
+                options.Ai,
+                sp.GetRequiredService<ILogger>());
+        });
+        services.AddSingleton(sp =>
+        {
+            var http = sp.GetRequiredService<IHttpClientFactory>()
+                .CreateClient(nameof(TtsClient));
+            http.Timeout = TimeSpan.FromSeconds(Math.Max(10, options.Ai.TimeoutSeconds));
+
+            return new TtsClient(
+                http,
+                sp.GetRequiredService<IDeepSeekKeyProvider>(),
+                options.Ai,
+                sp.GetRequiredService<ILogger>());
+        });
+        services.AddSingleton(sp =>
+        {
+            var http = sp.GetRequiredService<IHttpClientFactory>()
+                .CreateClient(nameof(AsrClient));
+            http.Timeout = TimeSpan.FromSeconds(Math.Max(10, options.Ai.TimeoutSeconds));
+
+            return new AsrClient(
+                http,
+                sp.GetRequiredService<IDeepSeekKeyProvider>(),
+                options.Ai,
+                sp.GetRequiredService<ILogger>());
+        });
+        services.AddSingleton<ZipperAIQQ.Agent.Media.IDeepSeekMediaClient, DeepSeekMediaClient>();
 
         // 图片（问题记录 03 #2）：下载字节 + 真实 MIME + GIF/WebP 首帧转 PNG
         services.AddSingleton<IImageFetcher>(sp =>

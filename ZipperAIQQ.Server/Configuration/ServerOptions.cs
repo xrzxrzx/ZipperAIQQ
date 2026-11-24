@@ -171,6 +171,15 @@ public sealed record ServerOptions
     /// <summary>余额采样参数（<c>billing</c> 配置节）。</summary>
     public Billing.BillingOptions Billing { get; init; } = new();
 
+    /// <summary>
+    /// 全家桶媒体接口（<c>ai</c> 配置节）：OCR / TTS / ASR。
+    /// </summary>
+    /// <remarks>
+    /// 三个接口**共用同一把 key**（问题记录 06 §5），所以这里只有地址与旋钮，没有 key。
+    /// 关掉某个开关 = 对应工具连 schema 都不给模型。
+    /// </remarks>
+    public Ai.AiOptions Ai { get; init; } = new();
+
     /// <summary>额度闸门参数（<c>quota</c> 配置节；默认关）。</summary>
     public Billing.QuotaOptions Quota { get; init; } = new();
 
@@ -214,6 +223,9 @@ public sealed record ServerOptions
 
         var apiKindText = Optional("ZIPPER_LLM_APIKIND");
 
+        // 环境变量里没写的 ai.* 键沿用类型默认值（写三种缺省常量在三处会漂）
+        var aiDefaults = new Ai.AiOptions();
+
         return new ServerOptions
         {
             NapCatWebSocketUrl = Optional("ZIPPER_NAPCAT_WS") ?? string.Empty,
@@ -254,6 +266,19 @@ public sealed record ServerOptions
             SendIntervalMs = IntOrDefault("ZIPPER_SEND_INTERVAL_MS", 300),
             MaxConsecutive = IntOrDefault("ZIPPER_MAX_CONSECUTIVE", 10),
             CooldownMs = IntOrDefault("ZIPPER_COOLDOWN_MS", 10_000),
+
+            Ai = new Ai.AiOptions
+            {
+                BaseUrl = Optional("ZIPPER_AI_BASEURL") ?? aiDefaults.BaseUrl,
+                OcrEnabled = BoolOrDefault("ZIPPER_AI_OCR_ENABLED", aiDefaults.OcrEnabled),
+                TtsEnabled = BoolOrDefault("ZIPPER_AI_TTS_ENABLED", aiDefaults.TtsEnabled),
+                AsrEnabled = BoolOrDefault("ZIPPER_AI_ASR_ENABLED", aiDefaults.AsrEnabled),
+                TtsVoiceId = Optional("ZIPPER_AI_TTS_VOICE") ?? aiDefaults.TtsVoiceId,
+                TtsFormat = Optional("ZIPPER_AI_TTS_FORMAT") ?? aiDefaults.TtsFormat,
+                TtsOutputDir = Optional("ZIPPER_AI_TTS_OUTPUTDIR") ?? aiDefaults.TtsOutputDir,
+                TimeoutSeconds = IntOrDefault("ZIPPER_AI_TIMEOUT", aiDefaults.TimeoutSeconds),
+                MaxUploadBytes = IntOrDefault("ZIPPER_AI_MAXUPLOAD", aiDefaults.MaxUploadBytes),
+            },
 
             OtelConsole = Optional("ZIPPER_OTEL_CONSOLE") == "1",
         };

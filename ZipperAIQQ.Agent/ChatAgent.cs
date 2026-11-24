@@ -56,6 +56,8 @@ public sealed class ChatAgent : IChatAgent
     private readonly Search.IWebSearchProvider? _webSearch;
     private readonly Media.IImageFetcher? _imageFetcher;
     private readonly Media.IImageConverter? _imageConverter;
+    private readonly Media.IDeepSeekMediaClient? _media;
+    private readonly int _mediaUploadMaxBytes;
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
@@ -110,6 +112,11 @@ public sealed class ChatAgent : IChatAgent
         _webSearch = deps.WebSearch;
         _imageFetcher = deps.ImageFetcher;
         _imageConverter = deps.ImageConverter;
+        _media = deps.Media;
+        // 0 = 组合根没注入（测试或旧调用点）：按服务端的保守默认兜底，别退化成「1 字节上限」
+        _mediaUploadMaxBytes = deps.MediaUploadMaxBytes > 0
+            ? deps.MediaUploadMaxBytes
+            : 20 * 1024 * 1024;
         _configs = configs;
         _settings = settings;
         _roles = deps.Roles;
@@ -716,6 +723,21 @@ public sealed class ChatAgent : IChatAgent
         if (_webSearch is { IsAvailable: true })
         {
             tools.AddRange(WebSearchTool.Create(_webSearch));
+        }
+
+        // 全家桶媒体（B2-b）：OCR / TTS。可用性与权限**双条件**，
+        // 不可用就一个都不给 —— 与 web_search 同口径（宁可少让它试，也别让它反复撞墙）。
+        if (_media is { } media && (media.OcrAvailable || media.TtsAvailable))
+        {
+            tools.AddRange(MediaTools.Create(
+                context,
+                _permissionGate,
+                _workspace,
+                _mediaUploadMaxBytes,
+                media,
+                _imageFetcher,
+                request.Segments,
+                _logger));
         }
 
         // 平台专用工具（决策五 / S3-E）：抖音侧要单独的数据源（sidecar 的 query.contacts），

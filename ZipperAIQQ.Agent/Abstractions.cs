@@ -146,6 +146,19 @@ public sealed record ChatAgentDependencies
     /// <summary>GIF/WebP 首帧转 PNG；未注册时按原格式投喂。</summary>
     public Media.IImageConverter? ImageConverter { get; init; }
 
+    /// <summary>全家桶媒体接口（OCR / TTS / ASR）；未注册时这两个工具不出现。</summary>
+    public Media.IDeepSeekMediaClient? Media { get; init; }
+
+    /// <summary>
+    /// 媒体上传上限（字节）。与 <c>FileMaxBytes</c> **分开**：那个是「读写文本文件」的旋钮（默认 256 KiB），
+    /// 拿它卡图片会把一张正常的 1080p 截图直接拒掉。
+    /// </summary>
+    /// <remarks>
+    /// **不给默认值**：唯一真相是服务端的 <c>ai.maxUploadBytes</c>（由组合根注入）。
+    /// 这里再写一份 20 MiB，两个默认值迟早漂移；为 0 时 <see cref="ChatAgent"/> 按服务端的保守值兜底。
+    /// </remarks>
+    public int MediaUploadMaxBytes { get; init; }
+
     /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
     public required Security.IRoleResolver Roles { get; init; }
 

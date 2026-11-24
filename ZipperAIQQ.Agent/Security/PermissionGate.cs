@@ -26,6 +26,9 @@ public sealed class PermissionGate : IPermissionGate
             [ToolCapability.WriteProfile] = Role.Admin,
             [ToolCapability.SendPoke] = Role.Admin,
             [ToolCapability.SendToOtherSession] = Role.Admin,
+            // 媒体接口只读图 / 只写本地文件，不对外发内容 —— 硬底线就是 Normal
+            [ToolCapability.MediaRead] = Role.Normal,
+            [ToolCapability.MediaSpeak] = Role.Normal,
         };
 
     /// <summary>默认最低角色（M1 的「预置默认允许集」，FR-6.7）。</summary>
@@ -44,6 +47,9 @@ public sealed class PermissionGate : IPermissionGate
             [ToolCapability.WriteProfile] = Role.Admin,
             [ToolCapability.SendPoke] = Role.Admin,
             [ToolCapability.SendToOtherSession] = Role.Admin,
+            // 媒体接口：方案 G6 定「默认 Normal」；代价是平台计费，靠工具页开关控制
+            [ToolCapability.MediaRead] = Role.Normal,
+            [ToolCapability.MediaSpeak] = Role.Normal,
         };
 
     private readonly IReadOnlyDictionary<ToolCapability, Role> _minRoles;
@@ -117,6 +123,8 @@ public sealed class PermissionGate : IPermissionGate
         ToolCapability.Schedule => "定时任务",
         ToolCapability.CrossSessionHistory => "跨会话检索",
         ToolCapability.QueryContacts => "跨平台通讯录",
+        ToolCapability.MediaRead => "识别图片文字",
+        ToolCapability.MediaSpeak => "文本转语音",
         _ => capability.ToString(),
     };
 }

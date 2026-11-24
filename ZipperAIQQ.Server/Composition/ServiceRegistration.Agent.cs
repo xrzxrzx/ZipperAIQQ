@@ -115,6 +115,10 @@ public static partial class ServiceRegistration
                 WebSearch = sp.GetService<IWebSearchProvider>(),
                 ImageFetcher = sp.GetService<IImageFetcher>(),
                 ImageConverter = sp.GetService<IImageConverter>(),
+                // 全家桶媒体（B2-b）：未注册时 OCR / TTS 两个工具不出现
+                Media = sp.GetService<ZipperAIQQ.Agent.Media.IDeepSeekMediaClient>(),
+                // 媒体上传上限跟 ai.maxUploadBytes 走，**不要**用 FileMaxBytes（那个才 256 KiB）
+                MediaUploadMaxBytes = options.Ai.MaxUploadBytes,
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 OwnerLookup = sp.GetRequiredService<ZipperAIQQ.Agent.IOwnerLookup>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),

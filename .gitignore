@@ -63,6 +63,9 @@ logs/
 # Data Protection 密钥环（**主密钥**，绝不入库；泄露 = 已存 key 全可解）
 /data/keys/
 
+# TTS 产物（只落文件的语音，体积大且随时可重建，不入库）
+/data/ai-tts/
+
 # ── 本地部署脚本（含服务器地址，不入库）──
 /scripts/deploy-server.ps1
 /artifacts/deploy/

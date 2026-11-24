@@ -176,6 +176,20 @@ public static class ServerConfigLoader
                 ForwardRetryCount = s.Int("mail", "forwardRetryCount", o.Mail.ForwardRetryCount),
             },
 
+            // ── ai（全家桶媒体：OCR / TTS / ASR）──
+            Ai = o.Ai with
+            {
+                BaseUrl = s.Str("ai", "baseUrl", o.Ai.BaseUrl)!,
+                OcrEnabled = s.Bool("ai", "ocrEnabled", o.Ai.OcrEnabled),
+                TtsEnabled = s.Bool("ai", "ttsEnabled", o.Ai.TtsEnabled),
+                AsrEnabled = s.Bool("ai", "asrEnabled", o.Ai.AsrEnabled),
+                TtsVoiceId = s.Str("ai", "ttsVoiceId", o.Ai.TtsVoiceId)!,
+                TtsFormat = s.Str("ai", "ttsFormat", o.Ai.TtsFormat)!,
+                TtsOutputDir = s.Str("ai", "ttsOutputDir", o.Ai.TtsOutputDir)!,
+                TimeoutSeconds = s.Int("ai", "timeoutSeconds", o.Ai.TimeoutSeconds),
+                MaxUploadBytes = s.Int("ai", "maxUploadBytes", o.Ai.MaxUploadBytes),
+            },
+
             // ── limits ──
             SendIntervalMs = s.Int("limits", "sendIntervalMs", o.SendIntervalMs),
             MaxConsecutive = s.Int("limits", "maxConsecutive", o.MaxConsecutive),
