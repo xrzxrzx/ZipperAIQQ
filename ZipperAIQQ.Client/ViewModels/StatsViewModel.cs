@@ -72,6 +72,10 @@ public sealed partial class StatsViewModel : ObservableObject
     [ObservableProperty]
     public partial string StatusLine { get; set; } = string.Empty;
 
+    /// <summary>全家桶用量（T2.7）：按**计费单位**（页 / 字符 / 秒），与 token 口径分开。</summary>
+    [ObservableProperty]
+    public partial string ToolUsageText { get; set; } = "暂无全家桶调用";
+
     [ObservableProperty]
     public partial string TokenInText { get; set; } = "0";
 
@@ -165,6 +169,7 @@ public sealed partial class StatsViewModel : ObservableObject
             await LoadAlertsAsync().ConfigureAwait(true);
             await LoadQuotaAsync().ConfigureAwait(true);
             await LoadExecutionsAsync().ConfigureAwait(true);
+            await LoadToolUsageAsync().ConfigureAwait(true);
             StatusLine = SelectedSession == AllSessionsLabel
                 ? "统计已刷新"
                 : $"统计已刷新（{SelectedSession}）";
@@ -195,6 +200,7 @@ public sealed partial class StatsViewModel : ObservableObject
                 await LoadAlertsAsync().ConfigureAwait(true);
                 await LoadQuotaAsync().ConfigureAwait(true);
                 await LoadExecutionsAsync().ConfigureAwait(true);
+                await LoadToolUsageAsync().ConfigureAwait(true);
             }
         }
         catch (Exception ex)
@@ -309,6 +315,29 @@ public sealed partial class StatsViewModel : ObservableObject
         catch (Exception ex)
         {
             QuotaStatusLine = $"保存失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// 读全家桶用量（T2.7）：**按计费单位聚合**，与 token 那张卡分开口径。
+    /// </summary>
+    /// <remarks>失败只写调试输出：用量是观测，读失败不该在数据页上抢走别的告警。</remarks>
+    private async Task LoadToolUsageAsync()
+    {
+        try
+        {
+            var usage = await _api
+                .CallAsync<List<ToolUsageDto>>("getToolUsage", BuildPayload())
+                .ConfigureAwait(true);
+
+            ToolUsageText = usage is { Count: > 0 }
+                ? string.Join('\n', usage.Select(u => "• " + u.Display))
+                : "暂无全家桶调用";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"读取全家桶用量失败：{ex}");
+            ToolUsageText = "全家桶用量读取失败";
         }
     }
 

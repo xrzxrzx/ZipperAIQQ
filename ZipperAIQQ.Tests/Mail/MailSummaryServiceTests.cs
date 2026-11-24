@@ -196,7 +196,7 @@ public sealed class MailSummaryServiceTests
         public IChatClient Current => _client
             ?? throw new InvalidOperationException("测试里没有配置客户端");
 
-        public Task ReloadAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> ReloadAsync(CancellationToken ct = default) => Task.FromResult(true);
     }
 
     /// <summary>按脚本逐个回应的假 <see cref="IChatClient"/>；脚本用完还调 = 调多了，直接失败。</summary>

@@ -133,8 +133,10 @@ public sealed class OcrClient
                     DeepSeekMediaErrorKind.Parse, "OCR 响应里没有 pages / page_count");
             }
 
-            return new OcrResult(
-                (int)(pageCount ?? pages.Count), pages, inputTokens, outputTokens);
+            // 页数从产生处就自洽：平台回 0 或缺字段时用**逐页文本条数**兜底，
+            // 否则记账会写成「用了但 0 页」（调用确实发生了、也确实计费了）。
+            var reportedPages = pageCount is > 0 ? (int)pageCount.Value : pages.Count;
+            return new OcrResult(reportedPages, pages, inputTokens, outputTokens);
         }
     }
 

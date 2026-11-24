@@ -159,6 +159,9 @@ public sealed record ChatAgentDependencies
     /// </remarks>
     public int MediaUploadMaxBytes { get; init; }
 
+    /// <summary>全家桶用量记账（T2.7）；未注册时工具照常工作，只是不记账。</summary>
+    public Tools.IToolUsageSink? ToolUsage { get; init; }
+
     /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
     public required Security.IRoleResolver Roles { get; init; }
 

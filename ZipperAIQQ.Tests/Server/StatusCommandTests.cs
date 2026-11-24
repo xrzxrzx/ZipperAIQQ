@@ -113,7 +113,7 @@ public sealed class StatusCommandTests
         public bool HasClient => false;
         public IChatClient Current => throw new NotSupportedException();
         public string? CurrentModel => "deepseek-chat";
-        public Task ReloadAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> ReloadAsync(CancellationToken ct = default) => Task.FromResult(true);
     }
 
     // ── 构造 ──

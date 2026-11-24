@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Diagnostics;
 using Microsoft.Extensions.AI;
 using OpenAI;
@@ -34,7 +35,29 @@ public sealed record LlmEndpoint(string Name, string BaseUrl, string Model, LlmA
 /// </remarks>
 public static class ChatClientFactory
 {
-    public static IChatClient Create(LlmEndpoint endpoint, string apiKey)
+    /// <summary>
+    /// 进程内共享的连接池。
+    /// </summary>
+    /// <remarks>
+    /// 见 <see cref="Create"/> 里的注释：SDK 那一层没有任何对象持有到 transport 的 Dispose 路径，
+    /// 所以 handler 必须共享，否则每次换配置都漏一个连接池（不炸但会慢慢长）。
+    /// <c>PooledConnectionLifetime</c> 让 DNS 变化能被消化（默认无限期复用连接）。
+    /// </remarks>
+    private static readonly SocketsHttpHandler SharedHandler = new()
+    {
+        // 连接 5 分钟必须换新：API 域名偶尔换 IP，长期复用会一直打到旧地址
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+    };
+
+    /// <summary>是否要挂增强注入层（**全关时不换传输层**，默认路径零改动）。</summary>
+    public static bool NeedsEnhanceTransport(DeepSeekEnhanceOptions? enhance) =>
+        enhance is { AnyEnabled: true };
+
+    public static IChatClient Create(
+        LlmEndpoint endpoint,
+        string apiKey,
+        DeepSeekEnhanceOptions? enhance = null,
+        Serilog.ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
@@ -44,9 +67,24 @@ public static class ChatClientFactory
             throw new InvalidOperationException($"端点 {endpoint.Name} 的 BaseUrl 不合法：{endpoint.BaseUrl}");
         }
 
-        var client = new OpenAIClient(
-            new ApiKeyCredential(apiKey),
-            new OpenAIClientOptions { Endpoint = baseUri });
+        var clientOptions = new OpenAIClientOptions { Endpoint = baseUri };
+        // 对话增强：只有真的开了才换传输层（默认路径一个字都不动）。
+        // 注入内容见 DeepSeekEnhanceHandler（合并 tools 数组 + safety_check + title）。
+        if (NeedsEnhanceTransport(enhance))
+        {
+            // ⚠️ 连接池共享：HttpClient 本身没人能 Dispose（OpenAIClient / ClientPipeline / PipelineTransport
+            // 都不实现 IDisposable），每次 reload 都 new 一个 handler 就是每处配置变更漏一份连接池。
+            // 所以只 new 薄壳 HttpClient + 轻量 DelegatingHandler，底层 handler 复用同一个。
+            var pipeline = new DeepSeekEnhanceHandler(enhance!, logger) { InnerHandler = SharedHandler };
+            clientOptions.Transport = new HttpClientPipelineTransport(
+                new HttpClient(pipeline, disposeHandler: false)
+                {
+                    // SDK 自带的 transport 也是无限超时，真正的超时由 ClientPipeline 与我们的 CancellationToken 管
+                    Timeout = Timeout.InfiniteTimeSpan,
+                });
+        }
+
+        var client = new OpenAIClient(new ApiKeyCredential(apiKey), clientOptions);
 
         var raw = endpoint.ApiKind switch
         {

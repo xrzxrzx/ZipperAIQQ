@@ -40,6 +40,7 @@ using ZipperAIQQ.Server.Process;
 using ZipperAIQQ.Server.Reply;
 using ZipperAIQQ.Server.Search;
 using ZipperAIQQ.Server.Scheduler;
+using ZipperAIQQ.Storage.Ai;
 using ZipperAIQQ.Storage.Config;
 using ZipperAIQQ.Storage.Settings;
 using ZipperAIQQ.Storage.Database;
@@ -235,6 +236,16 @@ public static partial class ServiceRegistration
                 sp.GetRequiredService<ILogger>());
         });
         services.AddSingleton<ZipperAIQQ.Agent.Media.IDeepSeekMediaClient, DeepSeekMediaClient>();
+
+        // ── 全家桶用量记账（T2.7）：ToolCalls 表与 CallMetrics 分开，单位是页/字符/秒 ──
+        services.AddSingleton<IToolCallStore, SqliteToolCallStore>();
+        services.AddSingleton<ZipperAIQQ.Agent.Tools.IToolUsageSink, ToolUsageSink>();
+        services.AddSingleton<IApiAction, GetToolUsageAction>();
+
+        // ── 对话增强开关（T2.6）：运行期设置，改完重建 LLM 客户端 ──
+        services.AddSingleton<DialogEnhanceService>();
+        services.AddSingleton<IApiAction, GetDialogEnhanceAction>();
+        services.AddSingleton<IApiAction, SetDialogEnhanceAction>();
 
         // 图片（问题记录 03 #2）：下载字节 + 真实 MIME + GIF/WebP 首帧转 PNG
         services.AddSingleton<IImageFetcher>(sp =>

@@ -119,6 +119,8 @@ public static partial class ServiceRegistration
                 Media = sp.GetService<ZipperAIQQ.Agent.Media.IDeepSeekMediaClient>(),
                 // 媒体上传上限跟 ai.maxUploadBytes 走，**不要**用 FileMaxBytes（那个才 256 KiB）
                 MediaUploadMaxBytes = options.Ai.MaxUploadBytes,
+                // 全家桶用量记账（T2.7）：未注册时工具照常工作，只是不记账
+                ToolUsage = sp.GetService<ZipperAIQQ.Agent.Tools.IToolUsageSink>(),
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 OwnerLookup = sp.GetRequiredService<ZipperAIQQ.Agent.IOwnerLookup>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),

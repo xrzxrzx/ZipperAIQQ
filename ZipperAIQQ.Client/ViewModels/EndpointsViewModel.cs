@@ -70,6 +70,27 @@ public sealed partial class EndpointsViewModel : ObservableObject
     [ObservableProperty]
     public partial string SearchStatus { get; set; } = string.Empty;
 
+    // ── 对话增强（DeepSeek 全家桶的服务端增强，T2.6）──
+
+    [ObservableProperty]
+    public partial bool EnhanceWebSearch { get; set; }
+
+    [ObservableProperty]
+    public partial bool EnhanceReadUrl { get; set; }
+
+    [ObservableProperty]
+    public partial bool EnhanceSafetyCheck { get; set; }
+
+    [ObservableProperty]
+    public partial bool EnhanceTitle { get; set; }
+
+    [ObservableProperty]
+    public partial string EnhanceStatus { get; set; } = string.Empty;
+
+    /// <summary>副作用说明由**服务端**给（两边写死两份口径迟早不一致）。</summary>
+    [ObservableProperty]
+    public partial string EnhanceNote { get; set; } = string.Empty;
+
     [RelayCommand]
     private async Task LoadAsync()
     {
@@ -96,6 +117,17 @@ public sealed partial class EndpointsViewModel : ObservableObject
                 ? ClientDefaults.LlmBaseUrl
                 : search.BaseUrl;
             SearchStatus = search?.HasKey == true ? "地址已加载（key 已配置）" : "地址已加载（缺 key）";
+
+            var enhance = await _api.CallAsync<DialogEnhanceDto>("getDialogEnhance").ConfigureAwait(true);
+            if (enhance is not null)
+            {
+                EnhanceWebSearch = enhance.WebSearch;
+                EnhanceReadUrl = enhance.ReadUrl;
+                EnhanceSafetyCheck = enhance.SafetyCheck;
+                EnhanceTitle = enhance.Title;
+                EnhanceStatus = enhance.Summary;
+                EnhanceNote = enhance.Note;
+            }
 
             LlmStatus = "已加载";
             JudgeStatus = "已加载";
@@ -199,6 +231,41 @@ public sealed partial class EndpointsViewModel : ObservableObject
         catch (Exception ex)
         {
             SearchStatus = $"保存失败：{ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveEnhanceAsync()
+    {
+        try
+        {
+            var result = await _api.CallAsync<DialogEnhanceDto>("setDialogEnhance", new
+            {
+                webSearch = EnhanceWebSearch,
+                readUrl = EnhanceReadUrl,
+                safetyCheck = EnhanceSafetyCheck,
+                title = EnhanceTitle,
+            }).ConfigureAwait(true);
+
+            if (result is not null)
+            {
+                // 以服务端回的状态为准：它可能因为我们没给某个键而保留旧值
+                EnhanceWebSearch = result.WebSearch;
+                EnhanceReadUrl = result.ReadUrl;
+                EnhanceSafetyCheck = result.SafetyCheck;
+                EnhanceTitle = result.Title;
+                EnhanceNote = string.IsNullOrWhiteSpace(result.Note) ? EnhanceNote : result.Note;
+
+                EnhanceStatus = result.Skipped
+                    ? $"{result.Summary}（无变化）"
+                    : result.Effective
+                        ? result.Summary
+                        : $"{result.Reason ?? "已保存，但未生效"}";
+            }
+        }
+        catch (Exception ex)
+        {
+            EnhanceStatus = $"保存失败：{ex.Message}";
         }
     }
 

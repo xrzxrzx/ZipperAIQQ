@@ -158,6 +158,21 @@
                 </Border>
             </Grid>
 
+            <!-- 全家桶用量（T2.7）：按页 / 字符 / 秒计费，**与 token 口径分开** -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8B2;" FontSize="15" Foreground="{ThemeResource JpAccentBrush}" />
+                        <TextBlock Text="全家桶用量（近 24 小时）" Style="{StaticResource SectionHeaderStyle}"
+                                   VerticalAlignment="Center" Margin="0" />
+                    </StackPanel>
+                    <TextBlock Text="OCR / TTS 按平台计费单位统计（页、字符），不计入上面的 token 口径。"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                    <TextBlock Text="{x:Bind Stats.ToolUsageText, Mode=OneWay}"
+                               TextWrapping="Wrap" IsTextSelectionEnabled="True" LineHeight="22" />
+                </StackPanel>
+            </Border>
+
             <!-- 各类调用明细 -->
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="8">

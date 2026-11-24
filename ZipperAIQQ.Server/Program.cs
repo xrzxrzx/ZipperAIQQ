@@ -213,6 +213,9 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     // 顺序不能挪到 ReloadAsync 之后 —— 否则首轮会用「一把 key 都没有」的状态建客户端。
     await app.Services.GetRequiredService<IDeepSeekKeyProvider>().InitializeAsync();
 
+    // 对话增强开关（T2.6）：必须在 ReloadAsync 之前读回，否则首轮客户端拿到的是"全关"快照。
+    await app.Services.GetRequiredService<ZipperAIQQ.Server.Ai.DialogEnhanceService>().InitializeAsync();
+
     // 外部 WS 配置（客户端可改）先读回 RuntimeSettings
     await app.Services.GetRequiredService<ExternalOptionsService>().InitializeAsync();
 

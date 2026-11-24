@@ -48,4 +48,22 @@ public static class MetricKindCatalog
     /// <summary>取中文名；没登记的类别原样返回。</summary>
     public static string Label(string kind) =>
         Labels.TryGetValue(kind, out var label) ? label : kind;
+
+    /// <summary>全家桶工具的类别 → 中文名（<c>getToolUsage</c> 用）。</summary>
+    public static string ToolKindLabel(string kind) => kind switch
+    {
+        "ocr" => "图片识别（OCR）",
+        "tts" => "语音合成（TTS）",
+        "asr" => "语音识别（ASR）",
+        _ => kind,
+    };
+
+    /// <summary>计费单位 → 中文（页 / 字符 / 秒）。</summary>
+    public static string ToolUnitLabel(string unit) => unit switch
+    {
+        "page" => "页",
+        "char" => "字符",
+        "second" => "秒",
+        _ => unit,
+    };
 }

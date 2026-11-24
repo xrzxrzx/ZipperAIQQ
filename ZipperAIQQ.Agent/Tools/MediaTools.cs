@@ -53,7 +53,8 @@ public static class MediaTools
         IDeepSeekMediaClient client,
         IImageFetcher? imageFetcher,
         IReadOnlyList<MessageSegment>? segments,
-        ILogger logger)
+        ILogger logger,
+        IToolUsageSink? usage = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(gate);
@@ -66,12 +67,13 @@ public static class MediaTools
 
         if (client.OcrAvailable && gate.IsAllowed(ToolCapability.MediaRead, context.Role))
         {
-            tools.Add(CreateOcr(context, gate, workspace, uploadLimit, client, imageFetcher, segments, logger));
+            tools.Add(CreateOcr(
+                context, gate, workspace, uploadLimit, client, imageFetcher, segments, logger, usage));
         }
 
         if (client.TtsAvailable && gate.IsAllowed(ToolCapability.MediaSpeak, context.Role))
         {
-            tools.Add(CreateTts(context, gate, client, logger));
+            tools.Add(CreateTts(context, gate, client, logger, usage));
         }
 
         return tools;
@@ -87,7 +89,8 @@ public static class MediaTools
         IDeepSeekMediaClient client,
         IImageFetcher? imageFetcher,
         IReadOnlyList<MessageSegment>? segments,
-        ILogger logger)
+        ILogger logger,
+        IToolUsageSink? usage)
     {
         return AIFunctionFactory.Create(
             async (string source, string? purpose = null, CancellationToken ct = default) =>
@@ -117,6 +120,25 @@ public static class MediaTools
                             var result = await client
                                 .OcrAsync(image.Bytes, image.FileName, ParsePurpose(purpose), ct)
                                 .ConfigureAwait(false);
+
+                            // 记账：按**页**（平台计费单位），不混进 token 口径。
+                            // 页数取「平台回报页数」与「逐页文本条数」的较大者：
+                            // 平台回 0 但确实返回了文本时，写成 0 页等于把一次计费调用记成免费。
+                            if (usage is not null)
+                            {
+                                var pages = Math.Max(result.PageCount, result.Pages.Count);
+                                if (pages <= 0)
+                                {
+                                    // 调用成功了却没有任何页信息：仍记 1 页并留痕，别让它悄悄归零
+                                    pages = 1;
+                                    logger.Warning(
+                                        "ocr_image 成功但平台没回报页数：source={Source}（已按 1 页记账）",
+                                        source);
+                                }
+
+                                await usage.RecordAsync("ocr", "page", pages, context.Chat.SessionId, ct)
+                                    .ConfigureAwait(false);
+                            }
 
                             return FormatOcr(image.FileName, result);
                         }
@@ -269,7 +291,11 @@ public static class MediaTools
     // ───────────── TTS ─────────────
 
     private static AIFunction CreateTts(
-        ToolCallContext context, IPermissionGate gate, IDeepSeekMediaClient client, ILogger logger)
+        ToolCallContext context,
+        IPermissionGate gate,
+        IDeepSeekMediaClient client,
+        ILogger logger,
+        IToolUsageSink? usage)
     {
         return AIFunctionFactory.Create(
             async (string text, string? voiceId = null, CancellationToken ct = default) =>
@@ -287,6 +313,14 @@ public static class MediaTools
                 try
                 {
                     var result = await client.TtsAsync(text, voiceId, ct).ConfigureAwait(false);
+
+                    // 记账：按**字符**（平台计费单位；Characters 是本地估算，见 TtsResult 注释）
+                    if (usage is not null)
+                    {
+                        await usage.RecordAsync(
+                                "tts", "char", result.Characters, context.Chat.SessionId, ct)
+                            .ConfigureAwait(false);
+                    }
 
                     // 如实说明产物去向：本期**只落文件**，不会自己发语音消息。
                     // 也**只给文件名**：服务器绝对路径对模型没用，还会把部署结构漏出去。

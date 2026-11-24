@@ -80,6 +80,36 @@
                 </Border>
             </Grid>
 
+            <!-- 对话增强：DeepSeek 全家桶的服务端增强（T2.6） -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="对话增强（DeepSeek 全家桶）" Style="{StaticResource SectionHeaderStyle}" />
+                    <TextBlock Text="交给服务端：联网搜索、阅读链接、内容安全、会话标题。保存后立即生效（会重建 LLM 客户端）。"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                    <ToggleSwitch Header="联网搜索（deepseek_web_search）"
+                                  IsOn="{x:Bind Vm.EnhanceWebSearch, Mode=TwoWay}" />
+                    <ToggleSwitch Header="阅读链接（deepseek_read_url）"
+                                  IsOn="{x:Bind Vm.EnhanceReadUrl, Mode=TwoWay}" />
+                    <ToggleSwitch Header="内容安全 = high（命中风险时以拒答结束）"
+                                  IsOn="{x:Bind Vm.EnhanceSafetyCheck, Mode=TwoWay}" />
+                    <ToggleSwitch Header="会话标题（回答结束时生成短标题）"
+                                  IsOn="{x:Bind Vm.EnhanceTitle, Mode=TwoWay}" />
+
+                    <TextBlock Text="{x:Bind Vm.EnhanceNote, Mode=OneWay}"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap"
+                               Foreground="{ThemeResource JpAccentBrush}" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button Content="保存对话增强" Style="{StaticResource JpAccentButtonStyle}"
+                                Command="{x:Bind Vm.SaveEnhanceCommand}" />
+                        <TextBlock Text="{x:Bind Vm.EnhanceStatus, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
             <!-- 网页搜索：地址独立，key 与全链路共用 -->
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="10">

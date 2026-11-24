@@ -270,6 +270,30 @@ public sealed class MediaToolsTests : IDisposable
         Assert.Equal(0, media.TtsCalls);
     }
 
+    [Fact]
+    public async Task Ocr_and_tts_record_usage_by_billing_unit()
+    {
+        await File.WriteAllBytesAsync(
+            Path.Combine(_workspaceRoot, "qq", "p10001", "shot.png"), [1, 2, 3]);
+
+        var usage = new FakeUsageSink();
+        var media = new FakeMedia
+        {
+            OcrResult = new OcrResult(3, [new OcrPage(1, "字")]),
+            TtsResult = new TtsResult(@"D:\data\ai-tts\x.wav", 10, "wav", 42),
+        };
+
+        await InvokeAsync(
+            CreateTools(media, role: Role.Whitelist, usage: usage).Ocr!, ("source", "shot.png"));
+        await InvokeAsync(CreateTools(media, usage: usage).Tts!, ("text", "念这句"));
+
+        Assert.Equal(2, usage.Records.Count);
+        Assert.Equal(("ocr", "page", 3.0), usage.Records[0]);
+        Assert.Equal(("tts", "char", 42.0), usage.Records[1]);
+        // 会话号要带上，否则用量没法按会话筛
+        Assert.All(usage.SessionIds, id => Assert.Equal("qq:p10001", id));
+    }
+
     // ───────────── 辅助 ─────────────
 
     private (AIFunction? Ocr, AIFunction? Tts, IReadOnlyList<AITool> All) CreateTools(
@@ -277,7 +301,8 @@ public sealed class MediaToolsTests : IDisposable
         IReadOnlyList<MessageSegment>? segments = null,
         IImageFetcher? fetcher = null,
         Role role = Role.Normal,
-        int maxUploadBytes = 20 * 1024 * 1024)
+        int maxUploadBytes = 20 * 1024 * 1024,
+        IToolUsageSink? usage = null)
     {
         var context = new ToolCallContext
         {
@@ -294,7 +319,8 @@ public sealed class MediaToolsTests : IDisposable
             media,
             fetcher,
             segments ?? [],
-            new LoggerConfiguration().CreateLogger());
+            new LoggerConfiguration().CreateLogger(),
+            usage);
 
         return (
             all.OfType<AIFunction>().FirstOrDefault(t => t.Name == MediaTools.OcrToolName),
@@ -364,6 +390,21 @@ public sealed class MediaToolsTests : IDisposable
         {
             Calls++;
             return Task.FromResult(image);
+        }
+    }
+
+    private sealed class FakeUsageSink : IToolUsageSink
+    {
+        public List<(string Kind, string Unit, double Amount)> Records { get; } = [];
+
+        public List<string?> SessionIds { get; } = [];
+
+        public Task RecordAsync(
+            string kind, string unit, double amount, string? sessionId, CancellationToken ct = default)
+        {
+            Records.Add((kind, unit, amount));
+            SessionIds.Add(sessionId);
+            return Task.CompletedTask;
         }
     }
 }

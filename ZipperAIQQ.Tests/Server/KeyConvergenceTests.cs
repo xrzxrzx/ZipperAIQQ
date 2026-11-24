@@ -220,10 +220,10 @@ public sealed class KeyConvergenceTests : IAsyncLifetime
 
         public string? CurrentModel => null;
 
-        public Task ReloadAsync(CancellationToken ct = default)
+        public Task<bool> ReloadAsync(CancellationToken ct = default)
         {
             Reloaded = true;
-            return Task.CompletedTask;
+            return Task.FromResult(true);
         }
     }
 }

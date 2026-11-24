@@ -28,5 +28,13 @@ public interface IChatClientProvider
     /// <summary>
     /// 按最新配置重建；**失败时保留旧客户端**（不能因为一次配置写错就把对话能力弄没）。
     /// </summary>
-    Task ReloadAsync(CancellationToken ct = default);
+    /// <returns>
+    /// <c>true</c> = 现有客户端已对应最新配置（重建成功，或本来就没有需要重建的东西）；
+    /// <c>false</c> = **没能应用**（缺角色 / 缺 key / 解密失败 / 建客户端抛异常），仍在用旧客户端。
+    /// </returns>
+    /// <remarks>
+    /// 为什么要有返回值：配置类 action 需要如实告诉客户端「保存了，但没生效」。
+    /// 以前是 <c>void</c>，失败只剩日志，界面一律显示"已保存" —— 用户会以为开关坏了。
+    /// </remarks>
+    Task<bool> ReloadAsync(CancellationToken ct = default);
 }

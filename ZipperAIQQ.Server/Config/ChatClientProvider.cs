@@ -20,6 +20,7 @@ public sealed class ChatClientProvider : IChatClientProvider
 {
     private readonly IConfigStore _store;
     private readonly ZipperAIQQ.Server.Ai.IDeepSeekKeyProvider _keys;
+    private readonly ZipperAIQQ.Server.Ai.DialogEnhanceService _enhance;
     private readonly ILogger _logger;
     private readonly ISpendReader _spend;
     private readonly IQuotaOptionsProvider _quota;
@@ -31,6 +32,7 @@ public sealed class ChatClientProvider : IChatClientProvider
     public ChatClientProvider(
         IConfigStore store,
         ZipperAIQQ.Server.Ai.IDeepSeekKeyProvider keys,
+        ZipperAIQQ.Server.Ai.DialogEnhanceService enhance,
         ILogger logger,
         ISpendReader spend,
         IQuotaOptionsProvider quota,
@@ -38,12 +40,14 @@ public sealed class ChatClientProvider : IChatClientProvider
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(keys);
+        ArgumentNullException.ThrowIfNull(enhance);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(spend);
         ArgumentNullException.ThrowIfNull(quota);
 
         _store = store;
         _keys = keys;
+        _enhance = enhance;
         _logger = logger;
         _spend = spend;
         _quota = quota;
@@ -58,21 +62,21 @@ public sealed class ChatClientProvider : IChatClientProvider
     /// <summary>当前生效的模型名（状态页用运行时真值，不是启动配置）。</summary>
     public string? CurrentModel => _currentModel;
 
-    public async Task ReloadAsync(CancellationToken ct = default)
+    public async Task<bool> ReloadAsync(CancellationToken ct = default)
     {
         var roles = await _store.ListRolesAsync(ct).ConfigureAwait(false);
         var chatRole = roles.FirstOrDefault(r => r.Role.Equals("Chat", StringComparison.OrdinalIgnoreCase));
         if (chatRole is null)
         {
             _logger.Warning("运行配置里没有 Chat 角色端点，保留现有 LLM 客户端");
-            return;
+            return false;
         }
 
         var endpoint = await _store.GetEndpointAsync(chatRole.EndpointName, ct).ConfigureAwait(false);
         if (endpoint is null)
         {
             _logger.Warning("Chat 角色指向的端点 {Name} 不存在，保留现有 LLM 客户端", chatRole.EndpointName);
-            return;
+            return false;
         }
 
         // 密钥收敛（问题记录 06 §5）：key 从**全局 provider** 取，不再看端点自己的密文。
@@ -81,7 +85,7 @@ public sealed class ChatClientProvider : IChatClientProvider
         if (string.IsNullOrEmpty(key))
         {
             _logger.Error("没有可用的 API key（槽位表里没有能解开的 key），保留现有 LLM 客户端");
-            return;
+            return false;
         }
 
         IChatClient client;
@@ -89,7 +93,10 @@ public sealed class ChatClientProvider : IChatClientProvider
         {
             client = ChatClientFactory.Create(
                 new LlmEndpoint(endpoint.Name, endpoint.BaseUrl, endpoint.Model, (LlmApiKind)endpoint.ApiKind),
-                key);
+                key,
+                _enhance.Current,
+                // 增强注入层的"原样放行"日志要能进服务端日志（handler 不持有全局 logger）
+                _logger);
 
             // 闸门包在最外层：工具循环里的每次调用都会经过它（额度到线时拦住非关键调用）
             client = new SpendGuardChatClient(client, _spend, _quota, _logger, _alerts);
@@ -97,7 +104,7 @@ public sealed class ChatClientProvider : IChatClientProvider
         catch (Exception ex)
         {
             _logger.Error(ex, "创建 LLM 客户端失败（端点 {Name}），保留现有客户端", endpoint.Name);
-            return;
+            return false;
         }
 
         var previous = _current;
@@ -110,5 +117,6 @@ public sealed class ChatClientProvider : IChatClientProvider
         }
 
         _logger.Information("LLM 客户端已就绪：端点={Name} 模型={Model}", endpoint.Name, endpoint.Model);
+        return true;
     }
 }

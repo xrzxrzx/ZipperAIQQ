@@ -58,6 +58,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly Media.IImageConverter? _imageConverter;
     private readonly Media.IDeepSeekMediaClient? _media;
     private readonly int _mediaUploadMaxBytes;
+    private readonly Tools.IToolUsageSink? _toolUsage;
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
@@ -113,6 +114,7 @@ public sealed class ChatAgent : IChatAgent
         _imageFetcher = deps.ImageFetcher;
         _imageConverter = deps.ImageConverter;
         _media = deps.Media;
+        _toolUsage = deps.ToolUsage;
         // 0 = 组合根没注入（测试或旧调用点）：按服务端的保守默认兜底，别退化成「1 字节上限」
         _mediaUploadMaxBytes = deps.MediaUploadMaxBytes > 0
             ? deps.MediaUploadMaxBytes
@@ -507,6 +509,15 @@ public sealed class ChatAgent : IChatAgent
 
         var finalText = response.Text;
 
+        // 空输出要有据可查：开了对话增强的 safety_check 时，命中风控的响应就是「output 为空」。
+        // 本轮不会发任何消息（下面的 sent==0 分支不会触发），但日志里必须能看出是"拒答"而不是"卡死"。
+        if (string.IsNullOrWhiteSpace(finalText))
+        {
+            _logger.Warning(
+                "模型返回空输出（若开启对话增强 safety_check，通常是命中风控的拒答）—— 本轮不发消息（会话 {SessionId}）",
+                SessionId);
+        }
+
         // ══════ §8.3 指令遵循漂移：该调工具却没调 ══════
         // 检测信号是"可判定的"：这一轮一条都没发出去（sent == 0），却产出了文本。
         //
@@ -737,7 +748,8 @@ public sealed class ChatAgent : IChatAgent
                 media,
                 _imageFetcher,
                 request.Segments,
-                _logger));
+                _logger,
+                _toolUsage));
         }
 
         // 平台专用工具（决策五 / S3-E）：抖音侧要单独的数据源（sidecar 的 query.contacts），
