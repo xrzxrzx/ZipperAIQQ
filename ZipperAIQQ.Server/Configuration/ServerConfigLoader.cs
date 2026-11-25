@@ -121,6 +121,18 @@ public static class ServerConfigLoader
                 SendTimeoutMs = s.Int("douyin", "sendTimeoutMs", o.Douyin.SendTimeoutMs),
                 MaxTextLength = s.Int("douyin", "maxTextLength", o.Douyin.MaxTextLength),
                 QueryTimeoutMs = s.Int("douyin", "queryTimeoutMs", o.Douyin.QueryTimeoutMs),
+
+                // 视频理解（B4）：键名摊平成两级，同 B2-b / B3 的偏差（加载器只认 section → key）
+                Video = o.Douyin.Video with
+                {
+                    Enabled = s.Bool("douyin", "videoEnabled", o.Douyin.Video.Enabled),
+                    MaxFrames = s.Int("douyin", "videoMaxFrames", o.Douyin.Video.MaxFrames),
+                    FrameMaxWidth = s.Int("douyin", "videoFrameMaxWidth", o.Douyin.Video.FrameMaxWidth),
+                    MaxVideoMb = s.Int("douyin", "videoMaxVideoMb", o.Douyin.Video.MaxVideoMb),
+                    TimeoutSeconds = s.Int("douyin", "videoTimeoutSeconds", o.Douyin.Video.TimeoutSeconds),
+                    MaxAudioSeconds = s.Int("douyin", "videoMaxAudioSeconds", o.Douyin.Video.MaxAudioSeconds),
+                    AudioWindowSeconds = s.Int("douyin", "videoAudioWindowSeconds", o.Douyin.Video.AudioWindowSeconds),
+                },
             },
 
             // ── billing / quota ──

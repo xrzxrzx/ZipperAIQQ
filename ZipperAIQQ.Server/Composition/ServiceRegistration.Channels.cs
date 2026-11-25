@@ -140,6 +140,11 @@ public static partial class ServiceRegistration
             sp.GetRequiredService<Channels.DouyinChannel>());
         services.AddSingleton<IRecoverableChannel>(sp => sp.GetRequiredService<Channels.DouyinChannel>());
 
+        // 视频媒体（B4）：取详情 / 抽帧 / 抽音的唯一入口。由通道实现（连接与 requestId 配对在它手里），
+        // 消费者只认这个窄接口 —— 单测可以塞假实现，不必起 WS。
+        services.AddSingleton<Media.IDouyinMediaSource>(sp =>
+            sp.GetRequiredService<Channels.DouyinChannel>());
+
         // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围 / 平台专用工具都只认平台名。
         // ⚠️ 抖音**无条件**注册（S3-F 补）：之前按启动配置决定加不加，结果"客户端打开开关"不生效 ——
         //    注册表/复合通道是启动时定死的，运行时改不了。现在改成通道常驻、由快照决定收不收发不发。

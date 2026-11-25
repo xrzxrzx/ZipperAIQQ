@@ -780,6 +780,12 @@ async function main(): Promise<void> {
     return Math.min(Math.max(wanted, 64 * 1024), MEDIA_HARD_LIMITS.maxPayloadBytes);
   };
 
+  /** 视频本体上限：服务端的 `douyin.videoMaxVideoMb` 只会往下夹（硬顶 96 MiB）。 */
+  const mediaVideoBudget = (inFrame: Frame): number => {
+    const wanted = num(inFrame.data?.maxVideoBytes) ?? MEDIA_HARD_LIMITS.maxVideoBytes;
+    return Math.min(Math.max(wanted, 1024 * 1024), MEDIA_HARD_LIMITS.maxVideoBytes);
+  };
+
   /** 媒体要的页面：和入站/出站共用同一个（登录态、cookie 都在这上面）。 */
   const mediaPage = async (): Promise<Page> => browser.ensureChatPage(SITE.chatUrl);
 
@@ -796,6 +802,7 @@ async function main(): Promise<void> {
     itemId: string,
     page: Page,
     timeoutMs: number,
+    maxBytes: number,
   ): Promise<Buffer> => {
     const cached = mediaCache.get(itemId);
     if (cached) {
@@ -803,7 +810,7 @@ async function main(): Promise<void> {
     }
 
     const detail = await resolveVideo(page, itemId, timeoutMs);
-    const downloaded = await downloadVideo(page, detail, MEDIA_HARD_LIMITS.maxVideoBytes, timeoutMs);
+    const downloaded = await downloadVideo(page, detail, maxBytes, timeoutMs);
     mediaCache.set(itemId, downloaded.bytes);
     log.info(
       `视频已下载：id=${detail.itemId} 时长=${detail.durationMs}ms ` +
@@ -860,7 +867,7 @@ async function main(): Promise<void> {
 
     try {
       const page = await mediaPage();
-      const mp4 = await mediaVideoBytes(itemId, page, timeoutMs);
+      const mp4 = await mediaVideoBytes(itemId, page, timeoutMs, mediaVideoBudget(inFrame));
       const capture = await captureFrames(page, mp4, timesMs, {
         maxWidth,
         maxTotalBytes: mediaBudget(inFrame),
@@ -900,7 +907,7 @@ async function main(): Promise<void> {
 
     try {
       const page = await mediaPage();
-      const mp4 = await mediaVideoBytes(itemId, page, timeoutMs);
+      const mp4 = await mediaVideoBytes(itemId, page, timeoutMs, mediaVideoBudget(inFrame));
       const window = await extractAudioWindow(page, itemId, mp4, startMs, endMs, timeoutMs);
 
       // 服务端回传上限（1 MiB 单帧）：窗口切多小由**服务端**决定，这里只判它有没有按约给

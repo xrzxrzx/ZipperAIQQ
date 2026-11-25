@@ -460,6 +460,179 @@ public sealed class DouyinChannelTests
 
     // ─────────────────────────── 夹具 ───────────────────────────
 
+    // ─────────────────────────── 媒体（B4） ───────────────────────────
+
+    [Fact]
+    public async Task MediaSource_NotConnected_IsNotReadyAndSaysWhy()
+    {
+        await using var channel = CreateChannel();
+        var media = (ZipperAIQQ.Server.Media.IDouyinMediaSource)channel;
+
+        Assert.False(media.IsReady);
+        Assert.NotEmpty(media.NotReadyReason);
+
+        // 没连上就取媒体：抛「未连接」，而不是回空结果让上层以为「这个视频没内容」
+        await Assert.ThrowsAsync<ChannelUnavailableException>(
+            () => media.ResolveVideoAsync("7706296015465071715", 1_000));
+    }
+
+    [Fact]
+    public async Task MediaSource_ResolveVideo_SendsItemIdAndParsesResult()
+    {
+        await using var channel = CreateChannel();
+        var connection = new FakeDouyinConnection
+        {
+            Respond = json => ReplyWhen(json, DouyinFrameTypes.MediaVideo, data => new
+            {
+                video = new
+                {
+                    itemId = "7706296015465071715",
+                    title = "戒网瘾 测试",
+                    durationMs = 28_666,
+                    playUrls = new[] { "https://x/a.mp4" },
+                },
+            }),
+        };
+        await AttachWithHandshakeAsync(channel, connection);
+
+        var media = (ZipperAIQQ.Server.Media.IDouyinMediaSource)channel;
+        var info = await media.ResolveVideoAsync("7706296015465071715", 2_000);
+
+        Assert.Equal("7706296015465071715", info.ItemId);
+        Assert.Equal(28_666, info.DurationMs);
+        Assert.Single(info.PlayUrls);
+
+        // 发出去的帧必须带 itemId：sidecar 只认这个参数
+        var sent = connection.SentFrames
+            .Select(node => JsonNode.Parse(node))
+            .First(node => node!["type"]!.GetValue<string>() == DouyinFrameTypes.MediaVideo)!;
+        Assert.Equal("7706296015465071715", sent["data"]!["itemId"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task MediaSource_CaptureFrames_SendsTimesAndDecodesJpeg()
+    {
+        await using var channel = CreateChannel();
+        var connection = new FakeDouyinConnection
+        {
+            Respond = json => ReplyWhen(json, DouyinFrameTypes.MediaFrames, _ => new
+            {
+                durationMs = 28_666,
+                width = 720,
+                height = 1400,
+                frames = new object[]
+                {
+                    new { atMs = 40, jpegBase64 = Base64("one") },
+                    new { atMs = 17_920, jpegBase64 = Base64("two") },
+                },
+            }),
+        };
+        await AttachWithHandshakeAsync(channel, connection);
+
+        var media = (ZipperAIQQ.Server.Media.IDouyinMediaSource)channel;
+        var frames = await media.CaptureFramesAsync(
+            "7706296015465071715", [0L, 17_880L], maxWidth: 720, maxVideoBytes: 8 * 1024 * 1024, timeoutMs: 2_000);
+
+        Assert.Equal(2, frames.Frames.Count);
+        Assert.Equal(720, frames.Width);
+        Assert.Equal(1, frames.Frames[1].Index);
+        Assert.Equal("one", System.Text.Encoding.UTF8.GetString(frames.Frames[0].Jpeg));
+
+        var sent = connection.SentFrames
+            .Select(node => JsonNode.Parse(node))
+            .First(node => node!["type"]!.GetValue<string>() == DouyinFrameTypes.MediaFrames)!;
+        var times = sent["data"]!["timesMs"]!.AsArray();
+        Assert.Equal(2, times.Count);
+        Assert.Equal(17_880, times[1]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task MediaSource_ExtractAudio_SendsRangeAndParsesWav()
+    {
+        await using var channel = CreateChannel();
+        var wav = FakeWav();
+        var connection = new FakeDouyinConnection
+        {
+            Respond = json => ReplyWhen(json, DouyinFrameTypes.MediaAudio, _ => new
+            {
+                wav = Convert.ToBase64String(wav),
+                sampleRate = 16_000,
+                startMs = 0,
+                endMs = 20_000,
+                durationMs = 28_666,
+            }),
+        };
+        await AttachWithHandshakeAsync(channel, connection);
+
+        var media = (ZipperAIQQ.Server.Media.IDouyinMediaSource)channel;
+        var audio = await media.ExtractAudioAsync(
+            "7706296015465071715", 0, 20_000, maxVideoBytes: 8 * 1024 * 1024, timeoutMs: 2_000);
+
+        Assert.Equal(wav.Length, audio.Wav.Length);
+        Assert.Equal(16_000, audio.SampleRate);
+        Assert.Equal(20_000, audio.EndMs);
+        Assert.Equal(28_666, audio.DurationMs);
+
+        var sent = connection.SentFrames
+            .Select(node => JsonNode.Parse(node))
+            .First(node => node!["type"]!.GetValue<string>() == DouyinFrameTypes.MediaAudio)!;
+        Assert.Equal(20_000, sent["data"]!["endMs"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task MediaSource_SidecarError_ThrowsWithItsReason()
+    {
+        await using var channel = CreateChannel();
+        var connection = new FakeDouyinConnection
+        {
+            // sidecar 的真实失败形状：{ok:false, error:"…", code:"resolve"}
+            Respond = json => ReplyWhen(json, DouyinFrameTypes.MediaVideo, _ => new { }, ok: false, error: "视频已删除或私密"),
+        };
+        await AttachWithHandshakeAsync(channel, connection);
+
+        var media = (ZipperAIQQ.Server.Media.IDouyinMediaSource)channel;
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => media.ResolveVideoAsync("7706296015465071715", 2_000));
+
+        Assert.Contains("视频已删除或私密", ex.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>按帧类型回一条 <c>result</c>（模拟 sidecar）。不是目标帧就什么都不回。</summary>
+    private static IEnumerable<string> ReplyWhen(
+        string json,
+        string expectedType,
+        Func<JsonObject, object> build,
+        bool ok = true,
+        string? error = null)
+    {
+        var frame = JsonNode.Parse(json)!.AsObject();
+        if (frame["type"]!.GetValue<string>() != expectedType)
+        {
+            return [];
+        }
+
+        var requestId = RequestIdOf(json);
+        var data = JsonSerializer.SerializeToNode(build(frame))!.AsObject();
+        data["requestId"] = requestId;
+        data["ok"] = ok;
+        data["error"] = error;
+
+        return [Frame(DouyinFrameTypes.Result, data)];
+    }
+
+    private static string Base64(string text) =>
+        Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
+
+    private static byte[] FakeWav(int dataBytes = 320)
+    {
+        var wav = new byte[44 + dataBytes];
+        System.Text.Encoding.ASCII.GetBytes("RIFF").CopyTo(wav, 0);
+        System.Text.Encoding.ASCII.GetBytes("WAVE").CopyTo(wav, 8);
+        System.Text.Encoding.ASCII.GetBytes("data").CopyTo(wav, 36);
+        BitConverter.GetBytes(dataBytes).CopyTo(wav, 40);
+        return wav;
+    }
+
     private static DouyinChannel CreateChannel(
         int sendTimeoutMs = 2_000,
         int queryTimeoutMs = 1_000,

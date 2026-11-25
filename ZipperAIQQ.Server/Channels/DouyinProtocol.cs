@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Server.Media;
 
 namespace ZipperAIQQ.Server.Channels;
 
@@ -65,6 +66,17 @@ public static class DouyinFrameTypes
 
     /// <summary>sidecar → Server：浏览器页面体征（可用性 / 内存 / 上次动作）。</summary>
     public const string BrowserState = "browser.state";
+
+    // ── 视频媒体（2026-11-26 B4）：详情 / 抽帧 / 抽音 ──
+
+    /// <summary>Server → sidecar：取视频详情（时长 / 文案 / 播放地址）。</summary>
+    public const string MediaVideo = "media.video";
+
+    /// <summary>Server → sidecar：按时间点抽帧（回 JPEG base64）。</summary>
+    public const string MediaFrames = "media.frames";
+
+    /// <summary>Server → sidecar：取一段音频（回 16 kHz 单声道 WAV base64）。</summary>
+    public const string MediaAudio = "media.audio";
 }
 
 /// <summary>抖音登录状态（字符串常量，进 JSON 也进 API 响应）。</summary>
@@ -180,7 +192,17 @@ public sealed record DouyinQueryResult(
     bool Ok,
     string? Error,
     IReadOnlyList<ContactInfo> Contacts,
-    IReadOnlyList<GroupInfo> Groups);
+    IReadOnlyList<GroupInfo> Groups)
+{
+    /// <summary>
+    /// 原始 <c>result</c> 帧的 data（媒体查询用：<c>video</c> / <c>frames</c> / <c>wav</c> 都在里面）。
+    /// </summary>
+    /// <remarks>
+    /// 做成属性而不是构造参数：好友 / 群那两条路**不需要**它，多一个位置参数会让所有构造点
+    /// 都得写一个恒为 <c>null</c> 的实参。解析仍然集中在 <see cref="DouyinProtocol"/>。
+    /// </remarks>
+    public JsonObject? Data { get; init; }
+}
 
 /// <summary>
 /// 抖音帧的解析与序列化（**纯函数、无副作用**）。
@@ -425,7 +447,145 @@ public static class DouyinProtocol
             Ok: GetBool(data, "ok") ?? true,
             Error: GetNonEmpty(data, "error"),
             Contacts: ParseContacts(data),
-            Groups: ParseGroups(data));
+            Groups: ParseGroups(data))
+        {
+            Data = data,
+        };
+    }
+
+    // ─────────────────────────── 解析：媒体结果（B4） ───────────────────────────
+
+    /// <summary>解析 <c>media.video</c> 的结果；缺 <c>video</c> 或缺 id 返回 <c>null</c>。</summary>
+    /// <param name="data"><c>result</c> 帧的 data。</param>
+    /// <remarks>
+    /// `playUrls` 允许为空（有些作品只有图片或已下架），此时**不算解析失败**：
+    /// 调用方要能用「时长取到了、但没地址」这种中间状态说人话，而不是一律「查询失败」。
+    /// </remarks>
+    public static DouyinVideoInfo? ParseMediaVideo(JsonObject? data)
+    {
+        if (data?["video"] is not JsonObject video)
+        {
+            return null;
+        }
+
+        var itemId = GetNonEmpty(video, "itemId");
+        if (itemId is null)
+        {
+            return null;
+        }
+
+        var urls = new List<string>();
+        if (video["playUrls"] is JsonArray array)
+        {
+            foreach (var node in array)
+            {
+                if (node is JsonValue value && value.TryGetValue<string>(out var url) && !string.IsNullOrWhiteSpace(url))
+                {
+                    urls.Add(url);
+                }
+            }
+        }
+
+        return new DouyinVideoInfo(
+            itemId,
+            GetNonEmpty(video, "title") ?? string.Empty,
+            GetLong(video, "durationMs") ?? 0,
+            urls);
+    }
+
+    /// <summary>解析 <c>media.frames</c> 的结果；有任何一帧解不出来就整体 <c>null</c>。</summary>
+    /// <param name="data"><c>result</c> 帧的 data。</param>
+    /// <remarks>
+    /// 为什么坏一帧就整体失败：少一张的批次会被上层当成"这段视频就这样"，
+    /// 而时间戳与张数的不一致最难被发现（模型会说「第 3 张是…」然后指向不存在的图）。
+    /// </remarks>
+    public static DouyinVideoFrames? ParseMediaFrames(JsonObject? data)
+    {
+        if (data?["frames"] is not JsonArray array || array.Count == 0)
+        {
+            return null;
+        }
+
+        var frames = new List<DouyinVideoFrame>(array.Count);
+        foreach (var node in array)
+        {
+            if (node is not JsonObject frame)
+            {
+                return null;
+            }
+
+            var base64 = GetNonEmpty(frame, "jpegBase64") ?? GetNonEmpty(frame, "jpeg");
+            if (base64 is null)
+            {
+                return null;
+            }
+
+            byte[] bytes;
+            try
+            {
+                bytes = Convert.FromBase64String(base64);
+            }
+            catch (FormatException)
+            {
+                return null;
+            }
+
+            if (bytes.Length == 0)
+            {
+                return null;
+            }
+
+            frames.Add(new DouyinVideoFrame(frames.Count, GetLong(frame, "atMs") ?? 0, bytes));
+        }
+
+        return new DouyinVideoFrames(
+            GetLong(data, "durationMs") ?? 0,
+            (int)(GetLong(data, "width") ?? 0),
+            (int)(GetLong(data, "height") ?? 0),
+            frames);
+    }
+
+    /// <summary>解析 <c>media.audio</c> 的结果；缺 WAV 或缺时间区间返回 <c>null</c>。</summary>
+    /// <param name="data"><c>result</c> 帧的 data。</param>
+    public static DouyinAudioSlice? ParseMediaAudio(JsonObject? data)
+    {
+        var base64 = GetNonEmpty(data, "wav");
+        if (base64 is null)
+        {
+            return null;
+        }
+
+        byte[] wav;
+        try
+        {
+            wav = Convert.FromBase64String(base64);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+
+        // 44 字节是 RIFF 头本身：比它还短就不可能是音频
+        if (wav.Length <= 44)
+        {
+            return null;
+        }
+
+        var startMs = GetLong(data, "startMs") ?? 0;
+        var endMs = GetLong(data, "endMs") ?? 0;
+        if (endMs <= startMs)
+        {
+            return null;
+        }
+
+        var sampleRate = (int)(GetLong(data, "sampleRate") ?? 0);
+
+        return new DouyinAudioSlice(
+            wav,
+            sampleRate > 0 ? sampleRate : 16_000,
+            startMs,
+            endMs,
+            GetLong(data, "durationMs") ?? 0);
     }
 
     // ─────────────────────────── 序列化：出站 / 查询 ───────────────────────────
@@ -590,10 +750,33 @@ public static class DouyinProtocol
         return Frame(type, new JsonObject { ["requestId"] = requestId });
     }
 
-    /// <summary>拼一帧 <c>ping</c>（MVP 用 WS 层心跳，保留给需要应用层心跳时）。</summary>
-    public static string BuildPing() => Frame(DouyinFrameTypes.Ping, new JsonObject());
+    /// <summary>
+    /// 拼一帧媒体请求（<c>media.video</c> / <c>media.frames</c> / <c>media.audio</c>）。
+    /// </summary>
+    /// <param name="type">帧类型（见 <see cref="DouyinFrameTypes.MediaVideo"/> 等）。</param>
+    /// <param name="requestId">配对键。</param>
+    /// <param name="payload">业务参数（<c>itemId</c> / <c>timesMs</c> / <c>startMs</c> …）。</param>
+    /// <remarks>
+    /// 与 <see cref="BuildQuery"/> 的差别只有「带不带参数」；合并成一个方法会让好友/群那两个调用点
+    /// 平白多传一个空对象，所以保持两条。参数节点**先克隆**：直接挂到新对象上会因"已有父节点"抛出。
+    /// </remarks>
+    public static string BuildMediaRequest(string type, string requestId, JsonObject payload)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(type);
+        ArgumentException.ThrowIfNullOrWhiteSpace(requestId);
+        ArgumentNullException.ThrowIfNull(payload);
 
-    /// <summary>登录控制帧（服务端 → sidecar）：<c>login.start</c> / <c>login.logout</c>。</summary>
+        var data = new JsonObject { ["requestId"] = requestId };
+        foreach (var (key, value) in payload)
+        {
+            data[key] = value?.DeepClone();
+        }
+
+        return Frame(type, data);
+    }
+
+    /// <summary>拼一帧 <c>ping</c>（MVP 用 WS 层心跳，保留给需要应用层心跳时）。</summary>
+    public static string BuildPing() => Frame(DouyinFrameTypes.Ping, new JsonObject());    /// <summary>登录控制帧（服务端 → sidecar）：<c>login.start</c> / <c>login.logout</c>。</summary>
     public static string BuildLoginCommand(string type) => Frame(type, new JsonObject());
 
     /// <summary>

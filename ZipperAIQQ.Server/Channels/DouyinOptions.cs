@@ -78,4 +78,14 @@ public sealed record DouyinOptions
     /// 默认 <see cref="DouyinDriver.Im"/> —— 切换是**显式动作**，不在升级时替用户换底座（实施方案 §6.4）。
     /// </remarks>
     public string Driver { get; init; } = DouyinDriver.Im;
+
+    /// <summary>
+    /// 视频理解（B4）：抽帧 / 抽音 / 转写的策略参数。
+    /// </summary>
+    /// <remarks>
+    /// 嵌在 <c>douyin</c> 节里而不是另开一节：这些旋钮只对抖音视频有用，
+    /// 另立 <c>douyinVideo.*</c> 会让「抖音相关配置散在两个地方」。
+    /// 键名仍是两级的（<c>douyin.videoMaxFrames</c>），见 <see cref="DouyinVideoOptions"/>。
+    /// </remarks>
+    public DouyinVideoOptions Video { get; init; } = new();
 }

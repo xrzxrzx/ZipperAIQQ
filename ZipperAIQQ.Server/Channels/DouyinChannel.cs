@@ -30,13 +30,24 @@ namespace ZipperAIQQ.Server.Channels;
 /// </para>
 /// </remarks>
 public sealed class DouyinChannel
-    : IMessageChannel, IContactDirectory, IChannelLogin, ISendNoticeSink, IAsyncDisposable, IRecoverableChannel
+    : IMessageChannel, IContactDirectory, IChannelLogin, ISendNoticeSink, IAsyncDisposable, IRecoverableChannel,
+      Media.IDouyinMediaSource
 {
     /// <summary>平台标识，与 <see cref="ChatRef.Platform"/>、<c>session</c> 前缀一致。</summary>
     public const string PlatformName = "douyin";
 
     /// <summary>等旧接收循环收尾的上限：换连接/停服不能因为一条倔强的连接而挂住。</summary>
     private static readonly TimeSpan ReceiveLoopExitTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// 媒体请求的等待宽限（毫秒）。
+    /// </summary>
+    /// <remarks>
+    /// sidecar 那边的 `timeoutMs` 管的是它自己的动作（下载 + 解码）；
+    /// 服务端只多等一点点 —— 两边用同一个数字时，服务端几乎必然先超时，
+    /// 而 sidecar 随后还会把 result 发回来，落进「无人等待的 result」被丢掉（白烧一次下载）。
+    /// </remarks>
+    private const int MediaGraceMs = 15_000;
 
     /// <summary>
     /// 运行参数。**可热替换**（客户端在「第三方平台接入」页改白名单 / 超时后立即生效）。
@@ -969,9 +980,22 @@ public sealed class DouyinChannel
     }
 
     /// <summary>查询候选（<c>query.*</c> + <c>result</c> 配对）。</summary>
+    private Task<DouyinQueryResult> QueryAsync(string type, string label, CancellationToken ct) =>
+        QueryAsync(type, label, payload: null, _options.QueryTimeoutMs, ct);
+
+    /// <summary>
+    /// 带参数、可指定超时的查询（媒体请求用：下载 + 解码比查询慢得多，不能共用 <c>queryTimeoutMs</c>）。
+    /// </summary>
+    /// <param name="type">帧类型。</param>
+    /// <param name="label">日志里怎么叫它（「好友」/「视频详情」）。</param>
+    /// <param name="payload">业务参数；<c>null</c> = 只带 requestId。</param>
+    /// <param name="timeoutMs">等 <c>result</c> 的上限（毫秒）。</param>
+    /// <param name="ct">取消令牌。</param>
     private async Task<DouyinQueryResult> QueryAsync(
         string type,
         string label,
+        System.Text.Json.Nodes.JsonObject? payload,
+        int timeoutMs,
         CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -984,11 +1008,14 @@ public sealed class DouyinChannel
         _pendingResults[requestId] = completion;
         try
         {
-            await connection
-                .SendAsync(DouyinProtocol.BuildQuery(type, requestId), ct)
-                .ConfigureAwait(false);
+            var json = payload is null
+                ? DouyinProtocol.BuildQuery(type, requestId)
+                : DouyinProtocol.BuildMediaRequest(type, requestId, payload);
 
-            var timeout = TimeSpan.FromMilliseconds(Math.Max(1, _options.QueryTimeoutMs));
+            await connection.SendAsync(json, ct).ConfigureAwait(false);
+
+            var effectiveTimeout = Math.Max(1, timeoutMs);
+            var timeout = TimeSpan.FromMilliseconds(effectiveTimeout);
             DouyinQueryResult result;
             try
             {
@@ -997,7 +1024,7 @@ public sealed class DouyinChannel
             catch (TimeoutException)
             {
                 throw new TimeoutException(
-                    $"抖音{label}查询超时：{_options.QueryTimeoutMs}ms 内没收到 result。");
+                    $"抖音{label}查询超时：{effectiveTimeout}ms 内没收到 result。");
             }
 
             if (!result.Ok)
@@ -1012,6 +1039,129 @@ public sealed class DouyinChannel
         {
             _pendingResults.TryRemove(requestId, out _);
         }
+    }
+
+    // ─────────────────────────── IDouyinMediaSource（B4 视频媒体） ───────────────────────────
+
+    /// <inheritdoc />
+    bool Media.IDouyinMediaSource.IsReady => !_disposed && _connection is not null && _options.Enabled;
+
+    /// <inheritdoc />
+    string Media.IDouyinMediaSource.NotReadyReason
+    {
+        get
+        {
+            if (_disposed)
+            {
+                return "抖音通道已释放。";
+            }
+
+            if (!_options.Enabled)
+            {
+                return "抖音接入已停用（客户端「第三方平台接入」里可以打开）。";
+            }
+
+            return _connection is null
+                ? "抖音未连接：浏览器底座还没连上 /ws/channel（视频工具暂时不可用）。"
+                : string.Empty;
+        }
+    }
+
+    /// <inheritdoc />
+    async Task<Media.DouyinVideoInfo> Media.IDouyinMediaSource.ResolveVideoAsync(
+        string itemId, int timeoutMs, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemId);
+
+        var payload = new System.Text.Json.Nodes.JsonObject { ["itemId"] = itemId };
+        var result = await QueryAsync(
+                DouyinFrameTypes.MediaVideo, "视频详情", payload, timeoutMs, ct)
+            .ConfigureAwait(false);
+
+        return DouyinProtocol.ParseMediaVideo(result.Data)
+               ?? throw new InvalidOperationException(
+                   "抖音视频详情响应解析失败（sidecar 没回 video 或缺 id）。");
+    }
+
+    /// <inheritdoc />
+    async Task<Media.DouyinVideoFrames> Media.IDouyinMediaSource.CaptureFramesAsync(
+        string itemId,
+        IReadOnlyList<long> timesMs,
+        int maxWidth,
+        int maxVideoBytes,
+        int timeoutMs,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemId);
+        ArgumentNullException.ThrowIfNull(timesMs);
+
+        if (timesMs.Count == 0)
+        {
+            throw new ArgumentException("抽帧时间点是空的。", nameof(timesMs));
+        }
+
+        var times = new System.Text.Json.Nodes.JsonArray();
+        foreach (var t in timesMs)
+        {
+            times.Add(t);
+        }
+
+        var payload = new System.Text.Json.Nodes.JsonObject
+        {
+            ["itemId"] = itemId,
+            ["timesMs"] = times,
+            ["maxWidth"] = maxWidth,
+            ["maxVideoBytes"] = maxVideoBytes,
+            ["timeoutMs"] = timeoutMs,
+        };
+
+        var result = await QueryAsync(
+                DouyinFrameTypes.MediaFrames, "视频抽帧", payload, timeoutMs + MediaGraceMs, ct)
+            .ConfigureAwait(false);
+
+        var frames = DouyinProtocol.ParseMediaFrames(result.Data)
+                     ?? throw new InvalidOperationException(
+                         "抖音抽帧响应解析失败（sidecar 回了图但解不出 base64）。");
+
+        _logger.Debug(
+            "抖音抽帧完成：id={ItemId} 张数={Count} 尺寸={Width}x{Height} 时长={DurationMs}ms",
+            itemId, frames.Frames.Count, frames.Width, frames.Height, frames.DurationMs);
+
+        return frames;
+    }
+
+    /// <inheritdoc />
+    async Task<Media.DouyinAudioSlice> Media.IDouyinMediaSource.ExtractAudioAsync(
+        string itemId,
+        long startMs,
+        long endMs,
+        int maxVideoBytes,
+        int timeoutMs,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemId);
+
+        if (endMs <= startMs)
+        {
+            throw new ArgumentException($"音频区间不合法：{startMs}–{endMs} 毫秒。", nameof(endMs));
+        }
+
+        var payload = new System.Text.Json.Nodes.JsonObject
+        {
+            ["itemId"] = itemId,
+            ["startMs"] = startMs,
+            ["endMs"] = endMs,
+            ["maxVideoBytes"] = maxVideoBytes,
+            ["timeoutMs"] = timeoutMs,
+        };
+
+        var result = await QueryAsync(
+                DouyinFrameTypes.MediaAudio, "视频音频", payload, timeoutMs + MediaGraceMs, ct)
+            .ConfigureAwait(false);
+
+        return DouyinProtocol.ParseMediaAudio(result.Data)
+               ?? throw new InvalidOperationException(
+                   "抖音音频响应解析失败（sidecar 没回 wav 或时间区间不合法）。");
     }
 
     // ─────────────────────────── 内部工具 ───────────────────────────
