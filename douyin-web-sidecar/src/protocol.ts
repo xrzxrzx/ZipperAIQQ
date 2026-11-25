@@ -292,8 +292,14 @@ export const MESSAGE_TYPE = {
   legacyVideo: 4,
   legacyEmoji: 5,
   legacyFile: 6,
-  /** 分享卡片（视频 / 作品），content 里带 `itemId`。 */
+  /** 分享卡片（视频 / 作品），content 里带 `itemId`（`im.proto` 文档码）。 */
   shareCard: 105,
+  /**
+   * 实测 2026-11-26：主人在私信里分享视频，入站是 **8**（不是文档里的 105），
+   * content 与 105 同构、同样带 `itemId`。不认它的话这条消息只会变成 `[消息类型:8]`，
+   * 模型既看不到标题也拿不到 id —— B4 的工具就彻底没抓手了。
+   */
+  shareCardAlt: 8,
   /** 命令型事件（已读回执等）：**必须丢弃**，否则会被当成消息回给用户。 */
   command: 50001,
 } as const;
@@ -427,7 +433,8 @@ export function normalizePrivateMessage(
       break;
     }
 
-    case MESSAGE_TYPE.shareCard: {
+    case MESSAGE_TYPE.shareCard:
+    case MESSAGE_TYPE.shareCardAlt: {
       sharedItemId = firstNonEmpty(str(content.itemId), str(content.item_id));
       const title = firstNonEmpty(str(content.title), str(content.desc), str(content.text));
       // 同 `[视频 id=…]`：id 是 B4 取媒体/转写的唯一抓手，跟着占位符一起给模型

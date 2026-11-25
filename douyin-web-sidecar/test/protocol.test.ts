@@ -272,6 +272,22 @@ test("normalizePrivateMessage：视频 / 分享卡片降级成占位（B4：带 
   );
 
   assert.deepEqual(share?.placeholders, ["[分享:戒网瘾（id=7706296015465071715）]"]);
+
+  // 2026-11-26 真机：私信里的分享卡片实际是 messageType=8（不是文档里的 105），
+  // 认不出来就只剩 [消息类型:8] —— 模型既拿不到标题也拿不到 id
+  const shareByType8 = normalizePrivateMessage(
+    {
+      conversationId: CONVERSATION,
+      conversationType: 1,
+      messageType: MESSAGE_TYPE.shareCardAlt,
+      sender: PEER,
+      content: JSON.stringify({ itemId: "7709503373430574362" }),
+    },
+    SELF,
+  );
+
+  assert.deepEqual(shareByType8?.placeholders, ["[分享卡片（id=7709503373430574362）]"]);
+  assert.equal(shareByType8?.sharedItemId, "7709503373430574362");
   assert.equal(share?.sharedItemId, "7706296015465071715");
 });
 
