@@ -504,7 +504,13 @@ export async function captureFrames(
 /** 目标采样率：ASR 接口只认 16 kHz（实测口径）。 */
 const TARGET_SAMPLE_RATE = 16_000;
 
-/** 页面内解码缓存最多留几条（见 `cache.set` 处说明：无界会把标签页顶到 OOM）。 */
+/**
+ * 页面内解码缓存最多留几条（见 `cache.set` 处说明：无界会把标签页顶到 OOM）。
+ *
+ * ⚠️ 它**不能**在 `page.evaluate` 的函数体里直接引用：那段代码被序列化到浏览器执行，
+ * 那里没有模块作用域。真机上第一版就是这么炸的 —— `ReferenceError: MAX_PAGE_AUDIO_CACHE is not defined`
+ * （TS 编译器和单测都发现不了，只有真浏览器能暴露）。所以它作为 `cacheLimit` 参数传进去。
+ */
 const MAX_PAGE_AUDIO_CACHE = 1;
 
 /**
@@ -532,7 +538,7 @@ export async function extractAudioWindow(
   const call = async (data: string | null) =>
     withTimeout(
       page.evaluate(
-        async (arg: { key: string; data: string | null; startMs: number; endMs: number; rate: number }) => {
+        async (arg: { key: string; data: string | null; startMs: number; endMs: number; rate: number; cacheLimit: number }) => {
           interface AudioCacheHolder {
             __zipperVideoAudio?: Map<string, AudioBuffer>;
           }
@@ -567,7 +573,7 @@ export async function extractAudioWindow(
             // （5 分钟 48 kHz 立体声 ≈115 MB），只增不删会把这个标签页一路涨到 OOM，
             // 然后浏览器被重建 —— 连入站 WS 一起断（Node 那边的 LRU 管不到页面内存）。
             // 留 1 条就够：同一条视频的十几个窗口是连着来的。
-            while (cache.size > MAX_PAGE_AUDIO_CACHE) {
+            while (cache.size > arg.cacheLimit) {
               const oldest = cache.keys().next();
               if (oldest.done) {
                 break;
@@ -649,7 +655,7 @@ export async function extractAudioWindow(
             durationMs,
           };
         },
-        { key, data, startMs, endMs, rate: TARGET_SAMPLE_RATE },
+        { key, data, startMs, endMs, rate: TARGET_SAMPLE_RATE, cacheLimit: MAX_PAGE_AUDIO_CACHE },
       ),
       timeoutMs,
       `抽音超时（${timeoutMs} 毫秒）`,
