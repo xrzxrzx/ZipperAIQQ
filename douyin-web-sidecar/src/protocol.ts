@@ -401,7 +401,17 @@ export function normalizePrivateMessage(
 
     case MESSAGE_TYPE.video:
     case MESSAGE_TYPE.legacyVideo: {
-      placeholders.push("[视频]");
+      // B4：把作品 id 一起递出去。模型手里没有 id 就没法让 `douyin_video` / `douyin_transcript`
+      // 去取这一条 —— 而占位符是它唯一能看见的"这条消息里有什么"。
+      const videoId = firstNonEmpty(
+        str(content.itemId),
+        str(content.item_id),
+        str(content.videoId),
+        str(content.video_id),
+        str(content.awemeId),
+        str(content.aweme_id),
+      );
+      placeholders.push(videoId ? `[视频 id=${videoId}]` : "[视频]");
       break;
     }
 
@@ -420,7 +430,12 @@ export function normalizePrivateMessage(
     case MESSAGE_TYPE.shareCard: {
       sharedItemId = firstNonEmpty(str(content.itemId), str(content.item_id));
       const title = firstNonEmpty(str(content.title), str(content.desc), str(content.text));
-      placeholders.push(title ? `[分享:${title}]` : "[分享卡片]");
+      // 同 `[视频 id=…]`：id 是 B4 取媒体/转写的唯一抓手，跟着占位符一起给模型
+      if (sharedItemId) {
+        placeholders.push(title ? `[分享:${title}（id=${sharedItemId}）]` : `[分享卡片（id=${sharedItemId}）]`);
+      } else {
+        placeholders.push(title ? `[分享:${title}]` : "[分享卡片]");
+      }
       break;
     }
 

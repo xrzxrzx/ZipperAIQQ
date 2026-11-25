@@ -18,12 +18,14 @@
 | 出站私信（文本 / 图片） | 发送后**回读校验**才算成功；引用降级为普通消息并标注 |
 | 入站私信 | 旁听页面自己的 `frontier-im` WebSocket 帧（不解签名、不裸调接口） |
 | 会话候选查询 | `query.contacts` 用私信列表尽力而为 |
+| 视频媒体（B4） | `media.video` / `media.frames` / `media.audio`：详情 → 下载 → **浏览器内抽帧 / 抽音**，不用 ffmpeg |
 
 | 不做 | 理由 |
 |---|---|
 | 自己逆向签名 / 裸调 `imapi` | 要跟设备指纹长期搏斗，收益为负 |
 | DOM 轮询做入站主路 | `/chat` 是虚拟滚动，离开视口的节点会被卸载 → 必漏消息 |
 | 群列表 | 网页版私信页没有群列表入口（当前账号群列表本来就是 0） |
+| 视频转码 / 上传第三方 | 抽帧抽音全在本机（同一 Chromium）；识别交给服务端走 DeepSeek ASR |
 
 ---
 
@@ -36,10 +38,33 @@ src/site.ts       站点知识（**选择器只许放这里**）+ 会话名缓�
 src/login.ts      登录编排（二维码 8s 刷新 / 短信 / 滑块）
 src/outbound.ts   出站（定位会话 → 输入 → 发送 → 回读校验）
 src/inbound.ts    入站（WS 旁听 + proto 解码 + 幂等 + DOM 兜底）
+src/media.ts      视频媒体（详情 / 下载 / canvas 抽帧 / WebAudio 抽音，按窗口回传）
 src/main.ts       编排：配置 → 连 Server → 分发帧 → 定时体检
 proto/im.proto    最小协议子集（字段号照抄上游，有单测锁住）
 test/             node:test 单测（不联网、不开浏览器）
 ```
+
+---
+
+## 视频媒体帧（B4）
+
+服务端 → sidecar：
+
+| 帧 | data | 说明 |
+|---|---|---|
+| `media.video` | `{requestId, itemId, timeoutMs?}` | 取视频详情（时长 / 文案 / 播放地址） |
+| `media.frames` | `{requestId, itemId, timesMs[], maxWidth?, maxPayloadBytes?, timeoutMs?}` | 按给定时间点抽帧，回 JPEG base64 |
+| `media.audio` | `{requestId, itemId, startMs, endMs, maxPayloadBytes?, timeoutMs?}` | 取一段 16 kHz 单声道 WAV（base64） |
+
+sidecar → 服务端：一律是 `result` 帧（`{requestId, ok, error, code, ...}`）。
+
+- **为什么抽音要按窗口**：`/ws/channel` 单帧上限 **1 MiB**（`WsChannelEndpoint.MaxFrameBytes`），
+  3 分钟 16 kHz 单声道 WAV 就有 5.7 MiB。窗口大小由**服务端**定（默认 20 秒），服务端自己拼回整段再交 ASR。
+- **视频本体按 `itemId` 缓存 10 分钟**（LRU 2 条）：一条 5 分钟的视频抽音要十几个窗口，不缓存等于反复下载。
+- **页面里缓存解码结果**（`window.__zipperVideoAudio`）：第 2 个窗口起不再重新下载/解码；
+  页面重建后缓存会没，sidecar 会自动补一次带本体数据的请求（回 `needData` 的那条路）。
+- **抽帧/抽音的实测依据**：`docs/06-调研/抖音网页版底座实测.md` §7.3 / §7.4。
+
 
 ---
 

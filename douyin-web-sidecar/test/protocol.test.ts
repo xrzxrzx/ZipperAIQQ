@@ -240,12 +240,25 @@ test("normalizePrivateMessage：图片消息取出 CDN 直链", () => {
   assert.deepEqual(event.placeholders, []);
 });
 
-test("normalizePrivateMessage：视频 / 分享卡片降级成占位", () => {
+test("normalizePrivateMessage：视频 / 分享卡片降级成占位（B4：带 itemId 时把 id 一起递出去）", () => {
   const video = normalizePrivateMessage(
     { conversationId: CONVERSATION, conversationType: 1, messageType: MESSAGE_TYPE.video, sender: PEER, content: "{}" },
     SELF,
   );
   assert.deepEqual(video?.placeholders, ["[视频]"]);
+
+  // 有 id 就给模型 id：否则 `douyin_video` 没有任何抓手去取这一条
+  const videoWithId = normalizePrivateMessage(
+    {
+      conversationId: CONVERSATION,
+      conversationType: 1,
+      messageType: MESSAGE_TYPE.video,
+      sender: PEER,
+      content: JSON.stringify({ videoId: "7706296015465071715" }),
+    },
+    SELF,
+  );
+  assert.deepEqual(videoWithId?.placeholders, ["[视频 id=7706296015465071715]"]);
 
   const share = normalizePrivateMessage(
     {
@@ -258,7 +271,7 @@ test("normalizePrivateMessage：视频 / 分享卡片降级成占位", () => {
     SELF,
   );
 
-  assert.deepEqual(share?.placeholders, ["[分享:戒网瘾]"]);
+  assert.deepEqual(share?.placeholders, ["[分享:戒网瘾（id=7706296015465071715）]"]);
   assert.equal(share?.sharedItemId, "7706296015465071715");
 });
 

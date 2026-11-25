@@ -20,10 +20,19 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import type { Page } from "playwright";
 
 import { DouyinBrowser, type BrowserLogger, type BrowserStateSnapshot } from "./browser.js";
 import { InboundListener } from "./inbound.js";
 import { LoginFlow } from "./login.js";
+import {
+  captureFrames,
+  downloadVideo,
+  extractAudioWindow,
+  MediaError,
+  resolveVideo,
+  VideoMediaCache,
+} from "./media.js";
 import { OutboundSender } from "./outbound.js";
 import { ConversationRegistry, DouyinSendApi } from "./send-api.js";
 import { DouyinImageUploader } from "./image-upload.js";
@@ -84,6 +93,25 @@ const RECONNECT_MAX_MS = 15_000;
 
 /** 体检周期：刷新会话名 + 播 `browser.state` + DOM 兜底。 */
 const HEALTH_INTERVAL_MS = 60_000;
+
+/**
+ * 媒体抓取（B4）的**硬**上限。
+ *
+ * 服务端会在自己的配置里给更小的值（`douyin.video*`）并随请求传下来；
+ * 这里只兜「绝不越过」的底线 —— sidecar 不信任请求里的数字，免得一条手写帧让它下 500 MB 的东西。
+ */
+const MEDIA_HARD_LIMITS = {
+  /** 视频本体最多多大（超过就让人发短的，别把内存吃光）。 */
+  maxVideoBytes: 96 * 1024 * 1024,
+  /** 回传介质（帧图/音频窗口）的字节上限：`/ws/channel` 单帧 1 MiB，留出 JSON 余量。 */
+  maxPayloadBytes: 900 * 1024,
+  /** 抽帧的缩放上限（宽）。 */
+  frameMaxWidth: 1080,
+  /** 单次媒体请求的超时。 */
+  timeoutMs: 60_000,
+  /** 一次最多抽几张（服务端另有限制，这里只是天花板）。 */
+  maxFrames: 24,
+} as const;
 
 async function loadConfig(log: Logger): Promise<SidecarConfig> {
   const fromEnv = str(process.env.ZIPPER_DOUYIN_WEB_CONFIG);
@@ -616,6 +644,18 @@ async function main(): Promise<void> {
         void handleContacts(inFrame);
         return;
 
+      case "media.video":
+        void handleMediaVideo(inFrame);
+        return;
+
+      case "media.frames":
+        void handleMediaFrames(inFrame);
+        return;
+
+      case "media.audio":
+        void handleMediaAudio(inFrame);
+        return;
+
       case "query.groups":
         // 网页版私信页没有"群列表"入口（当前账号群列表本来就是 0 个）；
         // 明确回空 + 说明，不假装查到了（与既有 sidecar「取不到不阻塞」同口径）
@@ -717,6 +757,177 @@ async function main(): Promise<void> {
       const message = error instanceof Error ? error.message : String(error);
       log.warn(`query.contacts 失败：${message}`);
       reply(inFrame, { ok: false, error: message, contacts: [] });
+    }
+  };
+
+  // ── 视频媒体（B4）：详情 / 抽帧 / 抽音 ──
+  //
+  // 三件事全部**在浏览器里做**（不用 ffmpeg，见 media.ts 顶部说明）。
+  // 视频本体按 itemId 缓存 10 分钟：一条 5 分钟的视频抽音要 15 个窗口，
+  // 每个窗口都重新下载 2.5 MB 是纯浪费。
+
+  const mediaCache = new VideoMediaCache();
+
+  /** 媒体请求的超时：请求里给的值要夹到 [5s, 硬上限] 之间。 */
+  const mediaTimeout = (inFrame: Frame): number => {
+    const wanted = num(inFrame.data?.timeoutMs) ?? MEDIA_HARD_LIMITS.timeoutMs;
+    return Math.min(Math.max(wanted, 5_000), MEDIA_HARD_LIMITS.timeoutMs);
+  };
+
+  /** 媒体请求的字节上限：只往下夹，不往上抬。 */
+  const mediaBudget = (inFrame: Frame): number => {
+    const wanted = num(inFrame.data?.maxPayloadBytes) ?? MEDIA_HARD_LIMITS.maxPayloadBytes;
+    return Math.min(Math.max(wanted, 64 * 1024), MEDIA_HARD_LIMITS.maxPayloadBytes);
+  };
+
+  /** 媒体要的页面：和入站/出站共用同一个（登录态、cookie 都在这上面）。 */
+  const mediaPage = async (): Promise<Page> => browser.ensureChatPage(SITE.chatUrl);
+
+  /** 回一条失败的结果（**必须带回人话原因**：服务端会原样递给模型）。 */
+  const failMedia = (inFrame: Frame, label: string, error: unknown, extra: Record<string, unknown> = {}): void => {
+    const code = error instanceof MediaError ? error.code : "unknown";
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`${label} 失败（code=${code}）：${message}`);
+    reply(inFrame, { ok: false, error: message, code, ...extra });
+  };
+
+  /** 取视频本体（内存缓存优先）。 */
+  const mediaVideoBytes = async (
+    itemId: string,
+    page: Page,
+    timeoutMs: number,
+  ): Promise<Buffer> => {
+    const cached = mediaCache.get(itemId);
+    if (cached) {
+      return cached;
+    }
+
+    const detail = await resolveVideo(page, itemId, timeoutMs);
+    const downloaded = await downloadVideo(page, detail, MEDIA_HARD_LIMITS.maxVideoBytes, timeoutMs);
+    mediaCache.set(itemId, downloaded.bytes);
+    log.info(
+      `视频已下载：id=${detail.itemId} 时长=${detail.durationMs}ms ` +
+        `字节=${downloaded.bytes.length} 来源=${downloaded.url.slice(0, 60)}`,
+    );
+    return downloaded.bytes;
+  };
+
+  const handleMediaVideo = async (inFrame: Frame): Promise<void> => {
+    const itemId = str(inFrame.data?.itemId);
+    if (!itemId) {
+      reply(inFrame, { ok: false, error: "media.video 缺少 itemId", code: "args", video: null });
+      return;
+    }
+
+    try {
+      const page = await mediaPage();
+      const detail = await resolveVideo(page, itemId, mediaTimeout(inFrame));
+      log.info(
+        `media.video 成功：id=${detail.itemId} 时长=${detail.durationMs}ms ` +
+          `地址=${detail.playUrls.length} 个 标题=${detail.title.slice(0, 30) || "(空)"}`,
+      );
+      reply(inFrame, { ok: true, error: null, video: { ...detail } });
+    } catch (error) {
+      failMedia(inFrame, `media.video(${itemId})`, error, { video: null });
+    }
+  };
+
+  const handleMediaFrames = async (inFrame: Frame): Promise<void> => {
+    const itemId = str(inFrame.data?.itemId);
+    const rawTimes = inFrame.data?.timesMs;
+    const timesMs = Array.isArray(rawTimes)
+      ? rawTimes.map((value) => num(value)).filter((value): value is number => value !== undefined)
+      : [];
+
+    if (!itemId || timesMs.length === 0) {
+      reply(inFrame, { ok: false, error: "media.frames 缺少 itemId 或 timesMs", code: "args", frames: [] });
+      return;
+    }
+
+    if (timesMs.length > MEDIA_HARD_LIMITS.maxFrames) {
+      reply(inFrame, {
+        ok: false,
+        error: `一次最多抽 ${MEDIA_HARD_LIMITS.maxFrames} 张（这次要了 ${timesMs.length} 张）`,
+        code: "args",
+        frames: [],
+      });
+      return;
+    }
+
+    const wantedWidth = num(inFrame.data?.maxWidth) ?? 720;
+    const maxWidth = Math.min(Math.max(Math.round(wantedWidth), 120), MEDIA_HARD_LIMITS.frameMaxWidth);
+    const timeoutMs = mediaTimeout(inFrame);
+
+    try {
+      const page = await mediaPage();
+      const mp4 = await mediaVideoBytes(itemId, page, timeoutMs);
+      const capture = await captureFrames(page, mp4, timesMs, {
+        maxWidth,
+        maxTotalBytes: mediaBudget(inFrame),
+        timeoutMs,
+      });
+
+      log.info(
+        `media.frames 成功：id=${itemId} 张数=${capture.shots.length} ` +
+          `尺寸=${capture.width}x${capture.height} 时长=${capture.durationMs}ms ` +
+          `合计=${capture.shots.reduce((sum, shot) => sum + shot.bytes, 0)} 字节`,
+      );
+
+      reply(inFrame, {
+        ok: true,
+        error: null,
+        durationMs: capture.durationMs,
+        width: capture.width,
+        height: capture.height,
+        frames: capture.shots,
+      });
+    } catch (error) {
+      failMedia(inFrame, `media.frames(${itemId})`, error, { frames: [] });
+    }
+  };
+
+  const handleMediaAudio = async (inFrame: Frame): Promise<void> => {
+    const itemId = str(inFrame.data?.itemId);
+    const startMs = num(inFrame.data?.startMs) ?? 0;
+    const endMs = num(inFrame.data?.endMs) ?? 0;
+
+    if (!itemId || endMs <= startMs) {
+      reply(inFrame, { ok: false, error: "media.audio 缺少 itemId 或时间区间不合法", code: "args" });
+      return;
+    }
+
+    const timeoutMs = mediaTimeout(inFrame);
+
+    try {
+      const page = await mediaPage();
+      const mp4 = await mediaVideoBytes(itemId, page, timeoutMs);
+      const window = await extractAudioWindow(page, itemId, mp4, startMs, endMs, timeoutMs);
+
+      // 服务端回传上限（1 MiB 单帧）：窗口切多小由**服务端**决定，这里只判它有没有按约给
+      if (window.bytes * 1.34 > mediaBudget(inFrame)) {
+        throw new MediaError(
+          "too_large",
+          `这个音频窗口 ${window.bytes} 字节超出回传上限，请把窗口再切小一点`,
+        );
+      }
+
+      log.info(
+        `media.audio 成功：id=${itemId} 区间=${window.startMs}-${window.endMs}ms ` +
+          `总时长=${window.durationMs}ms 字节=${window.bytes}`,
+      );
+
+      reply(inFrame, {
+        ok: true,
+        error: null,
+        wav: window.wavBase64,
+        bytes: window.bytes,
+        sampleRate: window.sampleRate,
+        startMs: window.startMs,
+        endMs: window.endMs,
+        durationMs: window.durationMs,
+      });
+    } catch (error) {
+      failMedia(inFrame, `media.audio(${itemId})`, error);
     }
   };
 
