@@ -193,7 +193,7 @@ public sealed class MailKitImapSession : IImapSession
         var id = ToUniqueId(uid);
 
         var structure = await GetStructureAsync(folder, id, ct).ConfigureAwait(false);
-        var htmlPart = FindHtmlPart(structure);
+        var htmlPart = MailBodyParts.FindHtml(structure);
         if (htmlPart is null)
         {
             return null;
@@ -240,7 +240,7 @@ public sealed class MailKitImapSession : IImapSession
         // 正文：只取**文本部分**（text/plain、text/html），附件一个字节都不下 ——
         // 30 MB 的附件邮件整封下载会把内存顶上去了（服务端只有 8 GB）。
         var structure = await GetStructureAsync(folder, id, ct).ConfigureAwait(false);
-        var parts = TextParts(structure)
+        var parts = MailBodyParts.TextParts(structure)
             .OrderBy(part => part.IsHtml ? 1 : 0) // 纯文本在前，HTML 源文本在后
             .ToList();
 
@@ -494,51 +494,6 @@ public sealed class MailKitImapSession : IImapSession
             .ConfigureAwait(false);
 
         return summaries.Count == 0 ? null : summaries[0].Body;
-    }
-
-    /// <summary>在一棵 body 结构树里找 <c>text/html</c> 部分（广度上找第一个）。</summary>
-    private static BodyPartText? FindHtmlPart(BodyPart? structure)
-    {
-        foreach (var part in TextParts(structure))
-        {
-            if (part.IsHtml)
-            {
-                return part;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>递归列出所有文本部分（<c>text/plain</c> + <c>text/html</c>），跳过附件。</summary>
-    private static IEnumerable<BodyPartText> TextParts(BodyPart? part)
-    {
-        switch (part)
-        {
-            case BodyPartText text:
-                yield return text;
-                break;
-
-            case BodyPartMultipart multipart:
-                foreach (var child in multipart.BodyParts)
-                {
-                    foreach (var nested in TextParts(child))
-                    {
-                        yield return nested;
-                    }
-                }
-
-                break;
-
-            // rfc822 嵌套（转发成附件的那种）：正文在内层，仍然不碰它的附件。
-            case BodyPartMessage message:
-                foreach (var nested in TextParts(message.Body))
-                {
-                    yield return nested;
-                }
-
-                break;
-        }
     }
 
     /// <summary>从取回的实体里拿文本；嵌套邮件取内层纯文本。</summary>

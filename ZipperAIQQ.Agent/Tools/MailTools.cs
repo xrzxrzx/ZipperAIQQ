@@ -31,7 +31,10 @@ namespace ZipperAIQQ.Agent.Tools;
 /// </remarks>
 public static class MailTools
 {
+    /// <summary>渲染画面工具名（与 <c>ToolCatalog</c> 里那一行必须一致）。</summary>
     public const string RenderToolName = "mail_render";
+
+    /// <summary>读原文工具名（与 <c>ToolCatalog</c> 里那一行必须一致）。</summary>
     public const string RawToolName = "mail_raw";
 
     /// <summary>定位时最多给几个候选（多了等于把邮件列表倒进上下文）。</summary>
@@ -77,12 +80,21 @@ public static class MailTools
             {
                 if (Deny(gate, ToolCapability.MailRead, context) is { } denied)
                 {
+                    // 被拒也要留痕：主人事后翻审计，"没人试过"与"有人试了被拒"必须能区分
+                    logger.Warning(
+                        "mail_render 被拒：role={Role} mail={Mail}", context.Role, Summarize(mail));
+                    await AuditAsync(
+                            configs, logger, "mailRender", $"denied role={context.Role} mail={Summarize(mail)}", ct)
+                        .ConfigureAwait(false);
                     return [new TextContent(denied)];
                 }
 
                 var located = await LocateAsync(reader, mail, ct).ConfigureAwait(false);
                 if (located.Problem is { } problem)
                 {
+                    await AuditAsync(
+                            configs, logger, "mailRender", $"not_found mail={Summarize(mail)}", ct)
+                        .ConfigureAwait(false);
                     return [new TextContent(problem)];
                 }
 
@@ -95,13 +107,17 @@ public static class MailTools
                     {
                         logger.Warning(
                             "mail_render 失败：mailId={MailId} 原因={Error}", picked.Id, error);
+                        // 失败同样落审计（只记事实与原因，不记邮件内容）
+                        await AuditAsync(
+                                configs, logger, "mailRender", $"id={picked.Id} failed={Summarize(error)}", ct)
+                            .ConfigureAwait(false);
                         return [new TextContent(error)];
                     }
 
-                    await configs
-                        .AppendAuditAsync(
+                    await AuditAsync(
+                            configs,
+                            logger,
                             "mailRender",
-                            Actor,
                             $"id={picked.Id} 张数={outcome.Images.Count} segments={segments}",
                             ct)
                         .ConfigureAwait(false);
@@ -171,12 +187,20 @@ public static class MailTools
             {
                 if (Deny(gate, ToolCapability.MailRaw, context) is { } denied)
                 {
+                    logger.Warning(
+                        "mail_raw 被拒：role={Role} mail={Mail}", context.Role, Summarize(mail));
+                    await AuditAsync(
+                            configs, logger, "mailRaw", $"denied role={context.Role} mail={Summarize(mail)}", ct)
+                        .ConfigureAwait(false);
                     return denied;
                 }
 
                 var located = await LocateAsync(reader, mail, ct).ConfigureAwait(false);
                 if (located.Problem is { } problem)
                 {
+                    await AuditAsync(
+                            configs, logger, "mailRaw", $"not_found mail={Summarize(mail)}", ct)
+                        .ConfigureAwait(false);
                     return problem;
                 }
 
@@ -191,13 +215,16 @@ public static class MailTools
                     {
                         logger.Warning(
                             "mail_raw 失败：mailId={MailId} 原因={Error}", picked.Id, error);
+                        await AuditAsync(
+                                configs, logger, "mailRaw", $"id={picked.Id} failed={Summarize(error)}", ct)
+                            .ConfigureAwait(false);
                         return error;
                     }
 
-                    await configs
-                        .AppendAuditAsync(
+                    await AuditAsync(
+                            configs,
+                            logger,
                             "mailRaw",
-                            Actor,
                             $"id={picked.Id} 截断={outcome.Truncated} 正文={outcome.Body.Length} 字",
                             ct)
                         .ConfigureAwait(false);
@@ -288,5 +315,47 @@ public static class MailTools
     {
         var decision = gate.Check(capability, context);
         return decision.Allowed ? null : decision.Reason;
+    }
+
+    /// <summary>
+    /// 把一句话压成审计里能放的长度（**模型给的内容要当作不可信输入**）。
+    /// </summary>
+    /// <remarks>
+    /// 审计只记事实（谁、对什么、结果），不记邮件正文；模型传进来的引用可能很长、
+    /// 也可能带着换行与控制字符 —— 截断 + 压掉换行，免得把审计表写成小作文。
+    /// </remarks>
+    private static string Summarize(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return "-";
+        }
+
+        var flat = text.ReplaceLineEndings(" ").Trim();
+        return flat.Length <= 60 ? flat : flat[..60] + "…";
+    }
+
+    /// <summary>
+    /// 写一条审计，**失败不拖垮工具**。
+    /// </summary>
+    /// <remarks>
+    /// 审计是观测，读邮件才是交付：库抖一下就把「明明读到了」报成「读失败」，
+    /// 模型会转而编内容或反复重试。写失败必须在**日志**里留痕（运维侧才知道审计有洞）。
+    /// </remarks>
+    private static async Task AuditAsync(
+        IConfigStore configs, ILogger logger, string action, string target, CancellationToken ct)
+    {
+        try
+        {
+            await configs.AppendAuditAsync(action, Actor, target, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Warning(ex, "邮件工具审计写入失败：action={Action} target={Target}", action, target);
+        }
     }
 }

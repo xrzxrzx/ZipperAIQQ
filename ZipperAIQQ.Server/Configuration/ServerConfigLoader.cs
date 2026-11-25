@@ -179,6 +179,7 @@ public static class ServerConfigLoader
                 RenderEnabled = s.Bool("mail", "renderEnabled", o.Mail.RenderEnabled),
                 RenderMaxBodyHtmlKb = s.Int("mail", "renderMaxBodyHtmlKb", o.Mail.RenderMaxBodyHtmlKb),
                 RenderMaxImages = s.Int("mail", "renderMaxImages", o.Mail.RenderMaxImages),
+                RenderMaxConcurrent = s.Int("mail", "renderMaxConcurrent", o.Mail.RenderMaxConcurrent),
                 RenderTimeoutSeconds = s.Int("mail", "renderTimeoutSeconds", o.Mail.RenderTimeoutSeconds),
                 RenderAllowRemote = s.Bool("mail", "renderAllowRemote", o.Mail.RenderAllowRemote),
                 RenderScriptPath = s.Str("mail", "renderScriptPath", o.Mail.RenderScriptPath)!,

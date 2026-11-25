@@ -95,6 +95,15 @@ public sealed record MailOptions
     /// <summary>单次渲染最多给几张图（默认 4，长邮件按高度切段）。</summary>
     public int RenderMaxImages { get; init; } = 4;
 
+    /// <summary>
+    /// 同时进行的渲染数（默认 1，上限 4）。
+    /// </summary>
+    /// <remarks>
+    /// 每个渲染就是一个 Chromium 进程：8 GB 的机器上并发 2 以上就可能被 OOM 掉整个服务端
+    /// （方案 §4/B3 风险表：渲染吃内存 → 并发 1）。要放宽请先看内存余量。
+    /// </remarks>
+    public int RenderMaxConcurrent { get; init; } = 1;
+
     /// <summary>渲染超时（秒，默认 30）。</summary>
     public int RenderTimeoutSeconds { get; init; } = 30;
 

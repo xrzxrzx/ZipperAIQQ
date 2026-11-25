@@ -37,11 +37,16 @@ node tools/mail-render/render.mjs \
 1. **`clip` 是页面坐标，但结果图只有视口那么大** —— 视口外的段会直接报
    `Clipped area is either empty or outside the resulting image`。所以脚本先量整页高度、
    把视口撑到覆盖所有要截的段，再逐段 `clip`。
+   **宽也一样**：邮件 HTML 常写死 `width:1200px`，视口只有 1000 时 body 盒超出视口，
+   右半边同样越界 —— 所以宽度也要撑（上限 2400），clip 宽度再夹一次。
 2. **ESM 模块解析看脚本所在目录，不看 cwd** —— 脚本在 `tools/mail-render/`，
    直接 `import "playwright"` 会 `ERR_MODULE_NOT_FOUND`；必须用
    `createRequire(<douyin-web-sidecar>/package.json)` 解析。
 3. **量高度不能用页面 JS**（脚本已关），用 Playwright 的 `locator.boundingBox()`
    （走 CDP 的 DOM.getBoxModel）。
+4. **Chromium 要在自己的临时目录里建 profile**：受限环境（或安全策略收紧的部署机）里
+   系统 TEMP 下 `mkdtemp` 会被拒，浏览器起不来只报 `EPERM: mkdtemp`，看着像"没装浏览器"。
+   Server 侧已经把子进程的 `TEMP/TMP/TMPDIR` 指到本次工作目录。
 
 ## 自测
 

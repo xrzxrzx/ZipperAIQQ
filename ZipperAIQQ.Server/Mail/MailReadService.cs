@@ -80,7 +80,13 @@ public sealed class MailReadService : IMailReader
         if (long.TryParse(trimmed, out var id) && id > 0)
         {
             var byId = await _repository.GetAsync(id, ct).ConfigureAwait(false);
-            return byId is null ? [] : [ToBrief(byId)];
+            if (byId is not null)
+            {
+                return [ToBrief(byId)];
+            }
+
+            // 主键查不到就**继续按关键词找**：主人说「2026」时模型会原样传数字过来，
+            // 而那其实是个年份/金额，不是主键 —— 直接回"没找到"等于把它带进沟里。
         }
 
         var hits = await _repository.SearchAsync(null, trimmed, 10, ct).ConfigureAwait(false);

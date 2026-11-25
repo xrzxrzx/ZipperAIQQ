@@ -58,7 +58,9 @@ public sealed class PermissionGateTests
     [Fact]
     public void MailRaw_is_owner_only_by_default()
     {
-        // 原文（Received 链 / 验证码 / 账单号）默认只给主人；管理员要显式开，硬底线仍是管理员
+        // 原文（Received 链 / 验证码 / 账单号）默认只给主人。
+        // ⚠️ 当前**没有**「放开给管理员」的入口：执行期门禁用代码里的 Defaults，
+        // 工具策略页只能收紧可见性。硬底线仍是管理员（将来开这个口子时要守的线）。
         Assert.False(_gate.IsAllowed(ToolCapability.MailRaw, Role.Admin));
         Assert.True(_gate.IsAllowed(ToolCapability.MailRaw, Role.Owner));
         Assert.Equal(Role.Admin, PermissionGate.HardFloorOf(ToolCapability.MailRaw));

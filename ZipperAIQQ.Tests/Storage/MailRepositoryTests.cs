@@ -452,6 +452,91 @@ public sealed class MailRepositoryTests : IAsyncLifetime
         Assert.Equal(7, mail.Uid);
     }
 
+    [Fact]
+    public async Task SearchAsync_EscapesUnderscoreAndBackslash()
+    {
+        await _repo.AppendAsync(Mail("a_b 下划线"));
+        await _repo.AppendAsync(Mail("axb 不是下划线"));
+        await _repo.AppendAsync(Mail(@"路径 C:\mail\a"));
+
+        // `_` 是 LIKE 的单字符通配符：不转义的话 "a_b" 会把 "axb" 也捞出来
+        var underscore = await _repo.SearchAsync(null, "a_b", 10);
+        Assert.Equal("a_b 下划线", Assert.Single(underscore).Subject);
+
+        // 反斜杠是 ESCAPE 字符本身：必须能被当成普通字符搜到
+        var backslash = await _repo.SearchAsync(null, @"C:\mail", 10);
+        Assert.Single(backslash);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_OnLegacyDatabase_AddsColumnsAndKeepsOldRows()
+    {
+        // A-13 的原始判据：**老库**（v20 之前、Mails 没有 BodyHtml/Uid 列）升级后
+        // 列要存在、旧行该列为空、且不报错 —— 前面那个"二次初始化"测不到这条。
+        var legacyPath = Path.Combine(Path.GetTempPath(), $"zipper-mail-legacy-{Guid.NewGuid():N}.db");
+        var legacyConnection = $"Data Source={legacyPath}";
+
+        try
+        {
+            await using (var db = new SqliteDatabase(legacyConnection, Logger))
+            {
+                await db.WriteAsync(async (conn, token) =>
+                {
+                    await using var cmd = conn.CreateCommand();
+                    cmd.CommandText = """
+                        CREATE TABLE Mails (
+                            Id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                            AccountId      TEXT    NOT NULL,
+                            MessageId      TEXT,
+                            Subject        TEXT    NOT NULL,
+                            FromAddress    TEXT    NOT NULL,
+                            FromName       TEXT,
+                            BodyText       TEXT    NOT NULL,
+                            HasAttachments INTEGER NOT NULL,
+                            SentAtMs       INTEGER NOT NULL,
+                            ReceivedAtMs   INTEGER NOT NULL
+                        );
+                        INSERT INTO Mails (AccountId, MessageId, Subject, FromAddress, FromName,
+                                           BodyText, HasAttachments, SentAtMs, ReceivedAtMs)
+                        VALUES ('acc-old', '<old@example.com>', '升级前的邮件',
+                                'sender@example.com', '发件人', '老正文', 0, @now, @now);
+                        """;
+                    cmd.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    await cmd.ExecuteNonQueryAsync(token);
+                });
+            }
+
+            // 升级
+            await new DatabaseInitializer(legacyConnection, Logger).InitializeAsync();
+
+            await using var upgraded = new SqliteDatabase(legacyConnection, Logger);
+            var repo = new SqliteMailRepository(upgraded);
+            var old = Assert.Single(await repo.ListAsync(null, 10));
+
+            Assert.Equal("升级前的邮件", old.Subject);
+            Assert.Null(old.BodyHtml);
+            Assert.Null(old.Uid);
+
+            // 列真的存在：新邮件能写进去，检索也能跑
+            var newId = await repo.AppendAsync(Mail(
+                "升级后的邮件", accountId: "acc-old", bodyHtml: "<p>新</p>", uid: 99));
+            Assert.NotNull(newId);
+            var hits = await repo.SearchAsync(null, "升级后", 10);
+            Assert.Equal("<p>新</p>", Assert.Single(hits).BodyHtml);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(legacyPath);
+            }
+            catch (IOException)
+            {
+                // 连接池可能仍持有句柄
+            }
+        }
+    }
+
     // ─────────────────────────── 账号 ───────────────────────────
 
     [Fact]

@@ -110,6 +110,19 @@ public sealed class MailReadServiceTests : IAsyncLifetime
         Assert.Empty(await service.LocateAsync("不存在的关键词"));
     }
 
+    [Fact]
+    public async Task Locate_numeric_keyword_falls_back_to_search()
+    {
+        // 「2026」在模型嘴里是年份，不是主键：查不到这个 id 就该继续按关键词找，
+        // 否则主人问"2026 那封"永远得到"没找到"。
+        await AppendAsync("2026 年度账单");
+        var service = CreateService(Enabled());
+
+        var hits = await service.LocateAsync("2026");
+
+        Assert.Equal("2026 年度账单", Assert.Single(hits).Subject);
+    }
+
     // ───────────── 渲染取素材 ─────────────
 
     [Fact]

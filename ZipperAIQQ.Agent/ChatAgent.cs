@@ -762,7 +762,8 @@ public sealed class ChatAgent : IChatAgent
                 context, _permissionGate, mailReader, _configs, _logger));
         }
 
-        // 平台专用工具（决策五 / S3-E）：抖音侧要单独的数据源（sidecar 的 query.contacts），        // 所以按平台取目录；取不到（抖音未接入）这组工具**不出现**，而不是出现后报错。
+        // 平台专用工具（决策五 / S3-E）：抖音侧要单独的数据源（sidecar 的 query.contacts），
+        // 所以按平台取目录；取不到（抖音未接入）这组工具**不出现**，而不是出现后报错。
         if (_platformContacts is not null)
         {
             tools.AddRange(DouyinTools.Create(_platformContacts, context, _policy));

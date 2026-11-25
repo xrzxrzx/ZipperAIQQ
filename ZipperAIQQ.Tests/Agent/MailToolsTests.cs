@@ -110,12 +110,51 @@ public sealed class MailToolsTests
             Hits = [Brief(7)],
             Render = MailRenderOutcome.Failed("渲染失败：找不到浏览器内核"),
         };
+        var configs = new FakeConfigStore();
 
         var contents = await InvokeRenderAsync(
-            CreateTools(Role.Owner, reader: reader).Render!, ("mail", "7"));
+            CreateTools(Role.Owner, reader: reader, configs: configs).Render!, ("mail", "7"));
 
         var text = Assert.IsType<TextContent>(Assert.Single(contents));
         Assert.Contains("找不到浏览器内核", text.Text);
+        // 失败也留痕：否则「渲染一直失败」在审计里看不出来
+        Assert.Contains(configs.Audits, item => item.Action == "mailRender" && item.Target!.Contains("failed="));
+    }
+
+    [Fact]
+    public async Task Denied_call_is_audited()
+    {
+        // 可见性层放行、执行层拒绝（真实场景：一轮之内角色被改过，工具对象是上一轮建的）。
+        // 这种"试了但被拒"必须在审计里留痕 —— 否则主人事后只看到零记录。
+        var reader = new FakeReader { Hits = [Brief(8)] };
+        var configs = new FakeConfigStore();
+
+        var tools = MailTools.Create(
+                new ToolCallContext { Chat = Chat, Sender = Sender, Role = Role.Owner },
+                new VisibleButDenyGate(),
+                reader,
+                configs,
+                Logger)
+            .ToList();
+
+        var raw = Assert.Single(tools.OfType<AIFunction>(), tool => tool.Name == MailTools.RawToolName);
+        var text = await InvokeRawAsync(raw, ("mail", "8"));
+
+        Assert.Contains("权限不足", text);
+        Assert.Contains(configs.Audits, item => item.Action == "mailRaw" && item.Target!.Contains("denied"));
+        Assert.Empty(reader.Calls);
+    }
+
+    [Fact]
+    public async Task Not_found_reference_is_audited()
+    {
+        var reader = new FakeReader();
+        var configs = new FakeConfigStore();
+
+        await InvokeRenderAsync(
+            CreateTools(Role.Owner, reader: reader, configs: configs).Render!, ("mail", "没有这封"));
+
+        Assert.Contains(configs.Audits, item => item.Action == "mailRender" && item.Target!.Contains("not_found"));
     }
 
     [Fact]
@@ -200,6 +239,24 @@ public sealed class MailToolsTests
 
         Assert.Contains("没找到", text);
         Assert.Empty(reader.Calls);
+    }
+
+    [Fact]
+    public async Task Raw_survives_audit_failure()
+    {
+        // 审计是观测、读邮件才是交付：库抖一下不能把"读到了"报成"读失败"
+        var reader = new FakeReader
+        {
+            Hits = [Brief(6)],
+            Raw = new MailRawOutcome("text/plain", "Subject: x", "正文", false, null),
+        };
+        var configs = new FakeConfigStore { ThrowOnAudit = true };
+
+        var text = await InvokeRawAsync(
+            CreateTools(Role.Owner, reader: reader, configs: configs).Raw!, ("mail", "6"));
+
+        Assert.Contains("正文", text);
+        Assert.DoesNotContain("失败", text);
     }
 
     // ───────────── MEAI 透传 ─────────────
@@ -339,6 +396,8 @@ public sealed class MailToolsTests
 
     private sealed class FakeConfigStore : IConfigStore
     {
+        public bool ThrowOnAudit { get; init; }
+
         public List<AuditEntry> Audits { get; } = [];
 
         public Task<IReadOnlyList<ModelEndpointSetting>> ListEndpointsAsync(CancellationToken ct = default) =>
@@ -360,12 +419,26 @@ public sealed class MailToolsTests
 
         public Task AppendAuditAsync(string action, string actor, string? target, CancellationToken ct = default)
         {
+            if (ThrowOnAudit)
+            {
+                throw new InvalidOperationException("库被锁了");
+            }
+
             Audits.Add(new AuditEntry(Audits.Count + 1, action, actor, target, DateTimeOffset.UtcNow));
             return Task.CompletedTask;
         }
 
         public Task<IReadOnlyList<AuditEntry>> ListAuditAsync(int limit, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<AuditEntry>>(Audits);
+    }
+
+    /// <summary>可见性放行、执行时拒绝的门禁（模拟「工具对象比当前角色旧」）。</summary>
+    private sealed class VisibleButDenyGate : IPermissionGate
+    {
+        public PermissionDecision Check(ToolCapability capability, ToolCallContext context) =>
+            PermissionDecision.Deny("权限不足：这个角色不能读邮件原文。");
+
+        public bool IsAllowed(ToolCapability capability, Role role) => true;
     }
 
     /// <summary>只回答两次的假模型：第一次要求调工具，第二次把收到的消息记下来。</summary>

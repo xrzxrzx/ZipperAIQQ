@@ -28,12 +28,27 @@ namespace ZipperAIQQ.Server.Mail;
 /// </remarks>
 public sealed class MailRenderService : IMailRenderer
 {
-    /// <summary>临时目录根（每次调用一个子目录，跑完删掉）。</summary>
-    private readonly string _tempRoot;
+    /// <summary>探测 node 的超时（毫秒）：只是问一句版本号，慢成这样就是坏了。</summary>
+    private const int ProbeTimeoutMs = 10_000;
+
+    /// <summary>单张截图允许的最大字节数：超过就整次失败，而不是把几十 MB 塞进上下文。</summary>
+    private const long MaxImageBytes = 8L * 1024 * 1024;
 
     private readonly MailOptions _options;
     private readonly ILogger _logger;
     private readonly string _scriptPath;
+
+    /// <summary>临时目录根（每次调用一个子目录，跑完删掉）。</summary>
+    private readonly string _tempRoot;
+
+    /// <summary>
+    /// 渲染并发闸（默认 1）。每个调用都要起一个 Chromium，「并发 1」是 8 GB 机器上的硬要求
+    /// （方案 §4/B3 风险表：渲染吃内存 → 并发 1）。
+    /// </summary>
+    private readonly SemaphoreSlim _gate;
+
+    /// <summary>惰性体检：构造时不 spawn，避免首次装配 agent 池时被 <c>node --version</c> 卡住。</summary>
+    private readonly Lazy<(bool Available, string Reason)> _probe;
 
     public MailRenderService(MailOptions options, ILogger logger)
     {
@@ -44,15 +59,15 @@ public sealed class MailRenderService : IMailRenderer
         _logger = logger;
         _scriptPath = Path.GetFullPath(options.RenderScriptPath);
         _tempRoot = Path.GetFullPath(options.RenderTempDir);
-
-        (IsAvailable, UnavailableReason) = Probe();
+        _gate = new SemaphoreSlim(Math.Clamp(options.RenderMaxConcurrent, 1, 4));
+        _probe = new Lazy<(bool Available, string Reason)>(Probe, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
-    /// <summary>渲染是否可用（脚本 + Node 都能用）。</summary>
-    public bool IsAvailable { get; }
+    /// <summary>渲染是否可用（脚本 + Node 都能用）。首次读取时才真正体检。</summary>
+    public bool IsAvailable => _probe.Value.Available;
 
     /// <summary>不可用的人话原因；可用时为空串。</summary>
-    public string UnavailableReason { get; }
+    public string UnavailableReason => _probe.Value.Reason;
 
     /// <summary>
     /// 把 HTML 渲染成 JPEG 图片。
@@ -61,6 +76,7 @@ public sealed class MailRenderService : IMailRenderer
     /// <param name="segments">true = 按高度切段（最多 <see cref="MailOptions.RenderMaxImages"/> 张）。</param>
     /// <param name="ct">取消令牌。</param>
     /// <exception cref="InvalidOperationException">渲染器不可用，或外置脚本回报失败。</exception>
+    /// <exception cref="OperationCanceledException">调用方取消（不是渲染失败）。</exception>
     public async Task<RenderedMail> RenderAsync(string html, bool segments, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(html);
@@ -70,23 +86,26 @@ public sealed class MailRenderService : IMailRenderer
             throw new InvalidOperationException(UnavailableReason);
         }
 
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         var workDir = Path.Combine(_tempRoot, Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(workDir);
 
         try
         {
+            Directory.CreateDirectory(workDir);
+
             var htmlPath = Path.Combine(workDir, "mail.html");
             await File.WriteAllTextAsync(htmlPath, html, new UTF8Encoding(false), ct).ConfigureAwait(false);
 
             var outputDir = Path.Combine(workDir, "out");
             var json = await RunScriptAsync(htmlPath, outputDir, workDir, segments, ct).ConfigureAwait(false);
 
-            return await ParseResultAsync(json, ct).ConfigureAwait(false);
+            return await ParseResultAsync(json, outputDir, ct).ConfigureAwait(false);
         }
         finally
         {
             // 截图是中间产物：转成内存字节后就没用了。留着只会让服务器上堆满垃圾。
             TryDeleteDirectory(workDir);
+            _gate.Release();
         }
     }
 
@@ -126,9 +145,6 @@ public sealed class MailRenderService : IMailRenderer
             return (false, $"找不到可用的 Node（{_options.RenderNodePath}）：{ex.Message}");
         }
     }
-
-    /// <summary>探测 node 的超时（毫秒）：只是问一句版本号，慢成这样就是坏了。</summary>
-    private const int ProbeTimeoutMs = 10_000;
 
     /// <summary>跑外置脚本，返回它打到 stdout 的那行 JSON。</summary>
     private async Task<string> RunScriptAsync(
@@ -177,6 +193,14 @@ public sealed class MailRenderService : IMailRenderer
         {
             await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // 调用方取消 ≠ 渲染失败：必须原样往上抛 OCE（规范 §5），
+            // 否则上层那个 `catch (OperationCanceledException) { throw; }` 变成死代码，
+            // 模型还会拿到一句"渲染超时"照着自己编理由。
+            TryKill(process);
+            throw;
+        }
         catch (OperationCanceledException)
         {
             TryKill(process);
@@ -199,7 +223,10 @@ public sealed class MailRenderService : IMailRenderer
     }
 
     /// <summary>解析脚本的 JSON 输出并读回图片字节。</summary>
-    private async Task<RenderedMail> ParseResultAsync(string json, CancellationToken ct)
+    /// <param name="json">脚本 stdout 的那一行。</param>
+    /// <param name="outputDir">本次调用的输出目录：**只允许读它里面的文件**。</param>
+    /// <param name="ct">取消令牌。</param>
+    private async Task<RenderedMail> ParseResultAsync(string json, string outputDir, CancellationToken ct)
     {
         JsonDocument document;
         try
@@ -239,24 +266,43 @@ public sealed class MailRenderService : IMailRenderer
             if (root.TryGetProperty("images", out var imagesNode) && imagesNode.ValueKind == JsonValueKind.Array)
             {
                 var total = imagesNode.GetArrayLength();
+                var safeRoot = Path.GetFullPath(outputDir) + Path.DirectorySeparatorChar;
+
                 foreach (var item in imagesNode.EnumerateArray())
                 {
                     var path = item.TryGetProperty("path", out var pathNode) ? pathNode.GetString() : null;
-                    if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    if (string.IsNullOrWhiteSpace(path))
                     {
                         continue;
+                    }
+
+                    // 输出目录之外的文件一律不读：脚本是我们自己的，但"读它随手写的任意路径"
+                    // 这个口子不该留（脚本被替换 / 被改坏时，第一个后果就是读走别的文件）。
+                    var fullPath = Path.GetFullPath(path);
+                    if (!fullPath.StartsWith(safeRoot, StringComparison.OrdinalIgnoreCase)
+                        || !File.Exists(fullPath))
+                    {
+                        _logger.Warning("渲染脚本给了一个非法图片路径（已忽略）：{Path}", path);
+                        continue;
+                    }
+
+                    var info = new FileInfo(fullPath);
+                    if (info.Length > MaxImageBytes)
+                    {
+                        throw new InvalidOperationException(
+                            $"渲染产出的图片过大（{info.Length} 字节，单张上限 {MaxImageBytes}）。");
                     }
 
                     var index = item.TryGetProperty("index", out var indexNode) && indexNode.TryGetInt32(out var parsedIndex)
                         ? parsedIndex
                         : images.Count;
 
-                    var bytes = await File.ReadAllBytesAsync(path, ct).ConfigureAwait(false);
+                    var bytes = await File.ReadAllBytesAsync(fullPath, ct).ConfigureAwait(false);
                     images.Add(new MailRenderImage(
                         index,
                         bytes,
                         "image/jpeg",
-                        DescribeSegment(index, total, item)));
+                        DescribeSegment(index, total, truncated, item)));
                 }
             }
 
@@ -270,16 +316,29 @@ public sealed class MailRenderService : IMailRenderer
     }
 
     /// <summary>给每张图一句位置说明（模型要能说"第 2 张"）。</summary>
-    private static string DescribeSegment(int index, int total, JsonElement item)
+    /// <param name="index">第几张（从 0）。</param>
+    /// <param name="total">本次一共几张。</param>
+    /// <param name="truncated">整页是否被上限截断（分段之外的还有内容没给）。</param>
+    /// <param name="item">脚本给的这张图元素（取 height）。</param>
+    /// <remarks>
+    /// ⚠️ 「只有一张」不等于「整封邮件」：`segments=false` 时就是一张，而它只覆盖页面顶部
+    /// 1400px。标签说"整封邮件"、note 又说"只给了前几段"，模型收到的是自相矛盾的两句。
+    /// </remarks>
+    private static string DescribeSegment(int index, int total, bool truncated, JsonElement item)
     {
         var position = index == 0 ? "顶部" : (index == total - 1 ? "末段" : "中间");
         var height = item.TryGetProperty("height", out var heightNode) && heightNode.TryGetInt32(out var h)
             ? h
             : 0;
 
-        return total == 1
-            ? "整封邮件"
-            : $"第 {index + 1}/{total} 段（{position}，{height}px 高）";
+        if (total > 1)
+        {
+            return $"第 {index + 1}/{total} 段（{position}，{height}px 高）";
+        }
+
+        return truncated
+            ? $"邮件顶部一段（{height}px 高，后面还有内容没给）"
+            : "整封邮件";
     }
 
     /// <summary>起一个外置进程（统一口径：不建窗口、不读 shell）。</summary>

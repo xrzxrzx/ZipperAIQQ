@@ -69,12 +69,19 @@ public sealed class MailImapAccess
     }
 
     /// <summary>「找账号 → 解密凭据 → 建连 → 干活 → 断开」这一整套，抽成一处。</summary>
+    /// <remarks>
+    /// ⚠️ 断开连接**必须在放闸之后**：<c>DisconnectAsync(quit:true)</c> 在服务器不响应时
+    /// 会一直等到 socket 超时，闸被占着的那段时间里所有按需读取都在排队。
+    /// 所以这里显式两步：先干完活、放闸，再带着一个很短的超时去断开。
+    /// </remarks>
     private async Task<T> WithSessionAsync<T>(
         string accountId,
         Func<IImapSession, CancellationToken, Task<T>> action,
         CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
+
+        IImapSession? session = null;
         try
         {
             var account = await FindAccountAsync(accountId, ct).ConfigureAwait(false);
@@ -86,7 +93,7 @@ public sealed class MailImapAccess
                     "该账号的授权码无法解密（主密钥可能已变更），请在客户端重新录入授权码。");
             }
 
-            await using var session = _sessions.Create();
+            session = _sessions.Create();
             await session.ConnectAsync(account, credential, ct).ConfigureAwait(false);
 
             return await action(session, ct).ConfigureAwait(false);
@@ -94,6 +101,37 @@ public sealed class MailImapAccess
         finally
         {
             _gate.Release();
+            await CloseQuietlyAsync(session).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>断开并释放会话：**带超时**，且任何失败都只记 Debug（不污染调用方结果）。</summary>
+    private async Task CloseQuietlyAsync(IImapSession? session)
+    {
+        if (session is null)
+        {
+            return;
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            await session.DisconnectAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug(ex, "按需读邮件：断开 IMAP 连接失败（忽略）");
+        }
+        finally
+        {
+            try
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug(ex, "按需读邮件：释放 IMAP 会话失败（忽略）");
+            }
         }
     }
 

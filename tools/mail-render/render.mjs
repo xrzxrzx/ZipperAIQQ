@@ -43,6 +43,12 @@ const MAX_SEGMENT_HEIGHT = 4000;
  */
 const MAX_VIEWPORT_HEIGHT = 16000;
 
+/**
+ * 视口宽度上限：与高度同理 —— 邮件 HTML 常写死 `width:1200px`，视口窄于页面时
+ * body 盒会超出视口，clip 的右半边就落在结果图外面。
+ */
+const MAX_VIEWPORT_WIDTH = 2400;
+
 const options = parseArgs(process.argv.slice(2));
 
 main()
@@ -107,9 +113,12 @@ async function main() {
     const segments = planSegments(coveredHeight, options.maxImages, options.segmentHeight);
 
     // 撑视口：让每个 clip 都落在「结果图」之内（见 MAX_VIEWPORT_HEIGHT 的说明）。
+    // 宽度也要撑：邮件 HTML 常写死 width:1200px，视口只有 1000 时 body 盒会超出视口，
+    // 于是 clip 的右半边落在结果图外面 —— 和高度是同一类坑。
     const lastSegment = segments[segments.length - 1];
     const viewportHeight = Math.max(1, Math.min(coveredHeight, lastSegment.y + lastSegment.height));
-    await page.setViewportSize({ width: options.maxWidth, height: viewportHeight });
+    const viewportWidth = Math.min(Math.max(fullWidth, options.maxWidth), MAX_VIEWPORT_WIDTH);
+    await page.setViewportSize({ width: viewportWidth, height: viewportHeight });
 
     await mkdir(options.out, { recursive: true });
 
@@ -121,7 +130,8 @@ async function main() {
         clip: {
           x: 0,
           y: segment.y,
-          width: fullWidth,
+          // 再夹一次宽度：页面比视口还宽（超宽表）时，越界部分不该让整次渲染报错
+          width: Math.min(fullWidth, viewportWidth),
           height: segment.height,
         },
       });
@@ -131,7 +141,7 @@ async function main() {
       images.push({
         path: file,
         index: segment.index,
-        width: fullWidth,
+        width: Math.min(fullWidth, viewportWidth),
         height: segment.height,
         bytes: buffer.length,
       });
