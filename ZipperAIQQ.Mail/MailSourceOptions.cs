@@ -18,6 +18,15 @@ public sealed class MailSourceOptions
     /// <summary>正文最大字符数（默认 20000，超出截断）。</summary>
     public int MaxBodyChars { get; init; } = 20000;
 
+    /// <summary>
+    /// HTML 正文的最大字符数（默认 262144 ≈ 256 KB，超出截断）。
+    /// </summary>
+    /// <remarks>
+    /// 比 <see cref="MaxBodyChars"/> 宽得多：这是**渲染用**的原文，不是喂模型的文本 ——
+    /// 一张内联 base64 图片就几十 KB，按 2 万字切会把版式切烂。
+    /// </remarks>
+    public int MaxHtmlChars { get; init; } = 262_144;
+
     /// <summary>轮询间隔（秒），兜底不小于 1 秒，避免配置成 0 时把 CPU 转满。</summary>
     internal TimeSpan PollInterval => TimeSpan.FromSeconds(Math.Max(1, PollIntervalSeconds));
 
@@ -41,7 +50,23 @@ public sealed class MailSourceOptions
             return string.Empty;
         }
 
-        var max = MaxBodyChars;
+        return Truncate(text, MaxBodyChars);
+    }
+
+    /// <summary>把 HTML 正文截断到 <see cref="MaxHtmlChars"/>（同样不切断代理对）。</summary>
+    internal string? TruncateHtml(string? html)
+    {
+        if (string.IsNullOrEmpty(html))
+        {
+            return null;
+        }
+
+        return Truncate(html, MaxHtmlChars);
+    }
+
+    /// <summary>按字符上限截断，**且不切断代理对**（见 <see cref="TruncateBody"/> 的说明）。</summary>
+    private static string Truncate(string text, int max)
+    {
         if (max <= 0 || text.Length <= max)
         {
             return text;

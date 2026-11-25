@@ -32,6 +32,19 @@ public interface IMailRepository
     /// <summary>列出邮件（新的在前）。<paramref name="accountId"/> 为空 = 全部账号。</summary>
     Task<IReadOnlyList<StoredMail>> ListAsync(string? accountId, int limit, CancellationToken ct = default);
 
+    /// <summary>
+    /// 按关键词找邮件（主题 / 发件人 / 正文做子串匹配，新的在前）。
+    /// </summary>
+    /// <remarks>
+    /// 存在的理由：模型手上的引用是「主人嘴里那封邮件」（"银行那封"），不是主键。
+    /// 让它先按关键词找到候选、再用主键做渲染 / 读原文，比逼它记数字靠谱。
+    /// </remarks>
+    Task<IReadOnlyList<StoredMail>> SearchAsync(
+        string? accountId,
+        string keyword,
+        int limit,
+        CancellationToken ct = default);
+
     /// <summary>按主键取一封（含摘要）。</summary>
     Task<StoredMail?> GetAsync(long id, CancellationToken ct = default);
 

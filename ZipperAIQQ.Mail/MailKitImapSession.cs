@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using System.Text.RegularExpressions;
 using MailKit;
 using MailKit.Net.Imap;
@@ -33,6 +34,9 @@ public sealed class MailKitImapSession : IImapSession
 {
     /// <summary>收信文件夹（本期只收 INBOX，设计 §5.2）。</summary>
     private const string InboxFolder = "INBOX";
+
+    /// <summary>原文读取时头部文本的上限（字符）：Received 链能堆几十层，全抄进上下文纯烧钱。</summary>
+    private const int MaxRawHeaderChars = 8000;
 
     /// <summary>必须在认证前发 <c>ID</c> 的邮箱域名（网易系）。</summary>
     private static readonly string[] IdentifyRequiredDomains =
@@ -175,11 +179,102 @@ public sealed class MailKitImapSession : IImapSession
                 continue;
             }
 
-            var body = await ReadBodyTextAsync(folder, summary, uid, ct).ConfigureAwait(false);
-            messages.Add(MapMessage(summary, uid, body));
+            var (bodyText, bodyHtml) = await ReadBodyAsync(folder, summary, uid, ct).ConfigureAwait(false);
+            messages.Add(MapMessage(summary, uid, bodyText, bodyHtml));
         }
 
         return messages;
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> GetHtmlAsync(long uid, int maxChars, CancellationToken ct)
+    {
+        var folder = RequireFolder();
+        var id = ToUniqueId(uid);
+
+        var structure = await GetStructureAsync(folder, id, ct).ConfigureAwait(false);
+        var htmlPart = FindHtmlPart(structure);
+        if (htmlPart is null)
+        {
+            return null;
+        }
+
+        var entity = await folder.GetBodyPartAsync(id, htmlPart, ct).ConfigureAwait(false);
+        var html = ExtractText(entity);
+        if (string.IsNullOrEmpty(html))
+        {
+            return string.Empty;
+        }
+
+        return maxChars > 0 && html.Length > maxChars ? html[..SafeCut(html, maxChars)] : html;
+    }
+
+    /// <inheritdoc />
+    public async Task<MailRawContent> GetRawAsync(long uid, int maxChars, CancellationToken ct)
+    {
+        var folder = RequireFolder();
+        var id = ToUniqueId(uid);
+
+        // 头：**全量**取（Received 链是排查伪造发件人的关键证据），但整体也给个上限 ——
+        // 有些垃圾邮件堆了几十层 Received，逐层抄进上下文纯属烧钱。
+        var headerList = await folder.GetHeadersAsync(id, ct).ConfigureAwait(false);
+        var headers = new StringBuilder();
+        var mime = string.Empty;
+
+        foreach (var header in headerList)
+        {
+            if (header.Id == HeaderId.ContentType && string.IsNullOrEmpty(mime))
+            {
+                mime = header.Value ?? string.Empty;
+            }
+
+            if (headers.Length >= MaxRawHeaderChars)
+            {
+                headers.AppendLine("…（头过长，已截断）");
+                break;
+            }
+
+            headers.Append(header.Field).Append(": ").AppendLine(header.Value);
+        }
+
+        // 正文：只取**文本部分**（text/plain、text/html），附件一个字节都不下 ——
+        // 30 MB 的附件邮件整封下载会把内存顶上去了（服务端只有 8 GB）。
+        var structure = await GetStructureAsync(folder, id, ct).ConfigureAwait(false);
+        var parts = TextParts(structure)
+            .OrderBy(part => part.IsHtml ? 1 : 0) // 纯文本在前，HTML 源文本在后
+            .ToList();
+
+        var body = new StringBuilder();
+        var truncated = false;
+
+        foreach (var part in parts)
+        {
+            if (body.Length >= maxChars)
+            {
+                truncated = true;
+                break;
+            }
+
+            var entity = await folder.GetBodyPartAsync(id, part, ct).ConfigureAwait(false);
+            var text = ExtractText(entity);
+            if (string.IsNullOrEmpty(text))
+            {
+                continue;
+            }
+
+            var label = part.IsHtml ? "[text/html 源文本]" : "[text/plain]";
+            var remaining = maxChars - body.Length;
+            if (text.Length > remaining)
+            {
+                body.AppendLine(label).AppendLine(text[..SafeCut(text, remaining)]);
+                truncated = true;
+                break;
+            }
+
+            body.AppendLine(label).AppendLine(text);
+        }
+
+        return new MailRawContent(mime, headers.ToString().TrimEnd(), body.ToString().TrimEnd(), truncated);
     }
 
     /// <inheritdoc />
@@ -256,34 +351,40 @@ public sealed class MailKitImapSession : IImapSession
         return all.Count == 0 ? 0 : (long)all[all.Count - 1].Id;
     }
 
-    /// <summary>取正文：优先纯文本，只有 HTML 就剥离；都没有返回空串。</summary>
-    private async Task<string> ReadBodyTextAsync(
+    /// <summary>取正文：优先纯文本；同时把 HTML 原文带回来（按需渲染用）。</summary>
+    /// <remarks>
+    /// 两个部分**各取一次**而不是"有纯文本就不看 HTML"：渲染要的是 HTML 版式，
+    /// 而纯文本那份是餵模型的。163 的典型邮件两个部分都在。
+    /// </remarks>
+    private async Task<(string Text, string? Html)> ReadBodyAsync(
         IMailFolder folder,
         IMessageSummary summary,
         UniqueId uid,
         CancellationToken ct)
     {
-        var isPlainText = summary.TextBody is not null;
-        var part = summary.TextBody ?? summary.HtmlBody;
-        if (part is null)
+        string? plain = null;
+        string? html = null;
+
+        if (summary.TextBody is { } textPart)
         {
-            return string.Empty;
+            var entity = await folder.GetBodyPartAsync(uid, textPart, ct).ConfigureAwait(false);
+            plain = ExtractText(entity);
         }
 
-        var entity = await folder.GetBodyPartAsync(uid, part, ct).ConfigureAwait(false);
-
-        return entity switch
+        if (summary.HtmlBody is { } htmlPart)
         {
-            TextPart text when isPlainText => text.Text ?? string.Empty,
-            TextPart text => HtmlToText(text.Text ?? string.Empty),
-            // rfc822 嵌套邮件（转发成附件那种）：取内层正文，仍然不碰它的附件。
-            MessagePart nested => nested.Message?.TextBody ?? string.Empty,
-            _ => string.Empty,
-        };
+            var entity = await folder.GetBodyPartAsync(uid, htmlPart, ct).ConfigureAwait(false);
+            html = ExtractText(entity);
+        }
+
+        // 没有纯文本部分时，正文只能由 HTML 剥离而来（既有口径，保持不变）。
+        var text = plain ?? (html is null ? string.Empty : HtmlToText(html));
+        return (text, string.IsNullOrEmpty(html) ? null : html);
     }
 
     /// <summary>把 <see cref="IMessageSummary"/> 映射成 <see cref="ImapMessage"/>。</summary>
-    private static ImapMessage MapMessage(IMessageSummary summary, UniqueId uid, string body)
+    private static ImapMessage MapMessage(
+        IMessageSummary summary, UniqueId uid, string body, string? html)
     {
         var envelope = summary.Envelope;
         var from = envelope?.From.FirstOrDefault();
@@ -309,7 +410,10 @@ public sealed class MailKitImapSession : IImapSession
             FromName: (from as MailboxAddress)?.Name,
             BodyText: body,
             HasAttachments: summary.Attachments.Any(),
-            SentAt: sentAt);
+            SentAt: sentAt)
+        {
+            BodyHtml = html,
+        };
     }
 
     /// <summary>该主机是否要求认证前发 IMAP <c>ID</c>（网易系）。</summary>
@@ -362,6 +466,92 @@ public sealed class MailKitImapSession : IImapSession
     /// <summary>取已打开的收件箱；未连接时是调用方用错了（显式失败，别静默空转）。</summary>
     private IMailFolder RequireFolder() =>
         _folder ?? throw new InvalidOperationException("IMAP 会话尚未连接：请先调用 ConnectAsync。");
+
+    /// <summary>Uid 转 <see cref="UniqueId"/>：越界（uint 之外）说明库里的值坏了，直接拒。</summary>
+    private static UniqueId ToUniqueId(long uid)
+    {
+        if (uid is <= 0 or > uint.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(uid), uid, "IMAP UID 超出 uint 范围，无法定位邮件。");
+        }
+
+        return new UniqueId((uint)uid);
+    }
+
+    /// <summary>
+    /// 取单封邮件的 MIME 结构树（按需读取用：先看结构，才知道正文在哪一层）。
+    /// </summary>
+    /// <remarks>
+    /// 用 <c>Fetch(uid, BodyStructure)</c> 而不是某个 <c>GetBodyStructure</c>：
+    /// MailKit 的 <see cref="IMailFolder"/> 上只有 fetch 这条口子（消息概览里那个
+    /// <see cref="IMessageSummary.Body"/> 就是这么来的）。结构体很小，不涉及正文下载。
+    /// </remarks>
+    private static async Task<BodyPart?> GetStructureAsync(
+        IMailFolder folder, UniqueId uid, CancellationToken ct)
+    {
+        var summaries = await folder
+            .FetchAsync([uid], MessageSummaryItems.BodyStructure, ct)
+            .ConfigureAwait(false);
+
+        return summaries.Count == 0 ? null : summaries[0].Body;
+    }
+
+    /// <summary>在一棵 body 结构树里找 <c>text/html</c> 部分（广度上找第一个）。</summary>
+    private static BodyPartText? FindHtmlPart(BodyPart? structure)
+    {
+        foreach (var part in TextParts(structure))
+        {
+            if (part.IsHtml)
+            {
+                return part;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>递归列出所有文本部分（<c>text/plain</c> + <c>text/html</c>），跳过附件。</summary>
+    private static IEnumerable<BodyPartText> TextParts(BodyPart? part)
+    {
+        switch (part)
+        {
+            case BodyPartText text:
+                yield return text;
+                break;
+
+            case BodyPartMultipart multipart:
+                foreach (var child in multipart.BodyParts)
+                {
+                    foreach (var nested in TextParts(child))
+                    {
+                        yield return nested;
+                    }
+                }
+
+                break;
+
+            // rfc822 嵌套（转发成附件的那种）：正文在内层，仍然不碰它的附件。
+            case BodyPartMessage message:
+                foreach (var nested in TextParts(message.Body))
+                {
+                    yield return nested;
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>从取回的实体里拿文本；嵌套邮件取内层纯文本。</summary>
+    private static string? ExtractText(MimeEntity entity) => entity switch
+    {
+        TextPart text => text.Text ?? string.Empty,
+        MessagePart nested => nested.Message?.TextBody,
+        _ => null,
+    };
+
+    /// <summary>安全截断位置：落点正好在高代理上时退一格（见 <see cref="HtmlToText"/> 上游的说明）。</summary>
+    private static int SafeCut(string text, int max) =>
+        max > 0 && max < text.Length && char.IsHighSurrogate(text[max - 1]) ? max - 1 : max;
 }
 
 /// <summary>

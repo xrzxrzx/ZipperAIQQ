@@ -296,6 +296,63 @@ public sealed class MailAccountSessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SyncOnceAsync_HtmlBodyAndUid_FlowIntoEventAndDatabase()
+    {
+        // B3：HTML 原文与 UID 是「按需渲染 / 读原文」的定位与素材，必须在收信那一刻留底
+        var sentAt = DateTimeOffset.Now.AddDays(-1);
+        var message = Message(
+            42,
+            "<html@example.com>",
+            subject: "带版式的邮件",
+            sentAt: sentAt,
+            body: "请查收",
+            bodyHtml: "<p>按钮：<b>立即验证</b></p>");
+
+        _scripts["acc-a"] = new SessionScript { MaxUid = 42, Always = [message] };
+        var account = Account("acc-a");
+        await _repo.UpsertAccountAsync(account);
+
+        var (session, events) = NewSession(account);
+        await using var sessionScope = session;
+
+        await session.SyncOnceAsync(CancellationToken.None);
+
+        var mail = Assert.Single(Drain(events));
+        Assert.Equal("<p>按钮：<b>立即验证</b></p>", mail.BodyHtml);
+        Assert.Equal(42, mail.Uid);
+
+        // 落库那一份也要在：渲染发生在收信之后很久，只靠事件内存是不够的
+        var stored = Assert.Single(await _repo.ListAsync("acc-a", 10));
+        Assert.Equal("<p>按钮：<b>立即验证</b></p>", stored.BodyHtml);
+        Assert.Equal(42, stored.Uid);
+    }
+
+    [Fact]
+    public async Task SyncOnceAsync_LongHtml_TruncatedByMaxHtmlChars()
+    {
+        // HTML 的截断上限与「喂模型的正文」分开：按 2 万字切会把版式切烂
+        var message = Message(1, "<long-html@example.com>", bodyHtml: "<p>0123456789</p>");
+        _scripts["acc-a"] = new SessionScript { MaxUid = 1, Always = [message] };
+
+        var account = Account("acc-a");
+        await _repo.UpsertAccountAsync(account);
+
+        var (session, events) = NewSession(account, options: new MailSourceOptions
+        {
+            InitialDays = 7,
+            PollIntervalSeconds = 60,
+            MaxBodyChars = 20000,
+            MaxHtmlChars = 8,
+        });
+        await using var sessionScope = session;
+
+        await session.SyncOnceAsync(CancellationToken.None);
+
+        var mail = Assert.Single(Drain(events));
+        Assert.Equal("<p>01234", mail.BodyHtml);
+    }
+
+    [Fact]
     public async Task ReloadAsync_AccountAddedAndRemoved_ConnectsNewAndStopsRemoved()
     {
         // Arrange：先只有 A
@@ -386,7 +443,8 @@ public sealed class MailAccountSessionTests : IAsyncLifetime
         string subject = "测试邮件",
         DateTimeOffset? sentAt = null,
         string body = "正文",
-        bool hasAttachments = false) => new(
+        bool hasAttachments = false,
+        string? bodyHtml = null) => new(
             Uid: uid,
             MessageId: messageId ?? $"<msg-{uid}@example.com>",
             Subject: subject,
@@ -394,7 +452,10 @@ public sealed class MailAccountSessionTests : IAsyncLifetime
             FromName: "发件人",
             BodyText: body,
             HasAttachments: hasAttachments,
-            SentAt: sentAt ?? DateTimeOffset.UtcNow);
+            SentAt: sentAt ?? DateTimeOffset.UtcNow)
+        {
+            BodyHtml = bodyHtml,
+        };
 
     /// <summary>按事件形状落库一封（用于制造「已存在」）。</summary>
     private static IncomingMail StoredMail(string accountId, ImapMessage message) => new()
@@ -599,6 +660,13 @@ public sealed class MailAccountSessionTests : IAsyncLifetime
             return Task.CompletedTask;
         }
 
+        /// <summary>按需读 HTML：本组用例只跑收信链路，这里固定「没有 HTML」。</summary>
+        public Task<string?> GetHtmlAsync(long uid, int maxChars, CancellationToken ct) =>
+            Task.FromResult<string?>(null);
+
+        /// <summary>按需读原文：同上，收信链路不涉及。</summary>
+        public Task<MailRawContent> GetRawAsync(long uid, int maxChars, CancellationToken ct) =>
+            Task.FromResult(new MailRawContent(string.Empty, string.Empty, string.Empty, false));
         public ValueTask DisposeAsync()
         {
             Disposed = true;

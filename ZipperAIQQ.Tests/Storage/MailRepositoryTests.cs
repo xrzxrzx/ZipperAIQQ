@@ -57,7 +57,9 @@ public sealed class MailRepositoryTests : IAsyncLifetime
         string subject = "测试邮件",
         string accountId = "acc-1",
         string? messageId = null,
-        DateTimeOffset? sentAt = null)
+        DateTimeOffset? sentAt = null,
+        string? bodyHtml = null,
+        long uid = 0)
         => new()
         {
             Chat = new ChatRef { Platform = "mail", Type = ChatType.Private, Id = accountId },
@@ -69,6 +71,8 @@ public sealed class MailRepositoryTests : IAsyncLifetime
             FromAddress = "sender@example.com",
             FromName = "发件人",
             BodyText = $"{subject} 的正文",
+            BodyHtml = bodyHtml,
+            Uid = uid,
             HasAttachments = false,
         };
 
@@ -371,6 +375,81 @@ public sealed class MailRepositoryTests : IAsyncLifetime
         await _repo.MarkForwardedAsync(Array.Empty<long>());
 
         Assert.Single(await _repo.GetPendingDigestAsync(10));
+    }
+
+    // ─────────────────────────── 双通道字段（B3） ───────────────────────────
+
+    [Fact]
+    public async Task AppendAsync_KeepsBodyHtmlAndUid()
+    {
+        var id = RequireId(await _repo.AppendAsync(Mail(
+            "带 HTML 的邮件",
+            bodyHtml: "<p>按钮写着「立即验证」</p>",
+            uid: 4321)));
+
+        var mail = Assert.IsType<StoredMail>(await _repo.GetAsync(id));
+
+        Assert.Equal("<p>按钮写着「立即验证」</p>", mail.BodyHtml);
+        Assert.Equal(4321, mail.Uid);
+    }
+
+    [Fact]
+    public async Task AppendAsync_NoHtmlNoUid_StoresNull()
+    {
+        // Uid = 0 表示「来源没给 UID」：必须落 NULL，存成 0 会被后续按需读取当成真 UID 去取。
+        var id = RequireId(await _repo.AppendAsync(Mail("纯文本邮件")));
+
+        var mail = Assert.IsType<StoredMail>(await _repo.GetAsync(id));
+
+        Assert.Null(mail.BodyHtml);
+        Assert.Null(mail.Uid);
+    }
+
+    [Fact]
+    public async Task SearchAsync_MatchesSubjectSenderAndBody()
+    {
+        await _repo.AppendAsync(Mail("银行账单"));
+        await _repo.AppendAsync(Mail("订阅续费"));
+
+        var bySubject = await _repo.SearchAsync(null, "账单", 10);
+        Assert.Equal("银行账单", Assert.Single(bySubject).Subject);
+
+        var bySender = await _repo.SearchAsync(null, "sender@example.com", 10);
+        Assert.Equal(2, bySender.Count);
+
+        // 正文也参与匹配（模型常拿到的是内容片段，不是主题）
+        var byBody = await _repo.SearchAsync(null, "订阅续费 的正文", 10);
+        Assert.Single(byBody);
+    }
+
+    [Fact]
+    public async Task SearchAsync_ScopesToAccount_AndEscapesWildcards()
+    {
+        await _repo.AppendAsync(Mail("50% 折扣", accountId: "acc-1"));
+        await _repo.AppendAsync(Mail("500 元红包", accountId: "acc-2"));
+
+        // % 是 LIKE 通配符：不转义的话 "50%" 会把 "500 元红包" 一起匹配出来
+        var hits = await _repo.SearchAsync(null, "50%", 10);
+        Assert.Equal("50% 折扣", Assert.Single(hits).Subject);
+
+        var scoped = await _repo.SearchAsync("acc-2", "红包", 10);
+        Assert.Equal("500 元红包", Assert.Single(scoped).Subject);
+
+        var otherAccount = await _repo.SearchAsync("acc-1", "红包", 10);
+        Assert.Empty(otherAccount);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_Twice_KeepsNewColumnsUsable()
+    {
+        // 第二次初始化会重放 v20 的 ALTER（duplicate column）—— 不能抛，也不能把列弄丢
+        await new DatabaseInitializer(_connectionString, Logger).InitializeAsync();
+
+        var id = RequireId(await _repo.AppendAsync(Mail("二次初始化后仍能写", bodyHtml: "<b>x</b>", uid: 7)));
+        var mail = Assert.IsType<StoredMail>(await _repo.GetAsync(id));
+
+        Assert.Equal("<b>x</b>", mail.BodyHtml);
+        Assert.Equal(7, mail.Uid);
     }
 
     // ─────────────────────────── 账号 ───────────────────────────

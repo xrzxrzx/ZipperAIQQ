@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 19;
+    public const int CurrentSchemaVersion = 20;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -115,6 +115,24 @@ public sealed class DatabaseInitializer
         catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
         {
             // 已迁移过
+        }
+
+        // ── v20：邮件双通道（B3 / T3.1）──
+        // BodyHtml：HTML 正文原文。**一律写入**（有上限），否则"按需渲染"时邮件已经不在服务器上
+        //   （163 会清过期件）；旧行 NULL 表示"这封当时没存"，不等于"不是 HTML 邮件"。
+        // Uid：IMAP UID。**按需读原文 / 重取 HTML 必须靠它定位**（Message-Id 检索依赖服务器
+        //   支持 HEADER SEARCH，且历史上遇到过拿不到的服务器）；旧行 NULL = 只能靠 Message-Id 兜底。
+        foreach (var (name, ddl) in MailColumnMigrations)
+        {
+            try
+            {
+                await ExecuteAsync(conn, ddl, ct).ConfigureAwait(false);
+                _logger.Information("已应用迁移：Mails.{Column}", name);
+            }
+            catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+            {
+                // 已迁移过
+            }
         }
 
         // 版本记录必须**与真实 schema 一致**：这里每次都核对，而不是"只写一次"。
@@ -597,6 +615,8 @@ public sealed class DatabaseInitializer
             FromAddress    TEXT    NOT NULL,
             FromName       TEXT,
             BodyText       TEXT    NOT NULL,
+            BodyHtml       TEXT,
+            Uid            INTEGER,
             HasAttachments INTEGER NOT NULL,
             SentAtMs       INTEGER NOT NULL,
             ReceivedAtMs   INTEGER NOT NULL
@@ -622,4 +642,17 @@ public sealed class DatabaseInitializer
         CREATE INDEX IF NOT EXISTS IX_MailSummaries_Forwarded
             ON MailSummaries (ForwardedAtMs);
         """;
+
+    /// <summary>
+    /// v20 给 <c>Mails</c> 补的列（幂等：重复执行报 duplicate column 就跳过）。
+    /// </summary>
+    /// <remarks>
+    /// 为什么单列一个表而不是两段 try/catch：加列这件事以后还会再发生，
+    /// 一处列清单能让「这版到底加了哪些列」一眼看全，也免得复制粘贴时漏掉某个 catch。
+    /// </remarks>
+    private static readonly (string Column, string Ddl)[] MailColumnMigrations =
+    [
+        ("BodyHtml", "ALTER TABLE Mails ADD COLUMN BodyHtml TEXT;"),
+        ("Uid", "ALTER TABLE Mails ADD COLUMN Uid INTEGER;"),
+    ];
 }

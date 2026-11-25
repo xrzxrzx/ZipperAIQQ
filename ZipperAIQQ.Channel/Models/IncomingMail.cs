@@ -35,6 +35,18 @@ public sealed record IncomingMail : InboundEvent
     /// <summary>纯文本正文（HTML 已由实现层转文本，并按配置截断）。</summary>
     public required string BodyText { get; init; }
 
+    /// <summary>
+    /// HTML 正文原文（按配置截断）；不是 HTML 邮件时为 <c>null</c>。
+    /// </summary>
+    /// <remarks>
+    /// 存它是为了「按需渲染画面」（<c>mail_render</c>）：服务器上的原始邮件会被清理，
+    /// 收信那一刻不留底，以后就渲染不出来。**摘要路径不读它**（设计 §6.1 口径不变）。
+    /// </remarks>
+    public string? BodyHtml { get; init; }
+
+    /// <summary>IMAP UID（按需读原文的定位键）；非 IMAP 来源为 0。</summary>
+    public long Uid { get; init; }
+
     /// <summary>是否带附件（本期**不解析附件内容**）。</summary>
     public bool HasAttachments { get; init; }
 }

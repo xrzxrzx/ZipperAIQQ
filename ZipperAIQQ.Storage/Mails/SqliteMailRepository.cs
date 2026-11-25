@@ -37,6 +37,7 @@ public sealed class SqliteMailRepository : IMailRepository
     private const string MailSelectPrefix = """
         SELECT m.Id, m.AccountId, m.MessageId, m.Subject, m.FromAddress, m.FromName,
                m.BodyText, m.HasAttachments, m.SentAtMs, m.ReceivedAtMs,
+               m.BodyHtml, m.Uid,
                s.Summary, s.NeedsAction, s.Status, s.Error, s.UpdatedAtMs, s.ForwardedAtMs
         FROM Mails m
         LEFT JOIN MailSummaries s ON s.MailId = m.Id
@@ -80,10 +81,10 @@ public sealed class SqliteMailRepository : IMailRepository
             cmd.CommandText = """
                 INSERT INTO Mails (
                     AccountId, MessageId, Subject, FromAddress, FromName,
-                    BodyText, HasAttachments, SentAtMs, ReceivedAtMs
+                    BodyText, BodyHtml, Uid, HasAttachments, SentAtMs, ReceivedAtMs
                 ) VALUES (
                     @accountId, @messageId, @subject, @fromAddress, @fromName,
-                    @bodyText, @hasAttachments, @sentAtMs, @receivedAtMs
+                    @bodyText, @bodyHtml, @uid, @hasAttachments, @sentAtMs, @receivedAtMs
                 )
                 RETURNING Id;
                 """;
@@ -94,6 +95,9 @@ public sealed class SqliteMailRepository : IMailRepository
             cmd.Parameters.AddWithValue("@fromAddress", mail.FromAddress);
             cmd.Parameters.AddWithValue("@fromName", (object?)mail.FromName ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@bodyText", mail.BodyText);
+            cmd.Parameters.AddWithValue("@bodyHtml", (object?)mail.BodyHtml ?? DBNull.Value);
+            // Uid = 0 视为「没有 UID」（非 IMAP 来源）→ 存 NULL，别存一个会被误当真的 0
+            cmd.Parameters.AddWithValue("@uid", mail.Uid > 0 ? mail.Uid : DBNull.Value);
             cmd.Parameters.AddWithValue("@hasAttachments", mail.HasAttachments ? 1 : 0);
             cmd.Parameters.AddWithValue("@sentAtMs", mail.OccurredAt.ToUnixTimeMilliseconds());
             cmd.Parameters.AddWithValue("@receivedAtMs", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -140,6 +144,43 @@ public sealed class SqliteMailRepository : IMailRepository
                 """;
 
             cmd.Parameters.AddWithValue("@accountId", (object?)accountId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            return await ReadMailsAsync(cmd, token).ConfigureAwait(false);
+        }, ct);
+    }
+
+    public Task<IReadOnlyList<StoredMail>> SearchAsync(
+        string? accountId, string keyword, int limit, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyword);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        // LIKE 的通配符要转义：主人嘴里那句"50% 折扣"不该变成"匹配任意"。
+        // ESCAPE 用反斜杠，三个符号各转一次（顺序不能反：先转义符本身）。
+        var pattern = "%" + keyword
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal) + "%";
+
+        return _db.ReadAsync<IReadOnlyList<StoredMail>>(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            // 正文也参与匹配：模型常拿到的是内容片段（"那封写着验证码的"），不是主题。
+            // 只搜最近 limit 条由 ORDER BY + LIMIT 保证，不会扫全表返回一堆老邮件。
+            cmd.CommandText = MailSelectPrefix + """
+
+                WHERE (@accountId IS NULL OR m.AccountId = @accountId)
+                  AND (m.Subject LIKE @pattern ESCAPE '\'
+                    OR m.FromAddress LIKE @pattern ESCAPE '\'
+                    OR COALESCE(m.FromName, '') LIKE @pattern ESCAPE '\'
+                    OR m.BodyText LIKE @pattern ESCAPE '\')
+                ORDER BY m.SentAtMs DESC, m.Id DESC
+                LIMIT @limit;
+                """;
+
+            cmd.Parameters.AddWithValue("@accountId", (object?)accountId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@pattern", pattern);
             cmd.Parameters.AddWithValue("@limit", limit);
 
             return await ReadMailsAsync(cmd, token).ConfigureAwait(false);
@@ -484,17 +525,17 @@ public sealed class SqliteMailRepository : IMailRepository
 
     private static StoredMail ReadMail(SqliteDataReader reader)
     {
-        var summary = reader.IsDBNull(10)
+        var summary = reader.IsDBNull(12)
             ? null
             : new MailSummaryRow(
-                Text: reader.GetString(10),
-                NeedsAction: reader.GetInt32(11) != 0,
-                Status: reader.GetString(12),
-                Error: reader.IsDBNull(13) ? null : reader.GetString(13),
-                UpdatedAt: DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(14)),
-                ForwardedAt: reader.IsDBNull(15)
+                Text: reader.GetString(12),
+                NeedsAction: reader.GetInt32(13) != 0,
+                Status: reader.GetString(14),
+                Error: reader.IsDBNull(15) ? null : reader.GetString(15),
+                UpdatedAt: DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(16)),
+                ForwardedAt: reader.IsDBNull(17)
                     ? null
-                    : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(15)));
+                    : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(17)));
 
         return new StoredMail(
             Id: reader.GetInt64(0),
@@ -507,7 +548,11 @@ public sealed class SqliteMailRepository : IMailRepository
             HasAttachments: reader.GetInt32(7) != 0,
             SentAt: DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(8)),
             ReceivedAt: DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(9)),
-            Summary: summary);
+            Summary: summary)
+        {
+            BodyHtml = reader.IsDBNull(10) ? null : reader.GetString(10),
+            Uid = reader.IsDBNull(11) ? null : reader.GetInt64(11),
+        };
     }
 
     private static MailAccount ReadAccount(SqliteDataReader reader) => new()

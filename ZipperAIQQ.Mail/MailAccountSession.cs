@@ -346,6 +346,10 @@ public sealed class MailAccountSession : IAsyncDisposable
             FromAddress = message.FromAddress ?? string.Empty,
             FromName = message.FromName,
             BodyText = _options.TruncateBody(message.BodyText),
+            // HTML 原文也留底（按需渲染用）：服务器会清过期件，收信那一刻不留就再也取不到。
+            // 摘要路径不受影响 —— 它读的是 BodyText。
+            BodyHtml = _options.TruncateHtml(message.BodyHtml),
+            Uid = message.Uid,
             HasAttachments = message.HasAttachments,
         };
     }

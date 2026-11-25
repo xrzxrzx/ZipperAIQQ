@@ -34,7 +34,27 @@ public sealed record ImapMessage(
     string? FromName,
     string BodyText,
     bool HasAttachments,
-    DateTimeOffset SentAt);
+    DateTimeOffset SentAt)
+{
+    /// <summary>
+    /// HTML 正文原文；不是 HTML 邮件时为 <c>null</c>。
+    /// </summary>
+    /// <remarks>
+    /// 用 init 属性而不是构造参数：位置记录多一个形参，所有 <c>new ImapMessage(...)</c>
+    /// （单测夹具、假会话）都得跟着改，而这只是「多带回来一份原始正文」。
+    /// 截断归 <see cref="MailSourceOptions.MaxHtmlChars"/> 管，与会话实现无关。
+    /// </remarks>
+    public string? BodyHtml { get; init; }
+}
+
+/// <summary>
+/// 一封邮件的**原文**（头 + 正文源文本；不含附件内容）。
+/// </summary>
+/// <param name="Mime">顶层 <c>Content-Type</c>（原始值，可能带 charset）；取不到时为空串。</param>
+/// <param name="Headers">完整头块（每个字段一行，保留 <c>Received</c> 链）。</param>
+/// <param name="Body">可读正文源文本：<c>text/plain</c> 在前、<c>text/html</c> 源文本在后。</param>
+/// <param name="Truncated">是否因为上限被截断（模型必须知道「后面还有，只是没给它」）。</param>
+public sealed record MailRawContent(string Mime, string Headers, string Body, bool Truncated);
 
 /// <summary>
 /// 一个 IMAP 连接会话（**每账号一个**，内部串行操作）。
@@ -75,6 +95,23 @@ public interface IImapSession : IAsyncDisposable
     /// <param name="limit">本次最多返回多少封（分页）。</param>
     /// <param name="ct">取消令牌。</param>
     Task<IReadOnlyList<ImapMessage>> FetchSinceAsync(long afterUid, int limit, CancellationToken ct);
+
+    /// <summary>
+    /// 取某封邮件的 HTML 正文源文本（**按需**：只有 <c>mail_render</c> 会调）。
+    /// </summary>
+    /// <param name="uid">IMAP UID（落库时存下来的那个）。</param>
+    /// <param name="maxChars">字符上限；超出截断（**不切断代理对**）。</param>
+    /// <param name="ct">取消令牌。</param>
+    /// <returns>HTML 源文本；这封邮件没有 HTML 部分时返回 <c>null</c>。</returns>
+    Task<string?> GetHtmlAsync(long uid, int maxChars, CancellationToken ct);
+
+    /// <summary>
+    /// 取某封邮件的原文（头 + 正文源文本，**不下载附件内容**）。
+    /// </summary>
+    /// <param name="uid">IMAP UID。</param>
+    /// <param name="maxChars">正文的字符上限；超出截断并置 <see cref="MailRawContent.Truncated"/>。</param>
+    /// <param name="ct">取消令牌。</param>
+    Task<MailRawContent> GetRawAsync(long uid, int maxChars, CancellationToken ct);
 
     /// <summary>断开连接（幂等：未连接时直接返回）。</summary>
     Task DisconnectAsync(CancellationToken ct);
