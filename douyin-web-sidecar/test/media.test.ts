@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 // 走 `dist/`：`src/media.ts` 有相对导入，Node 的类型剥离解析不了 `./protocol.js` 这种写法；
 // 而 `dist/` 是 `npm test` 先编译出来的产物（与 `send-api.test.ts` 同一条路）。
 import {
+  framesWireChars,
   looksLikeMp4,
   MediaError,
   parseVideoDetail,
@@ -114,6 +115,22 @@ test("looksLikeMp4：认 `ftyp`，不认 HTML 错误页 / 太短的 body", () =>
   assert.equal(looksLikeMp4(mp4), true);
   assert.equal(looksLikeMp4(Buffer.from("<html>blocked</html>", "latin1")), false);
   assert.equal(looksLikeMp4(Buffer.alloc(4)), false);
+});
+
+test("framesWireChars：按 base64 字符数（= 上线字节）算，不是 JPEG 原始字节", () => {
+  // 独立审查 P0：按 raw 字节算会小看 4/3，1 MiB 单帧上限就被踩穿、服务端直接断连。
+  // 1000 个 base64 字符 = 1000 字节线上流量（base64 全 ASCII）
+  assert.equal(framesWireChars([{ jpegBase64: "A".repeat(1000) }]), 1000);
+  assert.equal(
+    framesWireChars([{ jpegBase64: "A".repeat(600) }, { jpegBase64: "B".repeat(400) }]),
+    1000,
+  );
+  assert.equal(framesWireChars([]), 0);
+
+  // 6 张、每张 150 KiB base64 ⇒ 900 KiB 线上流量，恰好顶到默认预算（900 KiB）——
+  // 而它们的 JPEG 原始字节只有 675 KiB，按 raw 算会误判成"还剩很多余量"
+  const six = Array.from({ length: 6 }, () => ({ jpegBase64: "A".repeat(150 * 1024) }));
+  assert.equal(framesWireChars(six), 900 * 1024);
 });
 
 test("withTimeout：超时抛 MediaError(page)，不超时就正常返回", async () => {

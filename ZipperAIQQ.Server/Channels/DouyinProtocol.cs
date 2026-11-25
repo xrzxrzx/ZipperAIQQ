@@ -776,7 +776,9 @@ public static class DouyinProtocol
     }
 
     /// <summary>拼一帧 <c>ping</c>（MVP 用 WS 层心跳，保留给需要应用层心跳时）。</summary>
-    public static string BuildPing() => Frame(DouyinFrameTypes.Ping, new JsonObject());    /// <summary>登录控制帧（服务端 → sidecar）：<c>login.start</c> / <c>login.logout</c>。</summary>
+    public static string BuildPing() => Frame(DouyinFrameTypes.Ping, new JsonObject());
+
+    /// <summary>登录控制帧（服务端 → sidecar）：<c>login.start</c> / <c>login.logout</c>。</summary>
     public static string BuildLoginCommand(string type) => Frame(type, new JsonObject());
 
     /// <summary>

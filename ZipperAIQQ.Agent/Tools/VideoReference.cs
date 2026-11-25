@@ -19,8 +19,11 @@ namespace ZipperAIQQ.Agent.Tools;
 /// </remarks>
 public static partial class VideoReference
 {
-    /// <summary>作品 id 的数字长度范围（实测 19 位；放宽到 8–32 只为兼容老作品）。</summary>
+    /// <summary>显式写法（`id=` / `/video/`）里的数字下限：放宽到 8 只为兼容老作品。</summary>
     private const int MinDigits = 8;
+
+    /// <summary>裸数字兜底的下限：抖音作品 id 是 19 位，8 位会把手机号/日期认成 id。</summary>
+    private const int MinBareDigits = 15;
 
     private const int MaxDigits = 32;
 
@@ -30,7 +33,9 @@ public static partial class VideoReference
     [GeneratedRegex(@"/(?:video|note|slides)/(?<id>\d{8,32})", RegexOptions.IgnoreCase)]
     private static partial Regex VideoPath();
 
-    [GeneratedRegex(@"\d{8,32}")]
+    // ③ 的兜底比 ①② 更严：嵌在普通句子里的 8 位数字多半是手机号 / 日期（20261126），
+    // 而抖音作品 id 是 19 位。只认 ≥15 位，宁可让模型改用 `[视频 id=…]` 或链接。
+    [GeneratedRegex(@"\d{15,32}")]
     private static partial Regex AnyLongNumber();
 
     /// <summary>解析引用；成功时 <paramref name="itemId"/> 是纯数字 id。</summary>
@@ -63,12 +68,12 @@ public static partial class VideoReference
             return true;
         }
 
-        // ③ 就是那串数字（允许夹在别的文字里）
+        // ③ 就是那串数字（允许夹在别的文字里）；下限 15 位见 <see cref="AnyLongNumber"/>
         var numberMatch = AnyLongNumber().Match(text);
         if (numberMatch.Success)
         {
             var candidate = numberMatch.Value;
-            if (candidate.Length is >= MinDigits and <= MaxDigits)
+            if (candidate.Length is >= MinBareDigits and <= MaxDigits)
             {
                 itemId = candidate;
                 return true;

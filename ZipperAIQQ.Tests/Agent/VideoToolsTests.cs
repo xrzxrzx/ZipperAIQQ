@@ -203,6 +203,22 @@ public sealed class VideoToolsTests
         Assert.Equal(expected, VideoTools.FormatTime(milliseconds));
     }
 
+    [Fact]
+    public void ShortenTitle_does_not_split_surrogate_pairs()
+    {
+        // 抖音文案里带 emoji：按 code unit 切会留下半个代理对，进 JSON 就是 \uFFFD
+        var title = "戒网瘾\uD83D\uDE00测试";   // 😀 = 两个码元（high + low）
+
+        // 4 个码元正好落在 emoji 的**高代理**上 ⇒ 必须退到 3
+        Assert.Equal("戒网瘾…", VideoTools.ShortenTitle(title, 4));
+
+        // 5 个码元能装下整个 emoji（high+low 都在里面）⇒ 正常截断
+        Assert.Equal("戒网瘾\uD83D\uDE00…", VideoTools.ShortenTitle(title, 5));
+
+        // 不用截就原样返回
+        Assert.Equal("短标题", VideoTools.ShortenTitle("短标题", 60));
+    }
+
     // ───────────── 工具行为 ─────────────
 
     [Fact]

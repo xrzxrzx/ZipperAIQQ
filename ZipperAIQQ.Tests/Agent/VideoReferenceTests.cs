@@ -39,10 +39,23 @@ public sealed class VideoReferenceTests
     [InlineData("15 秒的地方")]                  // 时长不是 id
     [InlineData("帮我看看这条视频")]             // 压根没给 id
     [InlineData("https://www.douyin.com/video/")] // 链接缺 id
+    [InlineData("13800138000")]                 // 手机号不是 id（裸数字下限 15 位）
+    [InlineData("订单号 20261126 查一下")]        // 8 位日期不是 id
     public void Rejects_when_no_plausible_id(string? reference)
     {
         Assert.False(VideoReference.TryParseItemId(reference, out var itemId));
         Assert.Equal(string.Empty, itemId);
+    }
+
+    [Fact]
+    public void Explicit_shapes_still_accept_shorter_ids()
+    {
+        // 显式写法（id= / /video/）放宽到 8 位：老作品可能短，而这里不存在"句子里的数字"的歧义
+        Assert.True(VideoReference.TryParseItemId("id=12345678", out var byId));
+        Assert.Equal("12345678", byId);
+
+        Assert.True(VideoReference.TryParseItemId("https://www.douyin.com/video/12345678", out var byPath));
+        Assert.Equal("12345678", byPath);
     }
 
     [Fact]

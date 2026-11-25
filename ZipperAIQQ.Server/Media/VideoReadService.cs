@@ -35,6 +35,17 @@ public sealed class VideoReadService : IVideoReader
     /// <summary>转写时长硬顶（秒）：再多就不是「看一眼视频」而是转录整部片子了。</summary>
     private const int HardMaxAudioSeconds = 600;
 
+    /// <summary>
+    /// 抽音窗口的**可用**上限（秒）。
+    /// </summary>
+    /// <remarks>
+    /// 不是拍脑袋：16 kHz 单声道一秒 32,000 字节，`/ws/channel` 单帧 1 MiB，
+    /// base64 膨胀 4/3，再留 JSON 余量 ⇒ 20 s 是安全值、21 s 顶到线。
+    /// 配成 22–60 会让**每一次转写都失败**（sidecar 回 too_large），所以这里硬夹；
+    /// 夹到了就在启动日志里说一句 —— 配置写了个做不到的数字，不能悄悄改掉。
+    /// </remarks>
+    private const int MaxAudioWindowSeconds = 21;
+
     /// <summary>ASR 本身不可用时的原因（与 <see cref="UnavailableReason"/> 区分：底座是好的，缺的是 ASR）。</summary>
     private const string AsrUnavailableReason =
         "转写不可用：DeepSeek ASR 没开或没有可用的 key（抽帧/看画面不受影响）。";
@@ -59,6 +70,13 @@ public sealed class VideoReadService : IVideoReader
         _media = media;
         _options = options;
         _logger = logger;
+
+        if (options.AudioWindowSeconds > MaxAudioWindowSeconds)
+        {
+            _logger.Warning(
+                "douyin.videoAudioWindowSeconds={Configured} 超过可用上限 {Max} 秒（1 MiB 单帧限制），已按 {Max} 秒工作",
+                options.AudioWindowSeconds, MaxAudioWindowSeconds, MaxAudioWindowSeconds);
+        }
     }
 
     /// <inheritdoc />
@@ -174,6 +192,14 @@ public sealed class VideoReadService : IVideoReader
         }
 
         var from = Math.Max(0, startMs);
+
+        // 起点已经越过视频末尾时，别算出负数再回一句「区间只有 -140000 毫秒，太短了」
+        if (total > 0 && from >= total)
+        {
+            return VideoTranscriptOutcome.Failed(
+                $"起点（{VideoTools.FormatTime(from)}）已经超过视频时长（{VideoTools.FormatTime(total)}）。");
+        }
+
         var limitMs = Math.Clamp(_options.MaxAudioSeconds, 10, HardMaxAudioSeconds) * 1000L;
         var to = endMs > from ? endMs : (total > 0 ? total : from + limitMs);
 
@@ -195,7 +221,7 @@ public sealed class VideoReadService : IVideoReader
                 $"要转写的区间只有 {to - from} 毫秒，太短了（至少 1 秒）。");
         }
 
-        var windowMs = Math.Clamp(_options.AudioWindowSeconds, 5, 60) * 1000L;
+        var windowMs = Math.Clamp(_options.AudioWindowSeconds, 5, MaxAudioWindowSeconds) * 1000L;
         var pcm = new MemoryStream();
         WavInfo? template = null;
         var reachedMs = from;

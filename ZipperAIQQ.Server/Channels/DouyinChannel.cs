@@ -1073,9 +1073,11 @@ public sealed class DouyinChannel
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(itemId);
 
+        // 与抽帧/抽音同口径：sidecar 的 timeout 管它自己的动作，服务端多等宽限的那一段，
+        // 否则服务端先超时、sidecar 随后回来的 result 落进「无人等待」被丢（白打一次平台接口）
         var payload = new System.Text.Json.Nodes.JsonObject { ["itemId"] = itemId };
         var result = await QueryAsync(
-                DouyinFrameTypes.MediaVideo, "视频详情", payload, timeoutMs, ct)
+                DouyinFrameTypes.MediaVideo, "视频详情", payload, timeoutMs + MediaGraceMs, ct)
             .ConfigureAwait(false);
 
         return DouyinProtocol.ParseMediaVideo(result.Data)

@@ -870,7 +870,7 @@ async function main(): Promise<void> {
       const mp4 = await mediaVideoBytes(itemId, page, timeoutMs, mediaVideoBudget(inFrame));
       const capture = await captureFrames(page, mp4, timesMs, {
         maxWidth,
-        maxTotalBytes: mediaBudget(inFrame),
+        maxPayloadChars: mediaBudget(inFrame),
         timeoutMs,
       });
 
@@ -910,11 +910,13 @@ async function main(): Promise<void> {
       const mp4 = await mediaVideoBytes(itemId, page, timeoutMs, mediaVideoBudget(inFrame));
       const window = await extractAudioWindow(page, itemId, mp4, startMs, endMs, timeoutMs);
 
-      // 服务端回传上限（1 MiB 单帧）：窗口切多小由**服务端**决定，这里只判它有没有按约给
-      if (window.bytes * 1.34 > mediaBudget(inFrame)) {
+      // 服务端回传上限（1 MiB 单帧）：窗口切多小由**服务端**决定，这里只判它有没有按约给。
+      // 文案要**可行动**：模型手里有 start/end，没有窗口长度这个参数（独立审查 P1-5）。
+      if (window.wavBase64.length > mediaBudget(inFrame)) {
         throw new MediaError(
           "too_large",
-          `这个音频窗口 ${window.bytes} 字节超出回传上限，请把窗口再切小一点`,
+          `这个音频窗口编码后 ${window.wavBase64.length} 字符，超出回传上限；` +
+            "请缩短转写区间（start/end）再试。",
         );
       }
 

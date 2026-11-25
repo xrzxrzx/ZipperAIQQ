@@ -53,16 +53,22 @@ test/             node:test 单测（不联网、不开浏览器）
 | 帧 | data | 说明 |
 |---|---|---|
 | `media.video` | `{requestId, itemId, timeoutMs?}` | 取视频详情（时长 / 文案 / 播放地址） |
-| `media.frames` | `{requestId, itemId, timesMs[], maxWidth?, maxPayloadBytes?, timeoutMs?}` | 按给定时间点抽帧，回 JPEG base64 |
-| `media.audio` | `{requestId, itemId, startMs, endMs, maxPayloadBytes?, timeoutMs?}` | 取一段 16 kHz 单声道 WAV（base64） |
+| `media.frames` | `{requestId, itemId, timesMs[], maxWidth?, maxPayloadBytes?, maxVideoBytes?, timeoutMs?}` | 按给定时间点抽帧，回 JPEG base64 |
+| `media.audio` | `{requestId, itemId, startMs, endMs, maxPayloadBytes?, maxVideoBytes?, timeoutMs?}` | 取一段 16 kHz 单声道 WAV（base64） |
 
 sidecar → 服务端：一律是 `result` 帧（`{requestId, ok, error, code, ...}`）。
 
+- **`maxPayloadBytes` 是「回包上限」**（默认 900 KiB < 1 MiB 单帧硬上限）。sidecar 内部按 **base64 字符数**
+  判定（base64 全 ASCII ⇒ 字符数 = 线上字节数）；按 JPEG 原始字节算会小看 4/3，1 MiB 就这么被踩穿过（独立审查 P0）。
+  抽帧超预算时会先在页面内**降一档质量重拍一次**（0.8 → 0.6），还超才报 `too_large`。
+- **`maxVideoBytes` 是「视频本体下载上限」**（硬顶 96 MiB）。下载前先看 `Content-Length`，超了直接换下一个 CDN。
 - **为什么抽音要按窗口**：`/ws/channel` 单帧上限 **1 MiB**（`WsChannelEndpoint.MaxFrameBytes`），
-  3 分钟 16 kHz 单声道 WAV 就有 5.7 MiB。窗口大小由**服务端**定（默认 20 秒），服务端自己拼回整段再交 ASR。
+  3 分钟 16 kHz 单声道 WAV 就有 5.7 MiB。窗口大小由**服务端**定（默认 20 秒，可用上限 21 秒），
+  服务端自己拼回整段再交 ASR。
 - **视频本体按 `itemId` 缓存 10 分钟**（LRU 2 条）：一条 5 分钟的视频抽音要十几个窗口，不缓存等于反复下载。
-- **页面里缓存解码结果**（`window.__zipperVideoAudio`）：第 2 个窗口起不再重新下载/解码；
-  页面重建后缓存会没，sidecar 会自动补一次带本体数据的请求（回 `needData` 的那条路）。
+- **页面里的解码缓存有界**（只留 1 条）：`decodeAudioData` 解出的是整条音轨的 Float32
+  （5 分钟 48 kHz 立体声 ≈115 MB），无界增长会把标签页顶到 OOM、连入站一起断。
+  第 2 个窗口起不再重新下载/解码；页面重建后缓存会没，sidecar 会自动补一次带本体数据的请求（回 `needData` 那条路）。
 - **抽帧/抽音的实测依据**：`docs/06-调研/抖音网页版底座实测.md` §7.3 / §7.4。
 
 

@@ -24,6 +24,17 @@ import { asRecord, num, str } from "./protocol.js";
 /** 抽帧的画质（0–1）。0.8 在 720 宽的图上肉眼无损，体积只有 0.92 的一半。 */
 const DEFAULT_JPEG_QUALITY = 0.8;
 
+/**
+ * 超预算时的降级画质。
+ *
+ * 只降这一档：真实视频（720 宽、细节多）实测 200–310 KiB/张，6 张就顶穿 1 MiB 单帧上限；
+ * 0.6 后通常回落到 120 KiB 级。再往下糊成色块，模型也认不出画面了 —— 那种时候该少给几张。
+ */
+const FALLBACK_JPEG_QUALITY = 0.6;
+
+/** 回包 JSON 里除 base64 之外的开销（requestId / atMs / 字段名 / 括号）预留字符数。 */
+const JSON_OVERHEAD_CHARS = 512;
+
 /** 解码/找帧/画图的单步超时（毫秒）。 */
 const PAGE_ACTION_TIMEOUT_MS = 30_000;
 
@@ -241,6 +252,14 @@ export async function downloadVideo(
         continue;
       }
 
+      // 先看 Content-Length：一条 300 MB 的长视频不能等整段读进内存再拒
+      // （64 MiB 的上限如果只在读完 body 后判，等于形同虚设，还可能把 2 GB 的小机顶到 OOM）
+      const declared = Number(response.headers()["content-length"] ?? "");
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        failures.push(`${hostOf(url)} → 声明 ${formatSize(declared)} 超过上限`);
+        continue;
+      }
+
       const body = await response.body();
       if (!looksLikeMp4(body)) {
         // 空 body / 错误页：继续试下一个 CDN，而不是把 HTML 当视频往下传
@@ -272,6 +291,16 @@ export async function downloadVideo(
   );
 }
 
+/**
+ * 一批帧在回包里的**字符数**（= 上线字节数，base64 全是 ASCII）。
+ *
+ * 为什么要单独一个函数：这是「会不会踩穿 `/ws/channel` 1 MiB 单帧上限」的唯一判据，
+ * 必须能被单测直接喂数字验证 —— 按 JPEG **原始字节**算会小看 4/3（独立审查 P0）。
+ */
+export function framesWireChars(shots: readonly { jpegBase64: string }[]): number {
+  return shots.reduce((sum, shot) => sum + shot.jpegBase64.length, 0);
+}
+
 /** MP4 的头部判定：`....ftyp`（第 4–7 字节）。 */
 export function looksLikeMp4(bytes: Buffer): boolean {
   return bytes.length > 12 && bytes.toString("latin1", 4, 8) === "ftyp";
@@ -289,7 +318,7 @@ export async function captureFrames(
   page: Page,
   mp4: Buffer,
   timesMs: readonly number[],
-  options: { maxWidth: number; maxTotalBytes: number; timeoutMs: number },
+  options: { maxWidth: number; maxPayloadChars: number; timeoutMs: number },
 ): Promise<FrameCapture> {
   if (timesMs.length === 0) {
     throw new MediaError("args", "抽帧时间点是空的");
@@ -299,7 +328,7 @@ export async function captureFrames(
 
   const raw = await withTimeout(
     page.evaluate(
-      async (arg: { data: string; times: number[]; maxWidth: number; quality: number }) => {
+      async (arg: { data: string; times: number[]; maxWidth: number; quality: number; qualityLow: number; budgetChars: number }) => {
         const binary = atob(arg.data);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i += 1) {
@@ -362,46 +391,66 @@ export async function captureFrames(
           }
 
           const duration = Number.isFinite(video.duration) ? video.duration : 0;
-          const shots: { atMs: number; jpegBase64: string; bytes: number }[] = [];
 
-          for (const wanted of arg.times) {
-            // 末尾留 50 ms 余量：正好 seek 到 duration 时有些解码器永远不派 seeked
-            const limit = duration > 0 ? Math.max(0, duration - 0.05) : wanted / 1000;
-            const seconds = Math.min(Math.max(0, wanted / 1000), limit);
+          // 按给定质量把全部时间点拍一遍；超预算时**在页面内**用低质量重拍一次
+          // （只重拍一次：反复降质会把画面糊成色块，而"少给几张"由上层按 count 决定）
+          const shoot = async (quality: number) => {
+            const shots: { atMs: number; jpegBase64: string; bytes: number }[] = [];
 
-            if (Math.abs(video.currentTime - seconds) > 0.005) {
-              await new Promise<void>((resolve, reject) => {
-                const timer = setTimeout(
-                  () => reject(new Error(`定位到 ${seconds.toFixed(2)} 秒超时`)),
-                  15_000,
-                );
+            for (const wanted of arg.times) {
+              // 末尾留 50 ms 余量：正好 seek 到 duration 时有些解码器永远不派 seeked
+              const limit = duration > 0 ? Math.max(0, duration - 0.05) : wanted / 1000;
+              const seconds = Math.min(Math.max(0, wanted / 1000), limit);
 
-                video.addEventListener(
-                  "seeked",
-                  () => {
-                    clearTimeout(timer);
-                    resolve();
-                  },
-                  { once: true },
-                );
+              if (Math.abs(video.currentTime - seconds) > 0.005) {
+                await new Promise<void>((resolve, reject) => {
+                  const timer = setTimeout(
+                    () => reject(new Error(`定位到 ${seconds.toFixed(2)} 秒超时`)),
+                    15_000,
+                  );
 
-                video.currentTime = seconds;
+                  video.addEventListener(
+                    "seeked",
+                    () => {
+                      clearTimeout(timer);
+                      resolve();
+                    },
+                    { once: true },
+                  );
+
+                  video.currentTime = seconds;
+                });
+              }
+
+              context.drawImage(video, 0, 0, canvas.width, canvas.height);
+              const dataUrl = canvas.toDataURL("image/jpeg", quality);
+              const comma = dataUrl.indexOf(",");
+              const jpegBase64 = comma >= 0 ? dataUrl.slice(comma + 1) : "";
+              if (jpegBase64.length === 0) {
+                throw new Error(`第 ${shots.length + 1} 张图编码失败`);
+              }
+
+              shots.push({
+                atMs: Math.round(seconds * 1000),
+                jpegBase64,
+                bytes: Math.round((jpegBase64.length * 3) / 4),
               });
             }
 
-            context.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const dataUrl = canvas.toDataURL("image/jpeg", arg.quality);
-            const comma = dataUrl.indexOf(",");
-            const jpegBase64 = comma >= 0 ? dataUrl.slice(comma + 1) : "";
-            if (jpegBase64.length === 0) {
-              throw new Error(`第 ${shots.length + 1} 张图编码失败`);
-            }
+            return shots;
+          };
 
-            shots.push({
-              atMs: Math.round(seconds * 1000),
-              jpegBase64,
-              bytes: Math.round((jpegBase64.length * 3) / 4),
-            });
+          // 预算按 **base64 字符数**算：base64 全是 ASCII ⇒ 字符数 = 上线字节数。
+          // 按 JPEG 原始字节算会小看 4/3，1 MiB 单帧上限就这么被踩穿的（独立审查 P0）。
+          const wireSize = (shots: { jpegBase64: string }[]): number =>
+            shots.reduce((sum, shot) => sum + shot.jpegBase64.length, 0);
+
+          let usedQuality = arg.quality;
+          let shots = await shoot(arg.quality);
+
+          if (wireSize(shots) > arg.budgetChars) {
+            usedQuality = arg.qualityLow;
+            shots = await shoot(arg.qualityLow);
           }
 
           return {
@@ -409,6 +458,8 @@ export async function captureFrames(
             width: canvas.width,
             height: canvas.height,
             durationMs: Math.round(duration * 1000),
+            quality: usedQuality,
+            wireChars: wireSize(shots),
           };
         } finally {
           video.removeAttribute("src");
@@ -417,28 +468,44 @@ export async function captureFrames(
           URL.revokeObjectURL(url);
         }
       },
-      { data, times: [...timesMs], maxWidth: options.maxWidth, quality: DEFAULT_JPEG_QUALITY },
+      {
+        data,
+        times: [...timesMs],
+        maxWidth: options.maxWidth,
+        quality: DEFAULT_JPEG_QUALITY,
+        qualityLow: FALLBACK_JPEG_QUALITY,
+        budgetChars: Math.max(1024, options.maxPayloadChars - JSON_OVERHEAD_CHARS),
+      },
     ),
     options.timeoutMs,
     `抽帧超时（${options.timeoutMs} 毫秒）`,
   );
 
-  const total = raw.shots.reduce((sum, shot) => sum + shot.bytes, 0);
-  if (total > options.maxTotalBytes) {
+  // 兜底再判一次（含 JSON 余量）：页面内用的是同一套字符预算，这里补上 requestId / 字段名的开销
+  const wireChars = framesWireChars(raw.shots) + JSON_OVERHEAD_CHARS;
+  if (wireChars > options.maxPayloadChars) {
     throw new MediaError(
       "too_large",
-      `这几张截图合计 ${formatSize(total)}，超过单帧回传上限 ${formatSize(options.maxTotalBytes)}；` +
-        "请减少张数（count）或调小 maxWidth 再试。",
+      `${raw.shots.length} 张截图编码后合计 ${wireChars} 字符，超过单帧回传上限 ` +
+        `${options.maxPayloadChars}；请减少张数（count）再试。`,
     );
   }
 
-  return raw;
+  return {
+    shots: raw.shots,
+    width: raw.width,
+    height: raw.height,
+    durationMs: raw.durationMs,
+  };
 }
 
 // ═══════════════════════════ ④ 抽音（按窗口） ═══════════════════════════
 
 /** 目标采样率：ASR 接口只认 16 kHz（实测口径）。 */
 const TARGET_SAMPLE_RATE = 16_000;
+
+/** 页面内解码缓存最多留几条（见 `cache.set` 处说明：无界会把标签页顶到 OOM）。 */
+const MAX_PAGE_AUDIO_CACHE = 1;
 
 /**
  * 取一段音频窗口（16 kHz 单声道 PCM16 WAV）。
@@ -495,6 +562,19 @@ export async function extractAudioWindow(
             }
 
             cache.set(arg.key, buffer);
+
+            // 页面内的解码缓存**必须有界**：decodeAudioData 解出的是整条音轨的 Float32
+            // （5 分钟 48 kHz 立体声 ≈115 MB），只增不删会把这个标签页一路涨到 OOM，
+            // 然后浏览器被重建 —— 连入站 WS 一起断（Node 那边的 LRU 管不到页面内存）。
+            // 留 1 条就够：同一条视频的十几个窗口是连着来的。
+            while (cache.size > MAX_PAGE_AUDIO_CACHE) {
+              const oldest = cache.keys().next();
+              if (oldest.done) {
+                break;
+              }
+
+              cache.delete(oldest.value);
+            }
           }
 
           const source = buffer;
@@ -575,7 +655,10 @@ export async function extractAudioWindow(
       `抽音超时（${timeoutMs} 毫秒）`,
     );
 
-  let result = await call(mp4 ? mp4.toString("base64") : null);
+  // 先**不带**视频本体：页面里通常已经有解码缓存（同一条视频的十几个窗口是连着要的）。
+  // 把 64 MiB 视频每窗都 base64 一遍是 85 MB/次 × 十几窗 —— 纯浪费 CDP 带宽与内存，
+  // 还会把整轮转写顶超时。只有缓存真的没了（reload / 页面重建）才补一次数据。
+  let result = await call(null);
 
   // 页面缓存没了（reload / 重建 page）：这次把 mp4 带过去重新解码
   if (result.needData) {

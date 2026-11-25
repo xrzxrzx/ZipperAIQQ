@@ -54,11 +54,17 @@ public sealed record DouyinVideoOptions
     public int MaxAudioSeconds { get; init; } = 180;
 
     /// <summary>
-    /// 抽音窗口长度（秒，默认 20，硬顶 60）。
+    /// 抽音窗口长度（秒，默认 20，**可用上限 21**）。
     /// </summary>
     /// <remarks>
-    /// 20 秒 16 kHz 单声道 = 640 KB，base64 后约 853 KB ——
-    /// 正好卡在 <c>/ws/channel</c> 的 1 MiB 单帧上限之内。调大会被端点直接掐断连接。
+    /// <para>
+    /// 20 秒 16 kHz 单声道 = 640 KB，base64 后约 853 KB —— 正好卡在 <c>/ws/channel</c>
+    /// 的 1 MiB 单帧上限之内。21 秒顶到线，22 秒起 base64 就超限 ⇒ sidecar 回 <c>too_large</c>。
+    /// </para>
+    /// <para>
+    /// 超过 21 不会"勉强跑"：<c>VideoReadService</c> 会夹到 21 并打一条 Warning ——
+    /// 配成 30 秒的部署每一次转写都必然失败，这种"合法范围内的死配置"必须在启动时说清楚。
+    /// </para>
     /// </remarks>
     public int AudioWindowSeconds { get; init; } = 20;
 }

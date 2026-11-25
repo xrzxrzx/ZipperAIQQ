@@ -357,7 +357,7 @@ public static class VideoTools
         sb.Append($"【视频 {itemId}】");
         if (!string.IsNullOrWhiteSpace(brief.Title))
         {
-            sb.Append(brief.Title.Length <= 60 ? brief.Title : brief.Title[..60] + "…");
+            sb.Append(ShortenTitle(brief.Title, 60));
             sb.Append(' ');
         }
 
@@ -402,6 +402,31 @@ public static class VideoTools
         }
 
         return body + "\n（以上是 ASR 原文，没有润色；「无人声」段落就是没识别到说话）";
+    }
+
+    /// <summary>
+    /// 按**代理对**安全截断（抖音文案里带 emoji，按 code unit 切会留下半个字符 → 进 JSON 成 <c>\uFFFD</c>）。
+    /// </summary>
+    /// <param name="text">原文。</param>
+    /// <param name="maxCodeUnits">最多保留多少个 UTF-16 码元（不含省略号）。</param>
+    public static string ShortenTitle(string text, int maxCodeUnits)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        if (maxCodeUnits <= 0 || text.Length <= maxCodeUnits)
+        {
+            return text;
+        }
+
+        var length = maxCodeUnits;
+
+        // 末位落在高代理上 ⇒ 往前退一格，别把 emoji 切成两半
+        if (char.IsHighSurrogate(text[length - 1]))
+        {
+            length -= 1;
+        }
+
+        return length <= 0 ? "…" : string.Concat(text.AsSpan(0, length), "…");
     }
 
     /// <summary>毫秒 → <c>mm:ss</c> / <c>h:mm:ss</c>（给模型看的时间点）。</summary>
