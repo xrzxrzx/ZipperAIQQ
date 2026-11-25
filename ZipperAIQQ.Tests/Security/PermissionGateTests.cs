@@ -44,6 +44,7 @@ public sealed class PermissionGateTests
     [InlineData(ToolCapability.WriteProfile)]
     [InlineData(ToolCapability.SendPoke)]
     [InlineData(ToolCapability.SendToOtherSession)]
+    [InlineData(ToolCapability.MailRead)]
     public void Sensitive_capabilities_require_admin(ToolCapability capability)
     {
         Assert.False(_gate.IsAllowed(capability, Role.Normal));
@@ -52,6 +53,15 @@ public sealed class PermissionGateTests
 
         // **主人自动包含管理员**（role >= floor），不需要单独配
         Assert.True(_gate.IsAllowed(capability, Role.Owner));
+    }
+
+    [Fact]
+    public void MailRaw_is_owner_only_by_default()
+    {
+        // 原文（Received 链 / 验证码 / 账单号）默认只给主人；管理员要显式开，硬底线仍是管理员
+        Assert.False(_gate.IsAllowed(ToolCapability.MailRaw, Role.Admin));
+        Assert.True(_gate.IsAllowed(ToolCapability.MailRaw, Role.Owner));
+        Assert.Equal(Role.Admin, PermissionGate.HardFloorOf(ToolCapability.MailRaw));
     }
 
     // ─────────────────────────── 硬底线 ───────────────────────────
@@ -86,6 +96,9 @@ public sealed class PermissionGateTests
             [ToolCapability.SendToOtherSession] = Role.Admin,
             [ToolCapability.MediaRead] = Role.Normal,
             [ToolCapability.MediaSpeak] = Role.Normal,
+            // 邮件双通道（B3）：读的是私人信件，两条的硬底线都是管理员
+            [ToolCapability.MailRead] = Role.Admin,
+            [ToolCapability.MailRaw] = Role.Admin,
         };
 
         PermissionGate.ValidateHardFloor(ok);

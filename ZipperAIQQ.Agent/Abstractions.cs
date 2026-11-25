@@ -162,6 +162,15 @@ public sealed record ChatAgentDependencies
     /// <summary>全家桶用量记账（T2.7）；未注册时工具照常工作，只是不记账。</summary>
     public Tools.IToolUsageSink? ToolUsage { get; init; }
 
+    /// <summary>
+    /// 邮件双通道（B3）：渲染画面 / 原文直读。
+    /// </summary>
+    /// <remarks>
+    /// 未注册（邮件接入没开、或组合根没装配）时这两个工具**不出现** ——
+    /// 与 web_search / OCR 同口径：宁可少让它试，也别让它反复撞一个不存在的能力。
+    /// </remarks>
+    public Mail.IMailReader? MailReader { get; init; }
+
     /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
     public required Security.IRoleResolver Roles { get; init; }
 

@@ -29,6 +29,9 @@ public sealed class PermissionGate : IPermissionGate
             // 媒体接口只读图 / 只写本地文件，不对外发内容 —— 硬底线就是 Normal
             [ToolCapability.MediaRead] = Role.Normal,
             [ToolCapability.MediaSpeak] = Role.Normal,
+            // 邮件双通道（B3）：读的是**私人信件**，两条都不能放宽到管理员以下
+            [ToolCapability.MailRead] = Role.Admin,
+            [ToolCapability.MailRaw] = Role.Admin,
         };
 
     /// <summary>默认最低角色（M1 的「预置默认允许集」，FR-6.7）。</summary>
@@ -50,6 +53,9 @@ public sealed class PermissionGate : IPermissionGate
             // 媒体接口：方案 G6 定「默认 Normal」；代价是平台计费，靠工具页开关控制
             [ToolCapability.MediaRead] = Role.Normal,
             [ToolCapability.MediaSpeak] = Role.Normal,
+            // 邮件：画面默认给管理员；原文默认只给主人（"主人 + 管理员"里的最高那档才是默认）
+            [ToolCapability.MailRead] = Role.Admin,
+            [ToolCapability.MailRaw] = Role.Owner,
         };
 
     private readonly IReadOnlyDictionary<ToolCapability, Role> _minRoles;
@@ -125,6 +131,8 @@ public sealed class PermissionGate : IPermissionGate
         ToolCapability.QueryContacts => "跨平台通讯录",
         ToolCapability.MediaRead => "识别图片文字",
         ToolCapability.MediaSpeak => "文本转语音",
+        ToolCapability.MailRead => "查看邮件画面",
+        ToolCapability.MailRaw => "读取邮件原文",
         _ => capability.ToString(),
     };
 }

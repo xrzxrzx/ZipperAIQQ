@@ -106,4 +106,23 @@ public enum ToolCapability
     /// 默认给普通成员（需求 G6「默认 Normal」），需要收紧时在工具页调。
     /// </remarks>
     MediaSpeak,
+
+    /// <summary>
+    /// 看邮件画面（<c>mail_render</c>）：把 HTML 邮件渲染成截图递给模型。
+    /// </summary>
+    /// <remarks>
+    /// 邮件是**私信级别的隐私**：群里任何一个白名单成员让它渲染，模型的回答就会把
+    /// 邮件版面讲给群里听。所以默认只给管理员（不是 Normal），硬底线也是管理员。
+    /// 它只读、没有对外动作，但读的是别人的私人内容 —— 这一条比"能不能发"更该收紧。
+    /// </remarks>
+    MailRead,
+
+    /// <summary>
+    /// 读邮件原文（<c>mail_raw</c>）：完整头 + 正文源文本。
+    /// </summary>
+    /// <remarks>
+    /// 比画面更敏感：Received 链、验证码、账单号、退订链接都在这里，且**逐字可信**。
+    /// 默认只给主人，硬底线管理员；每次调用留审计（<c>mail_raw</c> 的工具实现里写）。
+    /// </remarks>
+    MailRaw,
 }

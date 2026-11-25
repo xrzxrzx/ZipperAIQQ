@@ -121,6 +121,8 @@ public static partial class ServiceRegistration
                 MediaUploadMaxBytes = options.Ai.MaxUploadBytes,
                 // 全家桶用量记账（T2.7）：未注册时工具照常工作，只是不记账
                 ToolUsage = sp.GetService<ZipperAIQQ.Agent.Tools.IToolUsageSink>(),
+                // 邮件双通道（B3）：未装配时 mail_render / mail_raw 两个工具不出现
+                MailReader = sp.GetService<ZipperAIQQ.Agent.Mail.IMailReader>(),
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 OwnerLookup = sp.GetRequiredService<ZipperAIQQ.Agent.IOwnerLookup>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),

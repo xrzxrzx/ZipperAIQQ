@@ -70,4 +70,60 @@ public sealed record MailOptions
 
     /// <summary>转发失败重试次数。</summary>
     public int ForwardRetryCount { get; init; } = 3;
+
+    // ───────────── 双通道（B3）：渲染画面 / 原文直读 ─────────────
+
+    /// <summary>
+    /// 是否把 <c>mail_render</c> 工具给模型（默认**关**，方案 §6.4 / D-09）。
+    /// </summary>
+    /// <remarks>
+    /// 关的是「工具存不存在」，不是「渲染开不开」：开着也不会有任何自动渲染 ——
+    /// 只有模型显式调用才截一张图。默认关是因为它依赖外置 Chromium，
+    /// 没装好的机器上多一个只会失败的工具等于多一条幻觉入口。
+    /// </remarks>
+    public bool RenderEnabled { get; init; }
+
+    /// <summary>
+    /// HTML 正文落库的上限（KB，默认 256）。**与渲染开关无关**，一直生效。
+    /// </summary>
+    /// <remarks>
+    /// 为什么一律存：163 会清过期件，等模型想渲染时邮件可能已经不在服务器上；
+    /// 但也不能无限存 —— 一封带内联 base64 图的邮件能有几十 MB。
+    /// </remarks>
+    public int RenderMaxBodyHtmlKb { get; init; } = 256;
+
+    /// <summary>单次渲染最多给几张图（默认 4，长邮件按高度切段）。</summary>
+    public int RenderMaxImages { get; init; } = 4;
+
+    /// <summary>渲染超时（秒，默认 30）。</summary>
+    public int RenderTimeoutSeconds { get; init; } = 30;
+
+    /// <summary>
+    /// 是否允许渲染时加载远程资源（默认**否**：防跟踪像素）。
+    /// </summary>
+    public bool RenderAllowRemote { get; init; }
+
+    /// <summary>渲染脚本路径（相对仓库根或绝对路径）。</summary>
+    public string RenderScriptPath { get; init; } = "tools/mail-render/render.mjs";
+
+    /// <summary>
+    /// 渲染临时目录（每次调用一个子目录，跑完就删）。
+    /// </summary>
+    /// <remarks>
+    /// 刻意**不用系统 TEMP**：部署机上 TEMP 常被安全策略收紧（实测在 DSH 沙箱下
+    /// 创建子目录会被拒），而 <c>data/</c> 是我们自己的地盘，权限与清理都可控。
+    /// </remarks>
+    public string RenderTempDir { get; init; } = "./data/mail-render-tmp";
+
+    /// <summary>Node 可执行文件（默认取 PATH 里的 <c>node</c>）。</summary>
+    public string RenderNodePath { get; init; } = "node";
+
+    /// <summary>
+    /// 渲染用的 playwright 模块解析目录（默认空 = 用脚本内置的 <c>douyin-web-sidecar</c>）。
+    /// </summary>
+    /// <remarks>给"sidecar 被搬到别处 / 单独装了 playwright"的部署留个口子。</remarks>
+    public string RenderPlaywrightDir { get; init; } = string.Empty;
+
+    /// <summary>读原文时正文的字符上限（默认 20000）。</summary>
+    public int RawMaxChars { get; init; } = 20_000;
 }

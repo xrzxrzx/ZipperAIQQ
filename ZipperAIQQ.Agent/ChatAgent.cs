@@ -59,6 +59,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly Media.IDeepSeekMediaClient? _media;
     private readonly int _mediaUploadMaxBytes;
     private readonly Tools.IToolUsageSink? _toolUsage;
+    private readonly Mail.IMailReader? _mailReader;
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
@@ -115,6 +116,7 @@ public sealed class ChatAgent : IChatAgent
         _imageConverter = deps.ImageConverter;
         _media = deps.Media;
         _toolUsage = deps.ToolUsage;
+        _mailReader = deps.MailReader;
         // 0 = 组合根没注入（测试或旧调用点）：按服务端的保守默认兜底，别退化成「1 字节上限」
         _mediaUploadMaxBytes = deps.MediaUploadMaxBytes > 0
             ? deps.MediaUploadMaxBytes
@@ -752,8 +754,15 @@ public sealed class ChatAgent : IChatAgent
                 _toolUsage));
         }
 
-        // 平台专用工具（决策五 / S3-E）：抖音侧要单独的数据源（sidecar 的 query.contacts），
-        // 所以按平台取目录；取不到（抖音未接入）这组工具**不出现**，而不是出现后报错。
+        // 邮件双通道（B3）：渲染画面 / 原文直读。未装配时两个工具都不出现；
+        // 装配了也按能力码分流 —— 渲染缺（外置件没了）就只给原文那一个。
+        if (_mailReader is { } mailReader)
+        {
+            tools.AddRange(MailTools.Create(
+                context, _permissionGate, mailReader, _configs, _logger));
+        }
+
+        // 平台专用工具（决策五 / S3-E）：抖音侧要单独的数据源（sidecar 的 query.contacts），        // 所以按平台取目录；取不到（抖音未接入）这组工具**不出现**，而不是出现后报错。
         if (_platformContacts is not null)
         {
             tools.AddRange(DouyinTools.Create(_platformContacts, context, _policy));

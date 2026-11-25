@@ -174,6 +174,18 @@ public static class ServerConfigLoader
                 DigestIntervalMinutes = s.Int("mail", "digestIntervalMinutes", o.Mail.DigestIntervalMinutes),
                 DailyAtHour = s.Int("mail", "dailyAtHour", o.Mail.DailyAtHour),
                 ForwardRetryCount = s.Int("mail", "forwardRetryCount", o.Mail.ForwardRetryCount),
+
+                // 双通道（B3）：键名摊平成两级（加载器只认 section → key，见 B2-b 偏差表）
+                RenderEnabled = s.Bool("mail", "renderEnabled", o.Mail.RenderEnabled),
+                RenderMaxBodyHtmlKb = s.Int("mail", "renderMaxBodyHtmlKb", o.Mail.RenderMaxBodyHtmlKb),
+                RenderMaxImages = s.Int("mail", "renderMaxImages", o.Mail.RenderMaxImages),
+                RenderTimeoutSeconds = s.Int("mail", "renderTimeoutSeconds", o.Mail.RenderTimeoutSeconds),
+                RenderAllowRemote = s.Bool("mail", "renderAllowRemote", o.Mail.RenderAllowRemote),
+                RenderScriptPath = s.Str("mail", "renderScriptPath", o.Mail.RenderScriptPath)!,
+                RenderTempDir = s.Str("mail", "renderTempDir", o.Mail.RenderTempDir)!,
+                RenderNodePath = s.Str("mail", "renderNodePath", o.Mail.RenderNodePath)!,
+                RenderPlaywrightDir = s.Str("mail", "renderPlaywrightDir", o.Mail.RenderPlaywrightDir)!,
+                RawMaxChars = s.Int("mail", "rawMaxChars", o.Mail.RawMaxChars),
             },
 
             // ── ai（全家桶媒体：OCR / TTS / ASR）──

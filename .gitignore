@@ -66,6 +66,9 @@ logs/
 # TTS 产物（只落文件的语音，体积大且随时可重建，不入库）
 /data/ai-tts/
 
+# 邮件渲染的临时截图（每次调用一个子目录，跑完就删；崩溃残留同样不该入库）
+/data/mail-render-tmp/
+
 # ── 本地部署脚本（含服务器地址，不入库）──
 /scripts/deploy-server.ps1
 /artifacts/deploy/

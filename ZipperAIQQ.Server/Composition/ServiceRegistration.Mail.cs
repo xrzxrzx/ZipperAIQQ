@@ -79,6 +79,8 @@ public static partial class ServiceRegistration
                 InitialDays = options.Mail.InitialDays,
                 PollIntervalSeconds = options.Mail.PollIntervalSeconds,
                 MaxBodyChars = options.Mail.MaxBodyChars,
+                // HTML 留底上限按 KB 配（B3）：它跟"喂模型的正文字数"不是一回事
+                MaxHtmlChars = Math.Max(1024, options.Mail.RenderMaxBodyHtmlKb * 1024),
             },
             sp.GetRequiredService<ILogger>()));
         // 源**不**注册成 HostedService（实施微调 M12）：由 MailPipeline 在 ExecuteAsync 里
@@ -108,6 +110,27 @@ public static partial class ServiceRegistration
             sp.GetRequiredService<IChatAgentPool>(),
             sp.GetRequiredService<ILogger>()));
         services.AddHostedService<MailPipeline>();
+
+        // ── 邮件双通道（B3）：渲染画面 / 原文直读的模型工具 ──
+        // 渲染器是**外置进程**（Node + Playwright）：不可用时 CanRender=false，工具不出现，
+        // 服务端照常启动（方案 G4 的降级口径）。
+        services.AddSingleton(sp => new MailRenderService(
+            options.Mail,
+            sp.GetRequiredService<ILogger>()));
+        services.AddSingleton(sp => new MailImapAccess(
+            sp.GetRequiredService<IImapSessionFactory>(),
+            sp.GetRequiredService<IMailRepository>(),
+            sp.GetRequiredService<ICredentialProtector>(),
+            sp.GetRequiredService<ILogger>()));
+        services.AddSingleton(sp => new MailReadService(
+            sp.GetRequiredService<IMailRepository>(),
+            sp.GetRequiredService<MailImapAccess>(),
+            sp.GetRequiredService<MailRenderService>(),
+            options.Mail,
+            sp.GetRequiredService<ILogger>()));
+        // Agent 只认窄接口（IMailReader）：它不知道 IMAP 与 Chromium 的存在
+        services.AddSingleton<ZipperAIQQ.Agent.Mail.IMailReader>(sp =>
+            sp.GetRequiredService<MailReadService>());
         services.AddSingleton<IApiAction, ListMailsAction>();
         services.AddSingleton<IApiAction, GetMailAction>();
         services.AddSingleton<IApiAction, ListMailAccountsAction>();

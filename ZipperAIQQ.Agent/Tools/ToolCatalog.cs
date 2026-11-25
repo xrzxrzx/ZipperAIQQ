@@ -55,6 +55,10 @@ public static class ToolCatalog
         Item(MediaTools.OcrToolName, "识别图片文字", ToolCapability.MediaRead),
         Item(MediaTools.TtsToolName, "文本转语音", ToolCapability.MediaSpeak),
 
+        // ── 邮件双通道（B3）：读的是私人信件，默认管理员起（原文默认只给主人）──
+        Item(MailTools.RenderToolName, "查看邮件画面", ToolCapability.MailRead),
+        Item(MailTools.RawToolName, "读取邮件原文", ToolCapability.MailRaw),
+
         // ── 抖音专用（决策五 / S3-E）：只在抖音会话里对模型可见 ──
         Item(DouyinTools.FriendsToolName, "抖音好友", null, ToolPlatform.Douyin),
         Item(DouyinTools.GroupsToolName, "抖音群", null, ToolPlatform.Douyin),
@@ -124,6 +128,8 @@ public static class ToolCatalog
         CrossPlatformTools.ToolName => ToolCapability.QueryContacts,
         MediaTools.OcrToolName => ToolCapability.MediaRead,
         MediaTools.TtsToolName => ToolCapability.MediaSpeak,
+        MailTools.RenderToolName => ToolCapability.MailRead,
+        MailTools.RawToolName => ToolCapability.MailRaw,
         _ => null,
     };
 }
