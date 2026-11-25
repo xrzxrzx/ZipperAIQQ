@@ -148,7 +148,12 @@ public static class WavSlicer
     }
 
     /// <summary>用原始 fmt 字段 + 一段 data 重新拼一个规范的 44 字节头 WAV。</summary>
-    private static byte[] BuildWav(WavInfo info, ReadOnlySpan<byte> data)
+    /// <remarks>
+    /// public 是给 B4 的视频转写用的：抽音按 20 秒窗口回传，服务端要把各窗口的 PCM
+    /// 拼回**一整段**再交给 ASR（一段一段发会把同一句话切成两半、还多花好几倍请求）。
+    /// 头部写法只留这一处 —— 两处各拼一遍，迟早有一处漏字段。
+    /// </remarks>
+    public static byte[] BuildWav(WavInfo info, ReadOnlySpan<byte> data)
     {
         var result = new byte[WavHeaderBytes + data.Length];
         var span = result.AsSpan();

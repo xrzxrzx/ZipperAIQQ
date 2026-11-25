@@ -145,6 +145,15 @@ public static partial class ServiceRegistration
         services.AddSingleton<Media.IDouyinMediaSource>(sp =>
             sp.GetRequiredService<Channels.DouyinChannel>());
 
+        // 视频理解（B4）：抽帧 + 拼音频 + 调 ASR。开关与上限来自 douyin.video* 配置。
+        services.AddSingleton(sp => new Media.VideoReadService(
+            sp.GetRequiredService<Media.IDouyinMediaSource>(),
+            sp.GetRequiredService<ZipperAIQQ.Agent.Media.IDeepSeekMediaClient>(),
+            sp.GetRequiredService<Configuration.ServerOptions>().Douyin.Video,
+            sp.GetRequiredService<ILogger>()));
+        services.AddSingleton<ZipperAIQQ.Agent.Media.IVideoReader>(sp =>
+            sp.GetRequiredService<Media.VideoReadService>());
+
         // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围 / 平台专用工具都只认平台名。
         // ⚠️ 抖音**无条件**注册（S3-F 补）：之前按启动配置决定加不加，结果"客户端打开开关"不生效 ——
         //    注册表/复合通道是启动时定死的，运行时改不了。现在改成通道常驻、由快照决定收不收发不发。

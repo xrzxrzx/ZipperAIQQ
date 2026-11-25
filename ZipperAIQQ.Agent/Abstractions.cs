@@ -171,6 +171,15 @@ public sealed record ChatAgentDependencies
     /// </remarks>
     public Mail.IMailReader? MailReader { get; init; }
 
+    /// <summary>
+    /// 抖音视频理解（B4）：抽帧 / 人声转写。
+    /// </summary>
+    /// <remarks>
+    /// 未注册（浏览器底座没连上、或服务端没装配）时那两个工具**不出现**；
+    /// 转写还要额外的 <c>AsrAvailable</c>，缺 ASR 时只给抽帧那一个。
+    /// </remarks>
+    public Media.IVideoReader? VideoReader { get; init; }
+
     /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
     public required Security.IRoleResolver Roles { get; init; }
 

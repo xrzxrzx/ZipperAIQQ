@@ -101,6 +101,8 @@ public sealed class PermissionGateTests
             // 邮件双通道（B3）：读的是私人信件，两条的硬底线都是管理员
             [ToolCapability.MailRead] = Role.Admin,
             [ToolCapability.MailRaw] = Role.Admin,
+            // 视频理解（B4）：下整条视频 + 调 ASR，硬底线同样是管理员
+            [ToolCapability.MediaVideo] = Role.Admin,
         };
 
         PermissionGate.ValidateHardFloor(ok);

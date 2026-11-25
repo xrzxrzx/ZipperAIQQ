@@ -123,6 +123,8 @@ public static partial class ServiceRegistration
                 ToolUsage = sp.GetService<ZipperAIQQ.Agent.Tools.IToolUsageSink>(),
                 // 邮件双通道（B3）：未装配时 mail_render / mail_raw 两个工具不出现
                 MailReader = sp.GetService<ZipperAIQQ.Agent.Mail.IMailReader>(),
+                // 抖音视频理解（B4）：未装配（或底座没连上）时两个视频工具不出现
+                VideoReader = sp.GetService<ZipperAIQQ.Agent.Media.IVideoReader>(),
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 OwnerLookup = sp.GetRequiredService<ZipperAIQQ.Agent.IOwnerLookup>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),

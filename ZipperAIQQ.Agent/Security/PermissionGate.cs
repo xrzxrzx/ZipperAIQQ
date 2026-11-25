@@ -32,6 +32,8 @@ public sealed class PermissionGate : IPermissionGate
             // 邮件双通道（B3）：读的是**私人信件**，两条都不能放宽到管理员以下
             [ToolCapability.MailRead] = Role.Admin,
             [ToolCapability.MailRaw] = Role.Admin,
+            // 视频理解（B4）：要下整条视频 + 调 ASR（按时长计费），不放宽到管理员以下
+            [ToolCapability.MediaVideo] = Role.Admin,
         };
 
     /// <summary>默认最低角色（M1 的「预置默认允许集」，FR-6.7）。</summary>
@@ -56,6 +58,8 @@ public sealed class PermissionGate : IPermissionGate
             // 邮件：画面默认给管理员；原文默认只给主人（"主人 + 管理员"里的最高那档才是默认）
             [ToolCapability.MailRead] = Role.Admin,
             [ToolCapability.MailRaw] = Role.Owner,
+            // 视频：方案 B4 没定档，按「成本面」默认只给管理员（群里任何人发视频都能触发一串下载+转写）
+            [ToolCapability.MediaVideo] = Role.Admin,
         };
 
     private readonly IReadOnlyDictionary<ToolCapability, Role> _minRoles;

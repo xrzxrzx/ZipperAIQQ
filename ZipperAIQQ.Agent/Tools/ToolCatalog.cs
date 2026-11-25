@@ -62,6 +62,10 @@ public static class ToolCatalog
         // ── 抖音专用（决策五 / S3-E）：只在抖音会话里对模型可见 ──
         Item(DouyinTools.FriendsToolName, "抖音好友", null, ToolPlatform.Douyin),
         Item(DouyinTools.GroupsToolName, "抖音群", null, ToolPlatform.Douyin),
+
+        // ── 抖音视频理解（B4）：下整条视频 + 走 ASR，默认只给管理员 ──
+        Item(VideoTools.VideoToolName, "看抖音视频画面", ToolCapability.MediaVideo, ToolPlatform.Douyin),
+        Item(VideoTools.TranscriptToolName, "抖音视频转写", ToolCapability.MediaVideo, ToolPlatform.Douyin),
     ];
 
     private static PolicyItem Item(
@@ -130,6 +134,8 @@ public static class ToolCatalog
         MediaTools.TtsToolName => ToolCapability.MediaSpeak,
         MailTools.RenderToolName => ToolCapability.MailRead,
         MailTools.RawToolName => ToolCapability.MailRaw,
+        VideoTools.VideoToolName => ToolCapability.MediaVideo,
+        VideoTools.TranscriptToolName => ToolCapability.MediaVideo,
         _ => null,
     };
 }

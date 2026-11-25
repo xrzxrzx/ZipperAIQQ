@@ -60,6 +60,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly int _mediaUploadMaxBytes;
     private readonly Tools.IToolUsageSink? _toolUsage;
     private readonly Mail.IMailReader? _mailReader;
+    private readonly Media.IVideoReader? _videoReader;
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
@@ -117,6 +118,7 @@ public sealed class ChatAgent : IChatAgent
         _media = deps.Media;
         _toolUsage = deps.ToolUsage;
         _mailReader = deps.MailReader;
+        _videoReader = deps.VideoReader;
         // 0 = 组合根没注入（测试或旧调用点）：按服务端的保守默认兜底，别退化成「1 字节上限」
         _mediaUploadMaxBytes = deps.MediaUploadMaxBytes > 0
             ? deps.MediaUploadMaxBytes
@@ -760,6 +762,13 @@ public sealed class ChatAgent : IChatAgent
         {
             tools.AddRange(MailTools.Create(
                 context, _permissionGate, mailReader, _configs, _logger));
+        }
+
+        // 抖音视频理解（B4）：抽帧 / 人声转写。底座没连上时 CanRead=false，两个工具都不出现；
+        // ASR 缺（没 key / 关了开关）时只给抽帧那一个。
+        if (_videoReader is { } videoReader)
+        {
+            tools.AddRange(VideoTools.Create(videoReader, context, _permissionGate, _logger));
         }
 
         // 平台专用工具（决策五 / S3-E）：抖音侧要单独的数据源（sidecar 的 query.contacts），
