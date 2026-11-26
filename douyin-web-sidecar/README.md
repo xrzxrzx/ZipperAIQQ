@@ -19,6 +19,7 @@
 | 入站私信 | 旁听页面自己的 `frontier-im` WebSocket 帧（不解签名、不裸调接口） |
 | 会话候选查询 | `query.contacts` 用私信列表尽力而为 |
 | 视频媒体（B4） | `media.video` / `media.frames` / `media.audio`：详情 → 下载 → **浏览器内抽帧 / 抽音**，不用 ffmpeg |
+| 评论区（B5） | `comment.list` / `comment.reply`：作品页右侧面板读评论（分页）、点「回复」后**保留 `@` 前缀**再追加提交 |
 
 | 不做 | 理由 |
 |---|---|
@@ -39,6 +40,7 @@ src/login.ts      登录编排（二维码 8s 刷新 / 短信 / 滑块）
 src/outbound.ts   出站（定位会话 → 输入 → 发送 → 回读校验）
 src/inbound.ts    入站（WS 旁听 + proto 解码 + 幂等 + DOM 兜底）
 src/media.ts      视频媒体（详情 / 下载 / canvas 抽帧 / WebAudio 抽音，按窗口回传）
+src/comment.ts    评论区纯逻辑（快照解析 / 去重 / 回复目标定位；不碰页面）
 src/main.ts       编排：配置 → 连 Server → 分发帧 → 定时体检
 proto/im.proto    最小协议子集（字段号照抄上游，有单测锁住）
 test/             node:test 单测（不联网、不开浏览器）
@@ -70,6 +72,30 @@ sidecar → 服务端：一律是 `result` 帧（`{requestId, ok, error, code, .
   （5 分钟 48 kHz 立体声 ≈115 MB），无界增长会把标签页顶到 OOM、连入站一起断。
   第 2 个窗口起不再重新下载/解码；页面重建后缓存会没，sidecar 会自动补一次带本体数据的请求（回 `needData` 那条路）。
 - **抽帧/抽音的实测依据**：`docs/06-调研/抖音网页版底座实测.md` §7.3 / §7.4。
+
+
+---
+
+## 评论帧（B5）
+
+服务端 → sidecar：
+
+| 帧 | data | 说明 |
+|---|---|---|
+| `comment.list` | `{requestId, itemId, maxPages?, maxComments?, timeoutMs?}` | 打开作品页 → 读评论区 → 往下滚分页；回 `comments[]`（作者 / 正文 / 时间 / 点赞 / 是否置顶 / `mentions`） |
+| `comment.reply` | `{requestId, itemId, commentId?, author?, textMatch?, text, commit?}` | 定位评论 → 点「回复」→ **校验 `@` 前缀** → 追加正文 → 回车/点「发送」→ 回读 |
+
+- **定位条件三选**：`commentId`（最稳）／`author` + `textMatch`（走 DOM 文字匹配）／`textMatch` 单独用。
+  只给 `author` 而命中多条时**报歧义、不猜**（回错人比不回复贵得多）。
+- **`commit: false` = 干跑**：点开回复、写入、校验 `@` 前缀，然后清空并退出，**不提交**（对方看不到任何东西）。
+  默认 `commit: true`。
+- ⚠️ **实测踩过的坑**：点「回复」后输入框自带 `@某人`，覆盖式写入（`fill`）会冲掉前缀 ⇒ 发出去变成**顶层评论**。
+  所以实现里只 `End` + `type` 追加，提交前断言输入框仍以 `@` 开头；前缀丢了就**什么都不发**并回 `code=no_at_prefix`。
+- **读完一定回 `/chat`**：网页版只在私信页挂着 `frontier-im` 的 WS，停在作品页时新私信不会被推过来。
+  `comment.*` 不论成败都会回到私信页并重新打开最近会话。
+- **评论区 DOM 是启发式的**：`[data-e2e="comment-item"]` 优先，命中不了才用几何启发式（右侧面板 / 宽度 / 含「回复」）。
+  解析在 `comment.ts`（页面里只量不解析），有 `node:test` 锁住取字段的正确性；真机验收见
+  `docs/08-上手/抖音web底座部署与登录.md`。
 
 
 ---

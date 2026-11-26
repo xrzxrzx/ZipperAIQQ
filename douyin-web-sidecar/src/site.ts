@@ -11,12 +11,16 @@
  * 不是官方文档。改版后先跑 README「自检」一节的清单再改这里。
  */
 
-import type { Page } from "playwright";
+import type { ElementHandle, Page } from "playwright";
+
+import type { CommentBlockSnapshot } from "./comment.js";
 
 /** 站点常量：URL 与等待时间。 */
 export const SITE = {
   homeUrl: "https://www.douyin.com/",
   chatUrl: "https://www.douyin.com/chat",
+  /** 作品页（评论区就在这一页右侧面板里）。 */
+  videoUrlPrefix: "https://www.douyin.com/video/",
   /** 页面首屏加载（domcontentloaded 之后还要等前端水合）。 */
   hydrateMs: 5_000,
   /** 单个 DOM 动作超时。 */
@@ -869,3 +873,337 @@ export async function uploadImageViaPageApiAware(
     page.off("response", onResponse);
   }
 }
+
+// ═══════════════════════ 评论区（B5） ═══════════════════════
+//
+// 与私信区同一条纪律：**选择器与坐标只许出现在本文件**，解析在 `comment.ts`。
+//
+// 评论区的 DOM 没有可靠锚点（`docs/06-调研/抖音网页版底座实测.md` §6.2 记的是坐标级做法），
+// 所以这里用「data-e2e 优先、几何启发式兜底」两档，并把不确定的东西原样交给 Node 侧解析 ——
+// 页面里不猜作者、不猜点赞数。
+
+/** 评论区里「读不到东西」与「真的没有评论」必须分开（后者不是故障）。 */
+const NO_COMMENT_TEXTS = ["暂无评论", "还没有评论", "快来评论", "评论 0"];
+
+/** 打开作品页并等评论区渲染出可见的评论块。 */
+export async function openCommentPanel(page: Page, itemId: string): Promise<void> {
+  const wanted = `${SITE.videoUrlPrefix}${itemId}`;
+  const alreadyThere =
+    page.url().includes(`/video/${itemId}`) || page.url().includes(`modal_id=${itemId}`);
+
+  if (!alreadyThere) {
+    await page.goto(wanted, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.waitForTimeout(2_000);
+  }
+
+  const deadline = Date.now() + 25_000;
+  let scrolled = 0;
+
+  while (Date.now() < deadline) {
+    if ((await readCommentBlocks(page)).length > 0) {
+      return;
+    }
+
+    // 空评论区不是故障：把「真的没有」与「没渲染出来」分开（模型据此别乱猜）
+    const body = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ");
+    if (NO_COMMENT_TEXTS.some((text) => body.includes(text))) {
+      return;
+    }
+
+    await clickCommentsTab(page);
+
+    // 评论懒加载：往下滚两下再看（scrolled 只用于避免无限滚）
+    if (scrolled < 6) {
+      await scrollCommentPanel(page, 1);
+      scrolled += 1;
+    }
+
+    await page.waitForTimeout(800);
+  }
+
+  throw new Error(
+    "评论区没能打开：视频页里读不到任何评论块（可能未登录 / 触发了安全验证 / 这条视频限评）",
+  );
+}
+
+/** 点「全部评论」/「评论 N」这类入口（有就点，没有就算了）。 */
+async function clickCommentsTab(page: Page): Promise<void> {
+  const candidates = [
+    page.getByText(/^全部评论/).first(),
+    page.getByText(/^评论\s*\d+/).first(),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      if ((await candidate.count()) === 0) {
+        continue;
+      }
+
+      await candidate.click({ timeout: 2_000 });
+      await page.waitForTimeout(600);
+      return;
+    } catch {
+      // 换下一个候选
+    }
+  }
+}
+
+/**
+ * 读评论区当前渲染出的评论块（**原始快照**，不解析）。
+ *
+ * 两档选择器：
+ *   ① `[data-e2e="comment-item"]`（抖音常用约定，命中就用它）
+ *   ② 几何启发式：右侧面板 / 宽度 200–660 / 高度 40–520 / 块内含「回复」
+ */
+export async function readCommentBlocks(page: Page): Promise<CommentBlockSnapshot[]> {
+  return page.evaluate(() => {
+    const isVisible = (el: Element): boolean => {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== "hidden" &&
+        style.display !== "none"
+      );
+    };
+
+    const collectIds = (node: Element, ids: Set<string>): void => {
+      for (const attr of Array.from(node.attributes)) {
+        if (!attr.name.startsWith("data-") && attr.name !== "id") {
+          continue;
+        }
+
+        for (const hit of (attr.value ?? "").match(/\d{8,}/g) ?? []) {
+          ids.add(hit);
+        }
+      }
+
+      const href = node.getAttribute("href");
+      for (const hit of (href ?? "").match(/\d{8,}/g) ?? []) {
+        ids.add(hit);
+      }
+    };
+
+    const blocks: HTMLElement[] = [];
+
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-e2e="comment-item"]'))) {
+      if (isVisible(el)) {
+        blocks.push(el);
+      }
+    }
+
+    if (blocks.length === 0) {
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>("div, li"))) {
+        const rect = el.getBoundingClientRect();
+        if (rect.x < 520) continue;
+        if (rect.width < 200 || rect.width > 660) continue;
+        if (rect.height < 40 || rect.height > 520) continue;
+        if (rect.y < 0 || rect.y > window.innerHeight) continue;
+        if (!isVisible(el)) continue;
+        if (!(el.innerText || "").includes("回复")) continue;
+        blocks.push(el);
+      }
+    }
+
+    // 嵌套容器会命中多条：面积最小的优先，同一 y 只留一个
+    const sized = blocks
+      .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+      .sort((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height);
+
+    const byY = new Map<number, { el: HTMLElement; rect: DOMRect }>();
+    for (const item of sized) {
+      const bucket = Math.round(item.rect.y / 12);
+      if (!byY.has(bucket)) {
+        byY.set(bucket, item);
+      }
+    }
+
+    const snapshots = [...byY.values()]
+      .sort((a, b) => a.rect.y - b.rect.y)
+      .map(({ el, rect }) => {
+        const ids = new Set<string>();
+        collectIds(el, ids);
+
+        let authorId: string | null = null;
+        const authorLink = el.querySelector('a[href*="/user/"]');
+        if (authorLink) {
+          const hit = (authorLink.getAttribute("href") ?? "").match(/\/user\/(\d{6,})/);
+          if (hit && hit[1]) {
+            authorId = hit[1];
+          }
+          collectIds(authorLink, ids);
+        }
+
+        // 子元素只扫前 40 个：整棵子树扫下来在长评论区里会明显卡页面
+        for (const child of Array.from(el.querySelectorAll("*")).slice(0, 40)) {
+          collectIds(child, ids);
+        }
+
+        let replyBox: { x: number; y: number; width: number; height: number } | null = null;
+        for (const candidate of Array.from(
+          el.querySelectorAll<HTMLElement>("span, div, button, p"),
+        )) {
+          if ((candidate.textContent ?? "").trim() !== "回复") {
+            continue;
+          }
+
+          const r = candidate.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0 || r.width > 80 || r.height > 40) {
+            continue;
+          }
+
+          replyBox = {
+            x: Math.round(r.x),
+            y: Math.round(r.y),
+            width: Math.round(r.width),
+            height: Math.round(r.height),
+          };
+          break;
+        }
+
+        const text = el.innerText || "";
+
+        return {
+          ids: Array.from(ids),
+          authorId,
+          text,
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          replyBox,
+          pinned: text.includes("置顶"),
+        };
+      });
+
+    return snapshots;
+  });
+}
+
+/** 在右侧面板里往下滚（触发评论懒加载）。 */
+export async function scrollCommentPanel(page: Page, steps: number): Promise<void> {
+  const viewport = page.viewportSize() ?? { width: 1400, height: 950 };
+  const x = Math.max(600, viewport.width - 120);
+
+  await page.mouse.move(x, Math.round(viewport.height / 2));
+  for (let i = 0; i < Math.max(0, steps); i += 1) {
+    await page.mouse.wheel(0, 900);
+    await page.waitForTimeout(600);
+  }
+}
+
+/**
+ * 点某条评论块上的「回复」，让输入框进入回复态（会自带 `@某人` 前缀）。
+ *
+ * @throws 块上没有「回复」按钮（楼中楼 / 折叠 / DOM 改版）
+ */
+export async function clickCommentReply(page: Page, block: CommentBlockSnapshot): Promise<void> {
+  const box = block.replyBox;
+  if (!box) {
+    throw new Error("这一条评论上找不到「回复」按钮（可能被折叠 / 是楼中楼 / DOM 改版）");
+  }
+
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForTimeout(1_200);
+}
+
+/**
+ * 找评论输入框：右侧面板里**最靠下**的那个可编辑元素。
+ *
+ * 为什么要按坐标筛：视频页左侧还有搜索框 / 顶部输入框，按 `last()` 取可能取到别处；
+ * 评论区的输入框一定在面板底部（x 靠右、y 最大）。
+ */
+export async function findCommentInput(page: Page): Promise<ElementHandle> {
+  const locator = page.locator('textarea, [contenteditable="true"]');
+  const count = await locator.count();
+
+  let best: { handle: ElementHandle; y: number } | null = null;
+
+  for (let i = 0; i < count; i += 1) {
+    const handle = await locator.nth(i).elementHandle().catch(() => null);
+    if (!handle) {
+      continue;
+    }
+
+    const box = await handle.boundingBox().catch(() => null);
+    if (!box || box.x < 520 || box.width < 80) {
+      continue;
+    }
+
+    if (!best || box.y > best.y) {
+      best = { handle, y: box.y };
+    }
+  }
+
+  if (!best) {
+    throw new Error("找不到评论输入框（「回复」没点中，或页面没进入评论态）");
+  }
+
+  return best.handle;
+}
+
+/** 读输入框里的当前内容（textarea 取 value，contenteditable 取 innerText）。 */
+export async function readCommentInput(input: ElementHandle): Promise<string> {
+  return input.evaluate((el) => {
+    const area = el as HTMLTextAreaElement;
+    if (typeof area.value === "string" && area.value.length > 0) {
+      return area.value;
+    }
+
+    return (el as HTMLElement).innerText ?? el.textContent ?? "";
+  });
+}
+
+/** 清空输入框（干跑收尾 / 提交没生效时回滚）。**焦点必须已经在输入框里**。 */
+export async function clearCommentInput(page: Page): Promise<void> {
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Delete");
+  await page.waitForTimeout(200);
+}
+
+/**
+ * 提交评论：先回车；回车没生效再点「发送」/「发布」。
+ *
+ * @returns 是否观察到输入框被清空（= 提交成功的最硬判据）
+ */
+export async function submitComment(page: Page, input: ElementHandle): Promise<boolean> {
+  const isEmpty = async (): Promise<boolean> =>
+    (await readCommentInput(input).catch(() => "")).trim().length === 0;
+
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(1_500);
+  if (await isEmpty()) {
+    return true;
+  }
+
+  // 「评论」这个文案也是 tab 名字，点它会把面板切走 —— 只用「发送」/「发布」
+  for (const label of ["发送", "发布"]) {
+    const button = page.getByText(new RegExp(`^${label}$`)).last();
+    if ((await button.count()) === 0) {
+      continue;
+    }
+
+    await button.click({ timeout: 3_000 }).catch(() => undefined);
+    await page.waitForTimeout(1_500);
+    if (await isEmpty()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * 回到私信页并重新打开最近会话（**评论动作会离开 `/chat`，入站订阅必须接回来**）。
+ *
+ * 网页版只在私信页挂着 `frontier-im` 的 WS；停在作品页时新私信不会被推过来
+ * （`docs/06-调研/抖音网页版底座实测.md` §5、B4 真机记录）。
+ *
+ * @returns 打开的会话名（`null` = 列表为空，调用方只记日志）
+ */
+export async function restoreChatPage(page: Page): Promise<string | null> {
+  await openChatPage(page);
+  return openMostRecentConversation(page);
+}
+

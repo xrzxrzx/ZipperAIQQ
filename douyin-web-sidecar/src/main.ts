@@ -23,6 +23,13 @@ import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
 
 import { DouyinBrowser, type BrowserLogger, type BrowserStateSnapshot } from "./browser.js";
+import {
+  collapse,
+  hasAtPrefix,
+  type ParsedComment,
+  parseCommentBlocks,
+  pickCommentTarget,
+} from "./comment.js";
 import { InboundListener } from "./inbound.js";
 import { LoginFlow } from "./login.js";
 import {
@@ -50,12 +57,21 @@ import {
   type Frame,
 } from "./protocol.js";
 import {
+  clickCommentReply,
   ConversationNameCache,
+  findCommentInput,
   listConversations,
   openChatPage,
+  openCommentPanel,
   openMostRecentConversation,
   pageHealth,
+  readCommentBlocks,
+  readCommentInput,
+  restoreChatPage,
+  scrollCommentPanel,
   SITE,
+  submitComment,
+  clearCommentInput,
 } from "./site.js";
 
 // ═══════════════════════════ 配置 ═══════════════════════════
@@ -111,6 +127,21 @@ const MEDIA_HARD_LIMITS = {
   timeoutMs: 60_000,
   /** 一次最多抽几张（服务端另有限制，这里只是天花板）。 */
   maxFrames: 24,
+} as const;
+
+/**
+ * 评论读写（B5）的**硬**上限。
+ *
+ * 同样只兜底：分几页、读几条、要不要回，都是服务端随请求下发的策略；
+ * 这里只保证「一条手写帧也不能让 sidecar 滚 100 页」。
+ */
+const COMMENT_HARD_LIMITS = {
+  /** 一次最多翻几页评论。 */
+  maxPages: 10,
+  /** 一次最多回几条评论。 */
+  maxComments: 100,
+  /** 单次评论请求的超时。 */
+  timeoutMs: 90_000,
 } as const;
 
 async function loadConfig(log: Logger): Promise<SidecarConfig> {
@@ -656,6 +687,14 @@ async function main(): Promise<void> {
         void handleMediaAudio(inFrame);
         return;
 
+      case "comment.list":
+        void handleCommentList(inFrame);
+        return;
+
+      case "comment.reply":
+        void handleCommentReply(inFrame);
+        return;
+
       case "query.groups":
         // 网页版私信页没有"群列表"入口（当前账号群列表本来就是 0 个）；
         // 明确回空 + 说明，不假装查到了（与既有 sidecar「取不到不阻塞」同口径）
@@ -937,6 +976,247 @@ async function main(): Promise<void> {
       });
     } catch (error) {
       failMedia(inFrame, `media.audio(${itemId})`, error);
+    }
+  };
+
+  // ── 评论区（B5）：读 / 回 ──
+  //
+  // 两条都是**页面动作**：作品页右侧面板里读 DOM、点「回复」、追加输入、提交后回读。
+  // 评论动作会离开 `/chat`，而网页版只在私信页挂着 `frontier-im` 的 WS ——
+  // 所以每次做完（无论成败）都要回到私信页并重新打开最近会话（见 `withCommentPage` 的 finally）。
+
+  const commentPages = (inFrame: Frame): number => {
+    const wanted = num(inFrame.data?.maxPages) ?? 3;
+    return Math.min(Math.max(Math.round(wanted), 1), COMMENT_HARD_LIMITS.maxPages);
+  };
+
+  const commentCount = (inFrame: Frame): number => {
+    const wanted = num(inFrame.data?.maxComments) ?? 30;
+    return Math.min(Math.max(Math.round(wanted), 1), COMMENT_HARD_LIMITS.maxComments);
+  };
+
+  /** 进作品页 → 做事 → **一定**回到私信页（读评论不能把入站订阅弄哑）。 */
+  const withCommentPage = async <T>(
+    itemId: string,
+    label: string,
+    action: (page: Page) => Promise<T>,
+  ): Promise<T> => {
+    const page = await browser.ensureChatPage(SITE.chatUrl);
+    try {
+      await openCommentPanel(page, itemId);
+      return await action(page);
+    } finally {
+      await restoreChatPage(page).catch((error: unknown) => {
+        log.warn(
+          `${label} 之后没能回到私信页（入站可能暂时收不到）：${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    }
+  };
+
+  /** 回一条失败的结果（**必须带人话原因**：服务端会原样递给模型）。 */
+  const failComment = (
+    inFrame: Frame,
+    label: string,
+    error: unknown,
+    extra: Record<string, unknown> = {},
+  ): void => {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`${label} 失败：${message}`);
+    reply(inFrame, { ok: false, error: message, code: "page", ...extra });
+  };
+
+  const handleCommentList = async (inFrame: Frame): Promise<void> => {
+    const itemId = str(inFrame.data?.itemId);
+    if (!itemId) {
+      reply(inFrame, { ok: false, error: "comment.list 缺少 itemId", code: "args", comments: [] });
+      return;
+    }
+
+    const maxPages = commentPages(inFrame);
+    const maxComments = commentCount(inFrame);
+
+    try {
+      const collected = await withCommentPage(itemId, "comment.list", async (page) => {
+        const seen = new Set<string>();
+        const comments: ParsedComment[] = [];
+        let pages = 0;
+
+        for (let i = 0; i < maxPages; i += 1) {
+          const parsed = parseCommentBlocks(await readCommentBlocks(page));
+          let added = 0;
+          for (const comment of parsed) {
+            if (seen.has(comment.key)) {
+              continue;
+            }
+
+            seen.add(comment.key);
+            comments.push(comment);
+            added += 1;
+          }
+
+          pages += 1;
+          if (comments.length >= maxComments) {
+            break;
+          }
+
+          // 一页都没新增 ⇒ 已经滚不动了（评论区到底 / 懒加载结束），别空转到页数上限
+          if (added === 0 && i > 0) {
+            break;
+          }
+
+          await scrollCommentPanel(page, 2);
+        }
+
+        return { comments, pages };
+      });
+
+      const sliced = collected.comments.slice(0, maxComments);
+      const truncated = collected.comments.length > maxComments;
+
+      log.info(
+        `comment.list 成功：id=${itemId} 页数=${collected.pages} 条数=${sliced.length} ` +
+          `置顶=${sliced.filter((comment) => comment.pinned).length}`,
+      );
+
+      reply(inFrame, {
+        ok: true,
+        error: null,
+        itemId,
+        pages: collected.pages,
+        truncated,
+        comments: sliced,
+        note: truncated ? `只回了前 ${maxComments} 条（后面还有）` : null,
+      });
+    } catch (error) {
+      failComment(inFrame, `comment.list(${itemId})`, error, { comments: [] });
+    }
+  };
+
+  const handleCommentReply = async (inFrame: Frame): Promise<void> => {
+    const itemId = str(inFrame.data?.itemId);
+    const text = str(inFrame.data?.text);
+    const commit = inFrame.data?.commit !== false;
+    const target = {
+      commentId: str(inFrame.data?.commentId) ?? null,
+      author: str(inFrame.data?.author) ?? null,
+      text: str(inFrame.data?.textMatch) ?? null,
+    };
+
+    if (!itemId || !text) {
+      reply(inFrame, { ok: false, error: "comment.reply 缺少 itemId 或 text", code: "args" });
+      return;
+    }
+
+    try {
+      const outcome = await withCommentPage(itemId, "comment.reply", async (page) => {
+        let blocks = await readCommentBlocks(page);
+        let hit = pickCommentTarget(blocks, target);
+
+        // 没命中就往下滚几屏再找一次：目标可能在后面的楼层
+        if (hit.index < 0) {
+          await scrollCommentPanel(page, 3);
+          blocks = await readCommentBlocks(page);
+          hit = pickCommentTarget(blocks, target);
+        }
+
+        if (hit.index < 0) {
+          return { ok: false as const, code: "target", error: hit.problem };
+        }
+
+        const block = blocks[hit.index];
+        if (!block) {
+          return {
+            ok: false as const,
+            code: "target",
+            error: "挑中的评论块在下一次快照里消失了（页面重排），请重试。",
+          };
+        }
+
+        await clickCommentReply(page, block);
+        const input = await findCommentInput(page);
+        await input.click({ timeout: 5_000 }).catch(() => undefined);
+        await page.waitForTimeout(300);
+
+        // ⚠️ 实测踩过的坑：点「回复」后输入框自带 `@某人`，覆盖式写入会把它冲掉 ⇒ 变成顶层评论
+        const prefix = await readCommentInput(input);
+        if (!hasAtPrefix(prefix)) {
+          return {
+            ok: false as const,
+            code: "no_at_prefix",
+            error:
+              "点「回复」后输入框里没有 @ 前缀：这样发出去会变成一条独立评论而不是回复，已停止（什么都没发）。",
+          };
+        }
+
+        // 只在已有内容后**追加**：End 把光标放到末尾，再逐字打（不用 fill）
+        await page.keyboard.press("End");
+        await page.keyboard.type(text, { delay: 12 });
+        await page.waitForTimeout(300);
+
+        const filled = await readCommentInput(input);
+        if (!hasAtPrefix(filled) || !collapse(filled).includes(collapse(text).slice(0, 6))) {
+          return {
+            ok: false as const,
+            code: "input",
+            error: `输入框内容不对（@ 前缀或正文丢了），已停止：当前是「${collapse(filled).slice(0, 60)}」`,
+          };
+        }
+
+        if (!commit) {
+          await clearCommentInput(page);
+          await page.keyboard.press("Escape");
+          return {
+            ok: true as const,
+            dryRun: true,
+            matchedBy: hit.matchedBy,
+            filled: collapse(filled),
+            note: "干跑：已点开回复、写入并校验 @ 前缀，但没有提交（对方看不到任何东西）",
+          };
+        }
+
+        const submitted = await submitComment(page, input);
+        if (!submitted) {
+          return {
+            ok: false as const,
+            code: "submit",
+            error: "回车与「发送」都没提交成功（输入框里还留着内容）。别当成发出去了。",
+          };
+        }
+
+        // 回读：滚到底找自己那条（提交成功 ≠ 页面上看得到）
+        await scrollCommentPanel(page, 3);
+        const probe = collapse(text).slice(0, 10);
+        const echo = parseCommentBlocks(await readCommentBlocks(page)).find((comment) =>
+          collapse(comment.text).includes(probe),
+        );
+
+        return {
+          ok: true as const,
+          dryRun: false,
+          matchedBy: hit.matchedBy,
+          readback: echo !== null,
+          echoId: echo?.id ?? null,
+          note: echo
+            ? "已回读确认：这条回复出现在评论区"
+            : "已提交，但没在页面上回读到（可能还在加载）：别断言对方一定看到了",
+        };
+      });
+
+      if (!outcome.ok) {
+        log.warn(`comment.reply 失败（code=${outcome.code}）：${outcome.error}`);
+        reply(inFrame, { ok: false, error: outcome.error, code: outcome.code, itemId });
+        return;
+      }
+
+      log.info(
+        `comment.reply 成功：id=${itemId} matchedBy=${outcome.matchedBy} dryRun=${outcome.dryRun} ` +
+          `readback=${outcome.dryRun ? "-" : String(outcome.readback)}`,
+      );
+
+      reply(inFrame, { error: null, itemId, ...outcome });
+    } catch (error) {
+      failComment(inFrame, `comment.reply(${itemId})`, error);
     }
   };
 
