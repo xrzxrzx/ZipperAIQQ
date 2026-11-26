@@ -66,6 +66,9 @@ public static class ToolCatalog
         // ── 抖音视频理解（B4）：下整条视频 + 走 ASR，默认只给管理员 ──
         Item(VideoTools.VideoToolName, "看抖音视频画面", ToolCapability.MediaVideo, ToolPlatform.Douyin),
         Item(VideoTools.TranscriptToolName, "抖音视频转写", ToolCapability.MediaVideo, ToolPlatform.Douyin),
+
+        // ── 抖音评论区（B5）：读评论是公开内容（默认管理员、硬底线白名单）──
+        Item(CommentTools.ListToolName, "读抖音评论区", ToolCapability.CommentRead, ToolPlatform.Douyin),
     ];
 
     private static PolicyItem Item(
@@ -136,6 +139,7 @@ public static class ToolCatalog
         MailTools.RawToolName => ToolCapability.MailRaw,
         VideoTools.VideoToolName => ToolCapability.MediaVideo,
         VideoTools.TranscriptToolName => ToolCapability.MediaVideo,
+        CommentTools.ListToolName => ToolCapability.CommentRead,
         _ => null,
     };
 }

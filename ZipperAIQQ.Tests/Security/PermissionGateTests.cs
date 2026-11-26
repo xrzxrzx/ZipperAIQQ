@@ -103,6 +103,8 @@ public sealed class PermissionGateTests
             [ToolCapability.MailRaw] = Role.Admin,
             // 视频理解（B4）：下整条视频 + 调 ASR，硬底线同样是管理员
             [ToolCapability.MediaVideo] = Role.Admin,
+            // 读评论（B5）：公开内容、无对外动作，硬底线是白名单（不放宽到普通成员）
+            [ToolCapability.CommentRead] = Role.Whitelist,
         };
 
         PermissionGate.ValidateHardFloor(ok);

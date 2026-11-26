@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Models;
+using ZipperAIQQ.Server.Douyin;
 using ZipperAIQQ.Server.Media;
 
 namespace ZipperAIQQ.Server.Channels;
@@ -77,6 +78,14 @@ public static class DouyinFrameTypes
 
     /// <summary>Server → sidecar：取一段音频（回 16 kHz 单声道 WAV base64）。</summary>
     public const string MediaAudio = "media.audio";
+
+    // ── 评论区（2026-11-26 B5）：读 / 回 ──
+
+    /// <summary>Server → sidecar：读某条作品下的评论（分页由底座滚动完成）。</summary>
+    public const string CommentList = "comment.list";
+
+    /// <summary>Server → sidecar：回一条评论（<c>commit=false</c> 时只填入不提交）。</summary>
+    public const string CommentReply = "comment.reply";
 }
 
 /// <summary>抖音登录状态（字符串常量，进 JSON 也进 API 响应）。</summary>
@@ -586,6 +595,119 @@ public static class DouyinProtocol
             startMs,
             endMs,
             GetLong(data, "durationMs") ?? 0);
+    }
+
+    // ─────────────────────────── 解析：评论结果（B5） ───────────────────────────
+
+    /// <summary>解析 <c>comment.list</c> 的结果；缺 <c>itemId</c> 返回 <c>null</c>。</summary>
+    /// <param name="data"><c>result</c> 帧的 data。</param>
+    /// <remarks>
+    /// 单条评语解析不出来**只跳过那一条**（不整包失败）：评论区里混进一条结构异常的块
+    /// 不该让「读评论」整个变成「读不到」，否则模型只会重试到超时。
+    /// </remarks>
+    public static DouyinCommentList? ParseCommentList(JsonObject? data)
+    {
+        if (data is null)
+        {
+            return null;
+        }
+
+        var itemId = GetNonEmpty(data, "itemId");
+        if (itemId is null)
+        {
+            return null;
+        }
+
+        var comments = new List<DouyinCommentItem>();
+        if (data["comments"] is JsonArray array)
+        {
+            foreach (var node in array)
+            {
+                if (ParseCommentItem(node) is { } comment)
+                {
+                    comments.Add(comment);
+                }
+            }
+        }
+
+        var pages = GetInt(data, "pages") ?? 1;
+
+        return new DouyinCommentList(
+            ItemId: itemId,
+            Comments: comments,
+            Pages: Math.Max(1, pages),
+            Truncated: GetBool(data, "truncated") ?? false,
+            Note: GetNonEmpty(data, "note"));
+    }
+
+    /// <summary>解析 <c>comment.reply</c> 的结果；缺 <c>itemId</c> 返回 <c>null</c>。</summary>
+    /// <param name="data"><c>result</c> 帧的 data。</param>
+    public static DouyinCommentReplyResult? ParseCommentReply(JsonObject? data)
+    {
+        if (data is null)
+        {
+            return null;
+        }
+
+        var itemId = GetNonEmpty(data, "itemId");
+        if (itemId is null)
+        {
+            return null;
+        }
+
+        return new DouyinCommentReplyResult(
+            ItemId: itemId,
+            DryRun: GetBool(data, "dryRun") ?? false,
+            MatchedBy: GetNonEmpty(data, "matchedBy"),
+            Readback: GetBool(data, "readback") ?? false,
+            Note: GetNonEmpty(data, "note"));
+    }
+
+    /// <summary>解析评论数组里的一条；缺正文返回 <c>null</c>（正文是唯一不可省的字段）。</summary>
+    private static DouyinCommentItem? ParseCommentItem(JsonNode? node)
+    {
+        if (node is not JsonObject obj)
+        {
+            return null;
+        }
+
+        var text = GetNonEmpty(obj, "text");
+        if (text is null)
+        {
+            return null;
+        }
+
+        return new DouyinCommentItem(
+            Id: GetNonEmpty(obj, "id"),
+            Author: GetNonEmpty(obj, "author") ?? "unknown",
+            AuthorId: GetNonEmpty(obj, "authorId"),
+            Text: text,
+            Time: GetNonEmpty(obj, "time"),
+            Likes: GetInt(obj, "likes"),
+            ReplyCount: GetInt(obj, "replyCount"),
+            Pinned: GetBool(obj, "pinned") ?? false,
+            Mentions: ParseStringArray(obj["mentions"]));
+    }
+
+    /// <summary>把 JSON 数组读成字符串列表（非字符串 / 空白一律丢弃）。</summary>
+    private static IReadOnlyList<string> ParseStringArray(JsonNode? node)
+    {
+        if (node is not JsonArray array)
+        {
+            return [];
+        }
+
+        var values = new List<string>(array.Count);
+        foreach (var item in array)
+        {
+            if (item is JsonValue value && value.TryGetValue<string>(out var text)
+                && !string.IsNullOrWhiteSpace(text))
+            {
+                values.Add(text);
+            }
+        }
+
+        return values;
     }
 
     // ─────────────────────────── 序列化：出站 / 查询 ───────────────────────────

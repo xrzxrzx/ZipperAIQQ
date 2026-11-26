@@ -34,6 +34,9 @@ public sealed class PermissionGate : IPermissionGate
             [ToolCapability.MailRaw] = Role.Admin,
             // 视频理解（B4）：要下整条视频 + 调 ASR（按时长计费），不放宽到管理员以下
             [ToolCapability.MediaVideo] = Role.Admin,
+            // 读评论（B5）：公开内容、无对外动作；但它会把共享浏览器导航离开私信页，
+            // 所以硬底线是白名单（能配给谁用，但不能配成"所有人都能翻评论区"）
+            [ToolCapability.CommentRead] = Role.Whitelist,
         };
 
     /// <summary>默认最低角色（M1 的「预置默认允许集」，FR-6.7）。</summary>
@@ -60,6 +63,9 @@ public sealed class PermissionGate : IPermissionGate
             [ToolCapability.MailRaw] = Role.Owner,
             // 视频：方案 B4 没定档，按「成本面」默认只给管理员（群里任何人发视频都能触发一串下载+转写）
             [ToolCapability.MediaVideo] = Role.Admin,
+            // 读评论：评论是公开内容，但读一次要让共享浏览器离开私信页（入站会短暂中断）
+            // ⇒ 默认只给管理员，按需在工具页放开（硬底线是白名单）
+            [ToolCapability.CommentRead] = Role.Admin,
         };
 
     private readonly IReadOnlyDictionary<ToolCapability, Role> _minRoles;
@@ -137,6 +143,7 @@ public sealed class PermissionGate : IPermissionGate
         ToolCapability.MediaSpeak => "文本转语音",
         ToolCapability.MailRead => "查看邮件画面",
         ToolCapability.MailRaw => "读取邮件原文",
+        ToolCapability.CommentRead => "读抖音评论区",
         _ => capability.ToString(),
     };
 }

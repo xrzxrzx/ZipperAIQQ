@@ -88,4 +88,13 @@ public sealed record DouyinOptions
     /// 键名仍是两级的（<c>douyin.videoMaxFrames</c>），见 <see cref="DouyinVideoOptions"/>。
     /// </remarks>
     public DouyinVideoOptions Video { get; init; } = new();
+
+    /// <summary>
+    /// 评论区（B5）：读评论的策略上限 + 写回复的闸门默认值。
+    /// </summary>
+    /// <remarks>
+    /// 同样嵌在 <c>douyin</c> 节里，键名两级（<c>douyin.commentMaxPages</c>），
+    /// 见 <see cref="DouyinCommentOptions"/>。
+    /// </remarks>
+    public DouyinCommentOptions Comment { get; init; } = new();
 }

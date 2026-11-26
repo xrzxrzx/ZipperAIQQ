@@ -142,4 +142,19 @@ public enum ToolCapability
     /// </para>
     /// </remarks>
     MediaVideo,
+
+    /// <summary>
+    /// 读抖音评论区（<c>douyin_comments</c>）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 评论是**公开内容**，读它不对外产生任何动作；但读一次要把共享的那个 Chromium
+    /// 从私信页导航到作品页（入站推送会短暂中断），所以默认只给管理员，
+    /// 硬底线放到白名单（要放开给更多人就到工具页调，别让默认值替人决定）。
+    /// </para>
+    /// <para>
+    /// 与 <see cref="CommentWrite"/> 分开：那个是「代替主人对外发言」，必须更严。
+    /// </para>
+    /// </remarks>
+    CommentRead,
 }

@@ -31,7 +31,7 @@ namespace ZipperAIQQ.Server.Channels;
 /// </remarks>
 public sealed class DouyinChannel
     : IMessageChannel, IContactDirectory, IChannelLogin, ISendNoticeSink, IAsyncDisposable, IRecoverableChannel,
-      Media.IDouyinMediaSource
+      Media.IDouyinMediaSource, Douyin.IDouyinCommentSource
 {
     /// <summary>平台标识，与 <see cref="ChatRef.Platform"/>、<c>session</c> 前缀一致。</summary>
     public const string PlatformName = "douyin";
@@ -1164,6 +1164,87 @@ public sealed class DouyinChannel
         return DouyinProtocol.ParseMediaAudio(result.Data)
                ?? throw new InvalidOperationException(
                    "抖音音频响应解析失败（sidecar 没回 wav 或时间区间不合法）。");
+    }
+
+    // ─────────────────────────── IDouyinCommentSource（B5 评论区） ───────────────────────────
+
+    /// <inheritdoc />
+    bool Douyin.IDouyinCommentSource.IsReady =>
+        !_disposed && _connection is not null && _options.Enabled;
+
+    /// <inheritdoc />
+    string Douyin.IDouyinCommentSource.NotReadyReason
+    {
+        get
+        {
+            if (_disposed)
+            {
+                return "抖音通道已释放。";
+            }
+
+            if (!_options.Enabled)
+            {
+                return "抖音接入已停用（客户端「第三方平台接入」里可以打开）。";
+            }
+
+            return _connection is null
+                ? "抖音未连接：浏览器底座还没连上 /ws/channel（评论工具暂时不可用）。"
+                : string.Empty;
+        }
+    }
+
+    /// <inheritdoc />
+    async Task<Douyin.DouyinCommentList> Douyin.IDouyinCommentSource.ListAsync(
+        string itemId, int maxPages, int maxComments, int timeoutMs, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemId);
+
+        var payload = new System.Text.Json.Nodes.JsonObject
+        {
+            ["itemId"] = itemId,
+            ["maxPages"] = Math.Max(1, maxPages),
+            ["maxComments"] = Math.Max(1, maxComments),
+            ["timeoutMs"] = Math.Max(1_000, timeoutMs),
+        };
+
+        // 与媒体请求同口径：sidecar 的 timeout 管它自己的动作，服务端多等一段宽限，
+        // 否则服务端先超时、sidecar 随后回来的 result 落进「无人等待」被丢掉（白翻一遍评论区）
+        var result = await QueryAsync(
+                DouyinFrameTypes.CommentList, "评论列表", payload, timeoutMs + MediaGraceMs, ct)
+            .ConfigureAwait(false);
+
+        var list = DouyinProtocol.ParseCommentList(result.Data)
+                   ?? throw new InvalidOperationException(
+                       "抖音评论响应解析失败（sidecar 没回 itemId）。");
+
+        _logger.Debug(
+            "抖音读评论完成：id={ItemId} 条数={Count} 页数={Pages} 截断={Truncated}",
+            itemId, list.Comments.Count, list.Pages, list.Truncated);
+
+        return list;
+    }
+
+    /// <inheritdoc />
+    async Task<Douyin.DouyinCommentReplyResult> Douyin.IDouyinCommentSource.ReplyAsync(
+        Douyin.DouyinCommentReplyRequest request, int timeoutMs, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.ItemId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Text);
+
+        var result = await QueryAsync(
+                DouyinFrameTypes.CommentReply, "回评论", request.ToPayload(), timeoutMs + MediaGraceMs, ct)
+            .ConfigureAwait(false);
+
+        var reply = DouyinProtocol.ParseCommentReply(result.Data)
+                    ?? throw new InvalidOperationException(
+                        "抖音回评论的响应解析失败（sidecar 没回 itemId）。");
+
+        _logger.Information(
+            "抖音回评论完成：id={ItemId} 干跑={DryRun} 定位={MatchedBy} 回读={Readback}",
+            request.ItemId, reply.DryRun, reply.MatchedBy ?? "-", reply.Readback);
+
+        return reply;
     }
 
     // ─────────────────────────── 内部工具 ───────────────────────────

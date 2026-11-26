@@ -180,6 +180,16 @@ public sealed record ChatAgentDependencies
     /// </remarks>
     public Media.IVideoReader? VideoReader { get; init; }
 
+    /// <summary>
+    /// 抖音评论区（B5）：读评论。
+    /// </summary>
+    /// <remarks>
+    /// 未注册（浏览器底座没连上、或服务端没装配）时读评论工具**不出现**。
+    /// 写回复走另一个接口（<c>ICommentReplier</c>），因为它默认是关的 ——
+    /// 两个能力分开报，才不会出现「读得动就以为写得了」。
+    /// </remarks>
+    public Comments.ICommentReader? CommentReader { get; init; }
+
     /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
     public required Security.IRoleResolver Roles { get; init; }
 

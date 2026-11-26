@@ -133,6 +133,20 @@ public static class ServerConfigLoader
                     MaxAudioSeconds = s.Int("douyin", "videoMaxAudioSeconds", o.Douyin.Video.MaxAudioSeconds),
                     AudioWindowSeconds = s.Int("douyin", "videoAudioWindowSeconds", o.Douyin.Video.AudioWindowSeconds),
                 },
+
+                // 评论区（B5）：同样摊平成两级
+                Comment = o.Douyin.Comment with
+                {
+                    Enabled = s.Bool("douyin", "commentEnabled", o.Douyin.Comment.Enabled),
+                    MaxPages = s.Int("douyin", "commentMaxPages", o.Douyin.Comment.MaxPages),
+                    MaxComments = s.Int("douyin", "commentMaxComments", o.Douyin.Comment.MaxComments),
+                    TimeoutSeconds = s.Int("douyin", "commentTimeoutSeconds", o.Douyin.Comment.TimeoutSeconds),
+                    WriteEnabled = s.Bool("douyin", "commentWriteEnabled", o.Douyin.Comment.WriteEnabled),
+                    CommentPerDay = s.Int("douyin", "commentPerDay", o.Douyin.Comment.CommentPerDay),
+                    ReplyPerDay = s.Int("douyin", "commentReplyPerDay", o.Douyin.Comment.ReplyPerDay),
+                    ReplyIntervalSeconds = s.Int("douyin", "commentReplyIntervalSeconds", o.Douyin.Comment.ReplyIntervalSeconds),
+                    ReplyOncePerTarget = s.Bool("douyin", "commentReplyOncePerTarget", o.Douyin.Comment.ReplyOncePerTarget),
+                },
             },
 
             // ── billing / quota ──

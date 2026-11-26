@@ -154,6 +154,18 @@ public static partial class ServiceRegistration
         services.AddSingleton<ZipperAIQQ.Agent.Media.IVideoReader>(sp =>
             sp.GetRequiredService<Media.VideoReadService>());
 
+        // 评论区（B5）：同样是窄接口 + 由通道实现（连接与 requestId 配对在通道手里）。
+        // 读评论要知道「抖音这边主人叫什么」才能判 `@主人`，所以把 IOwnerLookup 一起给它。
+        services.AddSingleton<Douyin.IDouyinCommentSource>(sp =>
+            sp.GetRequiredService<Channels.DouyinChannel>());
+        services.AddSingleton(sp => new Douyin.DouyinCommentService(
+            sp.GetRequiredService<Douyin.IDouyinCommentSource>(),
+            sp.GetRequiredService<Configuration.ServerOptions>().Douyin.Comment,
+            sp.GetRequiredService<ILogger>(),
+            sp.GetService<ZipperAIQQ.Agent.IOwnerLookup>()));
+        services.AddSingleton<ZipperAIQQ.Agent.Comments.ICommentReader>(sp =>
+            sp.GetRequiredService<Douyin.DouyinCommentService>());
+
         // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围 / 平台专用工具都只认平台名。
         // ⚠️ 抖音**无条件**注册（S3-F 补）：之前按启动配置决定加不加，结果"客户端打开开关"不生效 ——
         //    注册表/复合通道是启动时定死的，运行时改不了。现在改成通道常驻、由快照决定收不收发不发。

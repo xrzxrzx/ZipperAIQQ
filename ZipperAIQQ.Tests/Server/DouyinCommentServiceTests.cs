@@ -1,0 +1,242 @@
+using Serilog;
+using ZipperAIQQ.Agent;
+using ZipperAIQQ.Agent.Comments;
+using ZipperAIQQ.Server.Channels;
+using ZipperAIQQ.Server.Douyin;
+
+namespace ZipperAIQQ.Tests.Server;
+
+/// <summary>
+/// 抖音评论服务（B5）：条数/页数夹取、正文截断、`@主人` 三态判定、不可用时的行为。
+/// </summary>
+/// <remarks>
+/// 用假 <see cref="IDouyinCommentSource"/> + 假 <see cref="IOwnerLookup"/>：
+/// 这里要证明的是**服务端的口径**（夹取、截断、三态、失败如实报），
+/// 不是浏览器能不能读到评论（那是真机验收的事）。
+/// </remarks>
+public sealed class DouyinCommentServiceTests
+{
+    private const string ItemId = "7706296015465071715";
+
+    private static readonly ILogger Logger = new LoggerConfiguration().CreateLogger();
+
+    [Fact]
+    public async Task List_marks_mentions_of_owner()
+    {
+        var source = new FakeSource
+        {
+            List = new DouyinCommentList(ItemId, [
+                Comment("甲", "这视频真不错", mentions: []),
+                Comment("乙", "@拉链 你怎么看", mentions: ["拉链"]),
+            ], Pages: 1, Truncated: false, Note: null),
+        };
+
+        var page = await CreateService(source, ownerName: "拉链").ListAsync(ItemId, 0, 0);
+
+        Assert.False(page.OwnerUnknown);
+        Assert.False(page.Comments[0].MentionsOwner);
+        Assert.True(page.Comments[1].MentionsOwner);
+    }
+
+    [Fact]
+    public async Task List_reports_mentions_unknown_when_owner_nickname_is_missing()
+    {
+        // 判不了就给 null（不知道），不给 false（确认没 @ 我）—— 两者会让模型做出完全不同的决定
+        var source = new FakeSource
+        {
+            List = new DouyinCommentList(ItemId, [Comment("乙", "@拉链 在不在", mentions: ["拉链"])],
+                Pages: 1, Truncated: false, Note: null),
+        };
+
+        var page = await CreateService(source, ownerName: null).ListAsync(ItemId, 0, 0);
+
+        Assert.True(page.OwnerUnknown);
+        Assert.Null(page.Comments[0].MentionsOwner);
+        Assert.Contains("主人昵称", page.Note!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task List_works_without_owner_lookup_at_all()
+    {
+        var source = new FakeSource
+        {
+            List = new DouyinCommentList(ItemId, [Comment("甲", "只有一条", mentions: [])],
+                Pages: 1, Truncated: false, Note: null),
+        };
+
+        var page = await CreateService(source, ownerName: null, owner: null).ListAsync(ItemId, 0, 0);
+
+        Assert.True(page.OwnerUnknown);
+        Assert.Single(page.Comments);
+    }
+
+    [Fact]
+    public async Task List_truncates_long_comments_and_flags_it()
+    {
+        var source = new FakeSource
+        {
+            List = new DouyinCommentList(
+                ItemId,
+                [Comment("甲", new string('长', 5000), mentions: [])],
+                Pages: 1,
+                Truncated: false,
+                Note: null),
+        };
+
+        var page = await CreateService(source, ownerName: "拉链").ListAsync(ItemId, 0, 0);
+
+        var comment = page.Comments[0];
+        Assert.True(comment.TextTruncated);
+        Assert.Equal(501, comment.Text.Length); // 500 字 + 省略号
+        Assert.EndsWith("…", comment.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task List_clamps_pages_and_limit_to_the_hard_caps()
+    {
+        var source = new FakeSource();
+        var service = CreateService(source, ownerName: "拉链");
+
+        await service.ListAsync(ItemId, pages: 999, limit: 999);
+
+        Assert.Equal((10, 100), (source.LastPages, source.LastLimit));
+    }
+
+    [Fact]
+    public async Task List_uses_configured_defaults_when_model_passes_zero()
+    {
+        var source = new FakeSource();
+        var service = CreateService(
+            source,
+            ownerName: "拉链",
+            options: new DouyinCommentOptions { MaxPages = 2, MaxComments = 7 });
+
+        await service.ListAsync(ItemId, pages: 0, limit: 0);
+
+        Assert.Equal((2, 7), (source.LastPages, source.LastLimit));
+    }
+
+    [Fact]
+    public async Task List_says_so_when_everything_was_cut_by_the_limit()
+    {
+        var source = new FakeSource
+        {
+            List = new DouyinCommentList(ItemId, [Comment("甲", "一", mentions: []), Comment("乙", "二", mentions: [])],
+                Pages: 1, Truncated: false, Note: null),
+        };
+
+        var page = await CreateService(source, ownerName: "拉链").ListAsync(ItemId, pages: 1, limit: 2);
+
+        Assert.True(page.Truncated);
+    }
+
+    [Fact]
+    public async Task List_refuses_to_pretend_when_the_base_is_missing()
+    {
+        var source = new FakeSource { Ready = false, NotReady = "抖音未连接：浏览器底座还没连上" };
+
+        var service = CreateService(source, ownerName: "拉链");
+
+        Assert.False(service.CanRead);
+        Assert.Contains("浏览器底座", service.UnavailableReason, StringComparison.Ordinal);
+
+        // 不可用时**抛**，不返回空列表冒充「这条视频没有评论」
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ListAsync(ItemId, 0, 0));
+        Assert.Equal(0, source.Calls);
+    }
+
+    [Fact]
+    public async Task List_honors_the_switch()
+    {
+        var source = new FakeSource();
+        var service = CreateService(
+            source, ownerName: "拉链", options: new DouyinCommentOptions { Enabled = false });
+
+        Assert.False(service.CanRead);
+        Assert.Contains("commentEnabled", service.UnavailableReason, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ListAsync(ItemId, 0, 0));
+    }
+
+    [Fact]
+    public async Task List_notes_an_empty_comment_area()
+    {
+        var source = new FakeSource
+        {
+            List = new DouyinCommentList(ItemId, [], Pages: 1, Truncated: false, Note: null),
+        };
+
+        var page = await CreateService(source, ownerName: "拉链").ListAsync(ItemId, 0, 0);
+
+        Assert.Empty(page.Comments);
+        Assert.Contains("没读到评论", page.Note!, StringComparison.Ordinal);
+    }
+
+    // ───────────── 辅助 ─────────────
+
+    private static DouyinCommentItem Comment(
+        string author, string text, IReadOnlyList<string> mentions) =>
+        new(
+            Id: null,
+            Author: author,
+            AuthorId: null,
+            Text: text,
+            Time: "1小时前",
+            Likes: 1,
+            ReplyCount: null,
+            Pinned: false,
+            Mentions: mentions);
+
+    private static DouyinCommentService CreateService(
+        FakeSource source,
+        string? ownerName,
+        DouyinCommentOptions? options = null,
+        IOwnerLookup? owner = null) =>
+        new(
+            source,
+            options ?? new DouyinCommentOptions(),
+            Logger,
+            owner ?? new FakeOwner(ownerName));
+
+    private sealed class FakeSource : IDouyinCommentSource
+    {
+        public bool Ready { get; init; } = true;
+
+        public string NotReady { get; init; } = "抖音未连接";
+
+        public DouyinCommentList List { get; init; } = new(ItemId, [], 1, false, null);
+
+        public int Calls { get; private set; }
+
+        public int LastPages { get; private set; }
+
+        public int LastLimit { get; private set; }
+
+        public bool IsReady => Ready;
+
+        public string NotReadyReason => Ready ? string.Empty : NotReady;
+
+        public Task<DouyinCommentList> ListAsync(
+            string itemId, int maxPages, int maxComments, int timeoutMs, CancellationToken ct = default)
+        {
+            Calls += 1;
+            LastPages = maxPages;
+            LastLimit = maxComments;
+            return Task.FromResult(List with { ItemId = itemId });
+        }
+
+        public Task<DouyinCommentReplyResult> ReplyAsync(
+            DouyinCommentReplyRequest request, int timeoutMs, CancellationToken ct = default) =>
+            throw new NotSupportedException("本组用例只测读评论。");
+    }
+
+    private sealed class FakeOwner : IOwnerLookup
+    {
+        private readonly string? _name;
+
+        public FakeOwner(string? name) => _name = name;
+
+        public Task<(string? OwnerId, string? OwnerName)> GetAsync(
+            string platform, CancellationToken ct = default) =>
+            Task.FromResult<(string?, string?)>((_name is null ? null : "88892527967", _name));
+    }
+}
