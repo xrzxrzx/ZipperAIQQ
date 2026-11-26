@@ -67,8 +67,10 @@ public static class ToolCatalog
         Item(VideoTools.VideoToolName, "看抖音视频画面", ToolCapability.MediaVideo, ToolPlatform.Douyin),
         Item(VideoTools.TranscriptToolName, "抖音视频转写", ToolCapability.MediaVideo, ToolPlatform.Douyin),
 
-        // ── 抖音评论区（B5）：读评论是公开内容（默认管理员、硬底线白名单）──
+        // ── 抖音评论区（B5）：读评论是公开内容（默认管理员、硬底线白名单）；
+        //    回评论是代替主人对外发言（默认主人、硬底线管理员，且写开关默认关）──
         Item(CommentTools.ListToolName, "读抖音评论区", ToolCapability.CommentRead, ToolPlatform.Douyin),
+        Item(CommentTools.ReplyToolName, "回抖音评论", ToolCapability.CommentWrite, ToolPlatform.Douyin),
     ];
 
     private static PolicyItem Item(
@@ -140,6 +142,7 @@ public static class ToolCatalog
         VideoTools.VideoToolName => ToolCapability.MediaVideo,
         VideoTools.TranscriptToolName => ToolCapability.MediaVideo,
         CommentTools.ListToolName => ToolCapability.CommentRead,
+        CommentTools.ReplyToolName => ToolCapability.CommentWrite,
         _ => null,
     };
 }

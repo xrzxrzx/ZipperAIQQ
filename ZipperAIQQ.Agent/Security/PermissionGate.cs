@@ -37,6 +37,8 @@ public sealed class PermissionGate : IPermissionGate
             // 读评论（B5）：公开内容、无对外动作；但它会把共享浏览器导航离开私信页，
             // 所以硬底线是白名单（能配给谁用，但不能配成"所有人都能翻评论区"）
             [ToolCapability.CommentRead] = Role.Whitelist,
+            // 回评论（B5）：挂在主人账号下的对外发言，硬底线管理员 —— 不许放宽
+            [ToolCapability.CommentWrite] = Role.Admin,
         };
 
     /// <summary>默认最低角色（M1 的「预置默认允许集」，FR-6.7）。</summary>
@@ -66,6 +68,8 @@ public sealed class PermissionGate : IPermissionGate
             // 读评论：评论是公开内容，但读一次要让共享浏览器离开私信页（入站会短暂中断）
             // ⇒ 默认只给管理员，按需在工具页放开（硬底线是白名单）
             [ToolCapability.CommentRead] = Role.Admin,
+            // 回评论：**代替主人对外发言**，默认只给主人（管理员能执行但默认不给，要显式配）
+            [ToolCapability.CommentWrite] = Role.Owner,
         };
 
     private readonly IReadOnlyDictionary<ToolCapability, Role> _minRoles;
@@ -144,6 +148,7 @@ public sealed class PermissionGate : IPermissionGate
         ToolCapability.MailRead => "查看邮件画面",
         ToolCapability.MailRaw => "读取邮件原文",
         ToolCapability.CommentRead => "读抖音评论区",
+        ToolCapability.CommentWrite => "回抖音评论",
         _ => capability.ToString(),
     };
 }

@@ -66,6 +66,20 @@ public sealed class PermissionGateTests
         Assert.Equal(Role.Admin, PermissionGate.HardFloorOf(ToolCapability.MailRaw));
     }
 
+    [Fact]
+    public void Comment_read_and_write_have_different_floors_and_defaults()
+    {
+        // 读评论：公开内容，但读一次要让共享浏览器离开私信页 ⇒ 默认管理员、硬底线白名单
+        Assert.False(_gate.IsAllowed(ToolCapability.CommentRead, Role.Whitelist));
+        Assert.True(_gate.IsAllowed(ToolCapability.CommentRead, Role.Admin));
+        Assert.Equal(Role.Whitelist, PermissionGate.HardFloorOf(ToolCapability.CommentRead));
+
+        // 回评论：代替主人对外发言 ⇒ 默认只给主人（管理员都不默认给）、硬底线管理员
+        Assert.False(_gate.IsAllowed(ToolCapability.CommentWrite, Role.Admin));
+        Assert.True(_gate.IsAllowed(ToolCapability.CommentWrite, Role.Owner));
+        Assert.Equal(Role.Admin, PermissionGate.HardFloorOf(ToolCapability.CommentWrite));
+    }
+
     // ─────────────────────────── 硬底线 ───────────────────────────
 
     [Fact]
@@ -105,6 +119,8 @@ public sealed class PermissionGateTests
             [ToolCapability.MediaVideo] = Role.Admin,
             // 读评论（B5）：公开内容、无对外动作，硬底线是白名单（不放宽到普通成员）
             [ToolCapability.CommentRead] = Role.Whitelist,
+            // 回评论（B5）：挂在主人账号下的对外发言，硬底线管理员
+            [ToolCapability.CommentWrite] = Role.Admin,
         };
 
         PermissionGate.ValidateHardFloor(ok);

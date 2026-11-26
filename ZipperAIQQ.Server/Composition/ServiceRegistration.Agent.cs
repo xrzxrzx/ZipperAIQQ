@@ -125,8 +125,10 @@ public static partial class ServiceRegistration
                 MailReader = sp.GetService<ZipperAIQQ.Agent.Mail.IMailReader>(),
                 // 抖音视频理解（B4）：未装配（或底座没连上）时两个视频工具不出现
                 VideoReader = sp.GetService<ZipperAIQQ.Agent.Media.IVideoReader>(),
-                // 抖音评论区（B5）：未装配（或底座没连上）时读评论工具不出现
+                // 抖音评论区（B5）：未装配（或底座没连上）时读评论工具不出现；
+                // 写开关关着时回评论工具不出现
                 CommentReader = sp.GetService<ZipperAIQQ.Agent.Comments.ICommentReader>(),
+                CommentReplier = sp.GetService<ZipperAIQQ.Agent.Comments.ICommentReplier>(),
                 Roles = sp.GetRequiredService<IRoleResolver>(),
                 OwnerLookup = sp.GetRequiredService<ZipperAIQQ.Agent.IOwnerLookup>(),
                 Workspace = sp.GetRequiredService<WorkspacePathResolver>(),

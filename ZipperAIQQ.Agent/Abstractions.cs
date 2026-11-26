@@ -190,6 +190,15 @@ public sealed record ChatAgentDependencies
     /// </remarks>
     public Comments.ICommentReader? CommentReader { get; init; }
 
+    /// <summary>
+    /// 抖音评论区（B5）：回评论。
+    /// </summary>
+    /// <remarks>
+    /// 与 <see cref="CommentReader"/> 分开装配：写能力默认关（<c>douyin.commentWriteEnabled</c>），
+    /// 关了就只有读工具，模型连"能不能回"都看不见 —— 它不会去试一个不存在的工具。
+    /// </remarks>
+    public Comments.ICommentReplier? CommentReplier { get; init; }
+
     /// <summary>角色解析（管理员 / 工具白名单 / 普通）。</summary>
     public required Security.IRoleResolver Roles { get; init; }
 

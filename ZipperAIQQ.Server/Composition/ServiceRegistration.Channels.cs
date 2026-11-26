@@ -158,12 +158,20 @@ public static partial class ServiceRegistration
         // 读评论要知道「抖音这边主人叫什么」才能判 `@主人`，所以把 IOwnerLookup 一起给它。
         services.AddSingleton<Douyin.IDouyinCommentSource>(sp =>
             sp.GetRequiredService<Channels.DouyinChannel>());
+
+        // 写闸门（G3）：配额与留痕同一张表（DouyinWrites，schema v21）
+        services.AddSingleton<Storage.Douyin.IDouyinWriteStore, Storage.Douyin.SqliteDouyinWriteStore>();
+        services.AddSingleton<Douyin.IWriteGate, Douyin.WriteGate>();
+
         services.AddSingleton(sp => new Douyin.DouyinCommentService(
             sp.GetRequiredService<Douyin.IDouyinCommentSource>(),
             sp.GetRequiredService<Configuration.ServerOptions>().Douyin.Comment,
+            sp.GetRequiredService<Douyin.IWriteGate>(),
             sp.GetRequiredService<ILogger>(),
             sp.GetService<ZipperAIQQ.Agent.IOwnerLookup>()));
         services.AddSingleton<ZipperAIQQ.Agent.Comments.ICommentReader>(sp =>
+            sp.GetRequiredService<Douyin.DouyinCommentService>());
+        services.AddSingleton<ZipperAIQQ.Agent.Comments.ICommentReplier>(sp =>
             sp.GetRequiredService<Douyin.DouyinCommentService>());
 
         // 联系人目录按平台注册（决策四第 6 条）：配置页 / 主人放行范围 / 平台专用工具都只认平台名。

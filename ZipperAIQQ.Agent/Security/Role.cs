@@ -157,4 +157,19 @@ public enum ToolCapability
     /// </para>
     /// </remarks>
     CommentRead,
+
+    /// <summary>
+    /// 回抖音评论（<c>douyin_comment_reply</c>）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 这是**代替主人对外发言**：说出去的话挂在主人的账号下面，别人看到的是"主人说了这句"。
+    /// 所以默认只给主人、硬底线管理员 —— 管理员可以执行，但不能被放宽到管理员以下。
+    /// </para>
+    /// <para>
+    /// 代码里还有第二道闸（<c>WriteGate</c>：日配额 / 最小间隔 / 同人一次）与第三道开关
+    /// （<c>douyin.commentWriteEnabled</c>，默认关）。三道各管一件事，缺一不可。
+    /// </para>
+    /// </remarks>
+    CommentWrite,
 }

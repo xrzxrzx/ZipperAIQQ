@@ -171,6 +171,144 @@ public sealed class DouyinCommentServiceTests
         Assert.Contains("没读到评论", page.Note!, StringComparison.Ordinal);
     }
 
+    // ───────────── 回评论（写闸门） ─────────────
+
+    [Fact]
+    public async Task Reply_is_off_until_the_write_switch_is_on()
+    {
+        var source = new FakeSource();
+        var service = CreateService(
+            source, ownerName: "拉链", options: new DouyinCommentOptions { WriteEnabled = false });
+
+        Assert.False(service.CanReply);
+        Assert.Contains("commentWriteEnabled", service.ReplyUnavailableReason, StringComparison.Ordinal);
+
+        var outcome = await service.ReplyAsync(
+            new CommentReplyRequest(ItemId, "在的", CommentId: "7412345678901234567"));
+
+        Assert.False(outcome.Ok);
+        Assert.False(outcome.Denied);
+        Assert.Null(source.LastReply);
+    }
+
+    [Fact]
+    public async Task Reply_records_the_gate_denial_instead_of_silently_dropping_it()
+    {
+        var source = new FakeSource();
+        var gate = new FakeGate
+        {
+            Decision = WriteDecision.Deny("已经用掉 10/10 次（24 小时内），这次先别写了。"),
+        };
+
+        var service = CreateService(source, ownerName: "拉链", gate: gate);
+        var outcome = await service.ReplyAsync(
+            new CommentReplyRequest(ItemId, "在的", CommentId: "7412345678901234567"));
+
+        Assert.False(outcome.Ok);
+        Assert.True(outcome.Denied);
+        Assert.Contains("10/10", outcome.Error!, StringComparison.Ordinal);
+
+        // 被拒也要留痕，且**不能**真的去打底座
+        Assert.Null(source.LastReply);
+        var record = Assert.Single(gate.Records);
+        Assert.False(record.Ok);
+        Assert.StartsWith("denied:", record.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Reply_passes_locators_and_records_the_success()
+    {
+        var source = new FakeSource();
+        var gate = new FakeGate();
+
+        var service = CreateService(source, ownerName: "拉链", gate: gate);
+        var outcome = await service.ReplyAsync(new CommentReplyRequest(
+            ItemId, " 在的 ", CommentId: "7412345678901234567", DryRun: false));
+
+        Assert.True(outcome.Ok);
+        Assert.True(outcome.Readback);
+        Assert.NotNull(source.LastReply);
+        Assert.Equal("在的", source.LastReply!.Text);
+        Assert.True(source.LastReply.Commit);
+        Assert.Equal("7412345678901234567", source.LastReply.CommentId);
+
+        var record = Assert.Single(gate.Records);
+        Assert.True(record.Ok);
+        Assert.Equal("readback", record.Note);
+    }
+
+    [Fact]
+    public async Task Reply_target_key_prefers_the_author_for_once_per_person()
+    {
+        var gate = new FakeGate();
+
+        var service = CreateService(new FakeSource(), ownerName: "拉链", gate: gate);
+        await service.ReplyAsync(new CommentReplyRequest(
+            ItemId, "在的", CommentId: "7412345678901234567", Author: " 拉链 "));
+
+        Assert.Equal("a:拉链", Assert.Single(gate.Records).Target);
+    }
+
+    [Fact]
+    public async Task Reply_dry_run_skips_the_gate_and_never_commits()
+    {
+        var source = new FakeSource();
+        var gate = new FakeGate();
+
+        var service = CreateService(source, ownerName: "拉链", gate: gate);
+        var outcome = await service.ReplyAsync(new CommentReplyRequest(
+            ItemId, "在的", CommentId: "7412345678901234567", DryRun: true));
+
+        Assert.True(outcome.Ok);
+        Assert.True(outcome.DryRun);
+        // 干跑没有对外动作 ⇒ 不占配额、不查闸门、不留写记录
+        Assert.Equal(0, gate.Checks);
+        Assert.Empty(gate.Records);
+        Assert.False(source.LastReply!.Commit);
+    }
+
+    [Fact]
+    public async Task Reply_requires_a_locator_and_reasonable_text()
+    {
+        var service = CreateService(new FakeSource(), ownerName: "拉链");
+
+        var noLocator = await service.ReplyAsync(new CommentReplyRequest(ItemId, "在的"));
+        Assert.False(noLocator.Ok);
+        Assert.Contains("哪一条", noLocator.Error!, StringComparison.Ordinal);
+
+        var empty = await service.ReplyAsync(
+            new CommentReplyRequest(ItemId, "   ", CommentId: "7412345678901234567"));
+        Assert.False(empty.Ok);
+        Assert.Contains("空的", empty.Error!, StringComparison.Ordinal);
+
+        var tooLong = await service.ReplyAsync(new CommentReplyRequest(
+            ItemId, new string('长', 500), CommentId: "7412345678901234567"));
+        Assert.False(tooLong.Ok);
+        Assert.Contains("太长", tooLong.Error!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Reply_reports_base_failure_and_records_it_as_failed()
+    {
+        var source = new FakeSource
+        {
+            ReplyFailure = new InvalidOperationException("这一条评论上找不到「回复」按钮（可能被折叠）"),
+        };
+        var gate = new FakeGate();
+
+        var service = CreateService(source, ownerName: "拉链", gate: gate);
+        var outcome = await service.ReplyAsync(
+            new CommentReplyRequest(ItemId, "在的", CommentId: "7412345678901234567"));
+
+        Assert.False(outcome.Ok);
+        Assert.False(outcome.Denied);
+        Assert.Contains("找不到「回复」按钮", outcome.Error!, StringComparison.Ordinal);
+
+        var record = Assert.Single(gate.Records);
+        Assert.False(record.Ok);
+        Assert.StartsWith("failed:", record.Note, StringComparison.Ordinal);
+    }
+
     // ───────────── 辅助 ─────────────
 
     private static DouyinCommentItem Comment(
@@ -190,10 +328,12 @@ public sealed class DouyinCommentServiceTests
         FakeSource source,
         string? ownerName,
         DouyinCommentOptions? options = null,
-        IOwnerLookup? owner = null) =>
+        IOwnerLookup? owner = null,
+        IWriteGate? gate = null) =>
         new(
             source,
-            options ?? new DouyinCommentOptions(),
+            options ?? new DouyinCommentOptions { WriteEnabled = true },
+            gate ?? new FakeGate(),
             Logger,
             owner ?? new FakeOwner(ownerName));
 
@@ -205,11 +345,18 @@ public sealed class DouyinCommentServiceTests
 
         public DouyinCommentList List { get; init; } = new(ItemId, [], 1, false, null);
 
+        public DouyinCommentReplyResult Reply { get; init; } =
+            new(ItemId, DryRun: false, MatchedBy: "id", Readback: true, Note: null);
+
+        public Exception? ReplyFailure { get; init; }
+
         public int Calls { get; private set; }
 
         public int LastPages { get; private set; }
 
         public int LastLimit { get; private set; }
+
+        public DouyinCommentReplyRequest? LastReply { get; private set; }
 
         public bool IsReady => Ready;
 
@@ -225,8 +372,45 @@ public sealed class DouyinCommentServiceTests
         }
 
         public Task<DouyinCommentReplyResult> ReplyAsync(
-            DouyinCommentReplyRequest request, int timeoutMs, CancellationToken ct = default) =>
-            throw new NotSupportedException("本组用例只测读评论。");
+            DouyinCommentReplyRequest request, int timeoutMs, CancellationToken ct = default)
+        {
+            LastReply = request;
+
+            return ReplyFailure is null
+                ? Task.FromResult(Reply with { ItemId = request.ItemId, DryRun = !request.Commit })
+                : Task.FromException<DouyinCommentReplyResult>(ReplyFailure);
+        }
+    }
+
+    /// <summary>写闸门假实现：默认放行，可指定拒绝；记录每次记账。</summary>
+    private sealed class FakeGate : IWriteGate
+    {
+        public WriteDecision Decision { get; init; } = WriteDecision.Allow();
+
+        public List<(string Action, string Target, bool Ok, string? Note)> Records { get; } = [];
+
+        public int Checks { get; private set; }
+
+        public Task<WriteDecision> CheckAsync(
+            WriteQuota quota, string targetKey, DateTimeOffset now, CancellationToken ct = default)
+        {
+            Checks += 1;
+            return Task.FromResult(Decision);
+        }
+
+        public Task RecordAsync(
+            WriteQuota quota,
+            string targetKey,
+            string? itemId,
+            string? commentId,
+            bool ok,
+            string? note,
+            DateTimeOffset now,
+            CancellationToken ct = default)
+        {
+            Records.Add((quota.Action, targetKey, ok, note));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeOwner : IOwnerLookup

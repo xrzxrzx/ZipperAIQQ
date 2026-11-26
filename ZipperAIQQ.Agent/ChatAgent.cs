@@ -62,6 +62,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly Mail.IMailReader? _mailReader;
     private readonly Media.IVideoReader? _videoReader;
     private readonly Comments.ICommentReader? _commentReader;
+    private readonly Comments.ICommentReplier? _commentReplier;
     private readonly Storage.Config.IConfigStore _configs;
     private readonly Storage.Settings.IRuntimeSettingsStore _settings;
     private readonly IRoleResolver _roles;
@@ -121,6 +122,7 @@ public sealed class ChatAgent : IChatAgent
         _mailReader = deps.MailReader;
         _videoReader = deps.VideoReader;
         _commentReader = deps.CommentReader;
+        _commentReplier = deps.CommentReplier;
         // 0 = 组合根没注入（测试或旧调用点）：按服务端的保守默认兜底，别退化成「1 字节上限」
         _mediaUploadMaxBytes = deps.MediaUploadMaxBytes > 0
             ? deps.MediaUploadMaxBytes
@@ -773,11 +775,12 @@ public sealed class ChatAgent : IChatAgent
             tools.AddRange(VideoTools.Create(videoReader, context, _permissionGate, _logger));
         }
 
-        // 抖音评论区（B5）：读评论。底座没连上时 CanRead=false，工具不出现
-        // （写回复是另一个接口 + 另一个能力码，默认关，见 ICommentReplier）
+        // 抖音评论区（B5）：读评论 + 回评论。底座没连上时 CanRead=false，工具不出现；
+        // 写开关关着时 CanReply=false，回评论工具不出现（模型连"能不能回"都看不见）
         if (_commentReader is { } commentReader)
         {
-            tools.AddRange(CommentTools.Create(commentReader, context, _permissionGate, _logger));
+            tools.AddRange(CommentTools.Create(
+                commentReader, _commentReplier, context, _permissionGate, _configs, _logger));
         }
 
         // 平台专用工具（决策五 / S3-E）：抖音侧要单独的数据源（sidecar 的 query.contacts），

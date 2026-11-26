@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 20;
+    public const int CurrentSchemaVersion = 21;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -62,6 +62,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, BillingTables, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, ScheduleExecutionTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, TurnLogTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, DouyinWriteTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -530,6 +531,35 @@ public sealed class DatabaseInitializer
         );
 
         CREATE INDEX IF NOT EXISTS IX_ToolCalls_Kind_At ON ToolCalls (Kind, AtMs);
+        """;
+
+    /// <summary>
+    /// 抖音写动作（问题记录 06 · B5，v21）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 一张表干两件事：**配额计数**（<c>Action</c> + 时间窗）与**留痕**（对哪一条、成没成、一句备注）。
+    /// 分开记必然出现"配额扣了但审计没记"或反过来。
+    /// </para>
+    /// <para>
+    /// 不存正文：写出去的话属于对外内容，不属于运维审计。
+    /// 两个索引对应两类查询 —— 按时间窗计数（<c>Action, AtMs</c>）与同人一次（<c>Action, TargetKey, AtMs</c>）。
+    /// </para>
+    /// </remarks>
+    private const string DouyinWriteTable = """
+        CREATE TABLE IF NOT EXISTS DouyinWrites (
+            Id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            Action    TEXT    NOT NULL,
+            TargetKey TEXT    NOT NULL,
+            ItemId    TEXT,
+            CommentId TEXT,
+            Ok        INTEGER NOT NULL,
+            Note      TEXT,
+            AtMs      INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS IX_DouyinWrites_Action_At ON DouyinWrites (Action, AtMs);
+        CREATE INDEX IF NOT EXISTS IX_DouyinWrites_Action_Target ON DouyinWrites (Action, TargetKey, AtMs);
         """;
 
     /// <summary>
