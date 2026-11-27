@@ -179,6 +179,26 @@ public sealed class ExpressOptionsServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LegacyPrompt_MigratesOnlyWhenExpressKeyMissing()
+    {
+        // 老部署：只有 prompt.express，没有 express 键
+        await _store.SetAsync(ExpressOptionsService.LegacyPromptKey, "老规则段");
+
+        var service = NewService();
+        await service.InitializeAsync();
+        Assert.Equal("老规则段", service.Current.CustomRules);
+
+        // 用户点了「恢复默认规则段」
+        await service.UpdateAsync(null, null, null, null, string.Empty, null, null, "http-client");
+        Assert.Null(service.Current.CustomRules);
+
+        // 重启：老键**不许**把值搬回来（否则表现成「恢复默认没生效」，且每次重启都重写一次）
+        var restarted = NewService();
+        await restarted.InitializeAsync();
+        Assert.Null(restarted.Current.CustomRules);
+    }
+
+    [Fact]
     public async Task ApplySnapshot_RestoresWholeState()
     {
         var service = NewService();

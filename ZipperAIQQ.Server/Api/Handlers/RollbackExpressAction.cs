@@ -87,11 +87,17 @@ public sealed class RollbackExpressAction : IApiAction
 
         await _express.ApplySnapshotAsync(target, Actor, ct).ConfigureAwait(false);
 
+        // 回滚也写快照，所以它也得分担保留策略：否则连着回滚几轮，
+        // 表就超过「保留最近 N 份」的承诺并且无上界增长
+        await _snapshots.TrimAsync(ExpressSnapshotPolicy.Keep, ct).ConfigureAwait(false);
+
         await _config
             .AppendAuditAsync("rollbackExpress", Actor, $"snapshot={id}", ct)
             .ConfigureAwait(false);
 
         var next = _express.Current;
+        var snapshots = await _snapshots.ListRecentAsync(20, ct).ConfigureAwait(false);
+
         return new
         {
             restored = true,
@@ -100,12 +106,36 @@ public sealed class RollbackExpressAction : IApiAction
             levelLabel = ExpressLevelText.ToLabel(next.Level),
             groupCap = ExpressLevelText.ToKey(next.GroupCap),
             groupCapLabel = ExpressLevelText.ToLabel(next.GroupCap),
+
+            // 与 getExpressStatus / setExpressLevel 出参对齐：客户端会直接拿它贴状态行
+            source = "global",
+            sessionOverrides = next.SessionOverrides
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .Select(kv => new
+                {
+                    sessionId = kv.Key,
+                    level = ExpressLevelText.ToKey(kv.Value),
+                    levelLabel = ExpressLevelText.ToLabel(kv.Value),
+                })
+                .ToList(),
+            hygiene = new
+            {
+                enabled = next.HygieneEnabled,
+                regenerate = next.HygieneRegenerate,
+                hits = _express.HygieneHits,
+                regenerated = _express.HygieneRegenerated,
+            },
+            lastChangedAt = next.UpdatedAtMs,
+            lastChangedBy = next.UpdatedBy,
             promptExpress = new
             {
                 customized = next.CustomRules is not null,
                 length = next.CustomRules?.Length ?? 0,
                 text = next.CustomRules ?? string.Empty,
             },
+            snapshots = snapshots
+                .Select(s => new { id = s.Id, atMs = s.AtMs, actor = s.Actor })
+                .ToList(),
         };
     }
 }

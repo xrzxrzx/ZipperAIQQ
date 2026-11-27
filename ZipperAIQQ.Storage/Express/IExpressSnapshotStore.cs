@@ -22,6 +22,16 @@ public interface IExpressSnapshotStore
     /// <summary>按主键取快照；不存在返回 <c>null</c>。</summary>
     Task<ExpressSnapshot?> GetAsync(long id, CancellationToken ct = default);
 
+    /// <summary>
+    /// 删掉一份快照（「改了但没有任何变化」时把刚写的那份撤掉）。
+    /// </summary>
+    /// <returns>是否真的删掉了一行。</returns>
+    /// <remarks>
+    /// 为什么要它：快照写在 diff 之前（那是「改前状态」的定义），
+    /// 而客户端连点同一个档位会一路写快照 —— 不撤掉的话，真正有用的历史会被这些空记录挤走。
+    /// </remarks>
+    Task<bool> DeleteAsync(long id, CancellationToken ct = default);
+
     /// <summary>最近的若干份（新的在前），供客户端列回滚点。</summary>
     Task<IReadOnlyList<ExpressSnapshot>> ListRecentAsync(int limit, CancellationToken ct = default);
 

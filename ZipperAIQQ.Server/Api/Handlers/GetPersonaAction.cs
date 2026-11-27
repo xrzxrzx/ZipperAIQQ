@@ -38,6 +38,10 @@ public sealed class GetPersonaAction : IApiAction
             name = persona.Name,
             image = persona.Image,
             personality = persona.Personality,
+
+            // 【表达】段（B6）：客户端要能看到它存在，否则「保存人设会把这段删掉」这件事
+            // 在界面上完全不可见（没人会想到去翻文件）
+            express = persona.Express,
             content = persona.Content,
             split = persona.Image is not null || persona.Personality is not null,
 

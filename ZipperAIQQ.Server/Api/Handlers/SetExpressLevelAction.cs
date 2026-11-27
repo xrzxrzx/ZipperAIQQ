@@ -29,13 +29,6 @@ public sealed class SetExpressLevelAction : IApiAction
 {
     private const string Actor = "http-client";
 
-    /// <summary>快照保留份数。</summary>
-    /// <remarks>
-    /// 固定 5 份、不另做配置键：回滚点是运维兜底，多一个旋钮就多一处可能与代码漂移的真相；
-    /// 真要更多，改这一行比改配置更快。
-    /// </remarks>
-    private const int SnapshotKeep = 5;
-
     private readonly ExpressOptionsService _express;
     private readonly IExpressSnapshotStore _snapshots;
     private readonly IConfigStore _config;
@@ -114,9 +107,10 @@ public sealed class SetExpressLevelAction : IApiAction
 
         if (changed.Count == 0)
         {
-            // 没有任何实际变化：把刚刚那份快照删掉没必要（删要再写一次库），
-            // 但它确实代表"一次未生效的保存"，留在那里也就多一份可用回退点。
-            _logger.Information("表达档位未变化（skipped）");
+            // 什么都没变：把刚写的那份撤掉。留着它只会把真正有用的历史挤走
+            // （客户端连点同一个档位，每次都会走到这里）
+            await _snapshots.DeleteAsync(snapshotId, ct).ConfigureAwait(false);
+            _logger.Information("表达档位未变化（skipped，已撤掉本次快照）");
         }
         else
         {
@@ -124,21 +118,27 @@ public sealed class SetExpressLevelAction : IApiAction
                 .AppendAuditAsync("setExpressLevel", Actor, string.Join(",", changed), ct)
                 .ConfigureAwait(false);
 
-            await _snapshots.TrimAsync(SnapshotKeep, ct).ConfigureAwait(false);
+            await _snapshots.TrimAsync(ExpressSnapshotPolicy.Keep, ct).ConfigureAwait(false);
         }
 
         var next = _express.Current;
+        var snapshots = await _snapshots.ListRecentAsync(20, ct).ConfigureAwait(false);
+
         return new
         {
             // saved 是**整数**（改了 n 项）不是 bool：`saveDouyin.saved` 那次事故就是这么来的
             saved = changed.Count,
             skipped = changed.Count == 0,
-            snapshotId,
+            snapshotId = changed.Count == 0 ? (long?)null : snapshotId,
             changed,
             level = ExpressLevelText.ToKey(next.Level),
             levelLabel = ExpressLevelText.ToLabel(next.Level),
             groupCap = ExpressLevelText.ToKey(next.GroupCap),
             groupCapLabel = ExpressLevelText.ToLabel(next.GroupCap),
+
+            // 出参与 getExpressStatus 对齐（设计 §8 要求「同 getExpressStatus + saved/skipped/snapshotId」）：
+            // 少字段会让客户端「保存后直接应用这份 DTO」时把状态行刷成「0 次 / 全开」这种假象
+            source = "global",
             sessionOverrides = next.SessionOverrides
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .Select(kv => new
@@ -148,12 +148,24 @@ public sealed class SetExpressLevelAction : IApiAction
                     levelLabel = ExpressLevelText.ToLabel(kv.Value),
                 })
                 .ToList(),
+            hygiene = new
+            {
+                enabled = next.HygieneEnabled,
+                regenerate = next.HygieneRegenerate,
+                hits = _express.HygieneHits,
+                regenerated = _express.HygieneRegenerated,
+            },
+            lastChangedAt = next.UpdatedAtMs,
+            lastChangedBy = next.UpdatedBy,
             promptExpress = new
             {
                 customized = next.CustomRules is not null,
                 length = next.CustomRules?.Length ?? 0,
                 text = next.CustomRules ?? string.Empty,
             },
+            snapshots = snapshots
+                .Select(s => new { id = s.Id, atMs = s.AtMs, actor = s.Actor })
+                .ToList(),
         };
     }
 

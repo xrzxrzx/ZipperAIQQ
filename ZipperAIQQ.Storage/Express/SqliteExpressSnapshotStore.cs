@@ -66,6 +66,18 @@ public sealed class SqliteExpressSnapshotStore : IExpressSnapshotStore
         }, ct);
     }
 
+    public Task<bool> DeleteAsync(long id, CancellationToken ct = default)
+    {
+        return _db.WriteAsync(async (conn, token) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM ExpressSnapshots WHERE Id = @id;";
+            cmd.Parameters.AddWithValue("@id", id);
+
+            return await cmd.ExecuteNonQueryAsync(token).ConfigureAwait(false) > 0;
+        }, ct);
+    }
+
     public Task<IReadOnlyList<ExpressSnapshot>> ListRecentAsync(
         int limit, CancellationToken ct = default)
     {

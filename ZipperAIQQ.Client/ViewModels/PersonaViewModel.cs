@@ -382,7 +382,11 @@ public sealed partial class PersonaViewModel : ObservableObject
             ExpressSnapshots.Add(snapshot);
         }
 
-        SelectedExpressSnapshot ??= ExpressSnapshots.FirstOrDefault();
+        // 选中项若已不在列表里（被保留策略挤掉），改选最新一份 —— 否则回滚按钮会指向一份不存在的快照
+        if (SelectedExpressSnapshot is null || !ExpressSnapshots.Contains(SelectedExpressSnapshot))
+        {
+            SelectedExpressSnapshot = ExpressSnapshots.FirstOrDefault();
+        }
     }
 
     /// <summary>当前选中会话的完整 ID；选中「全局」时为 <c>null</c>。</summary>
@@ -503,25 +507,35 @@ public sealed partial class PersonaViewModel : ObservableObject
     /// <summary>保存档位（统一入口）：**回显服务端返回值**，不在客户端猜结果。</summary>
     private async Task SaveExpressAsync(object payload, string successMessage)
     {
+        ExpressStatusDto? result;
         try
         {
-            var result = await _api.CallAsync<ExpressStatusDto>("setExpressLevel", payload).ConfigureAwait(true);
-
-            if (result is null)
-            {
-                ExpressMessage = "保存没有返回结果（服务端可能未实现该接口）";
-                return;
-            }
-
-            ExpressMessage = result.Skipped ? "无变化（本来就是这个值）" : successMessage;
-            ApplyExpressStatus(result);
-
-            // 改完刷新一次：会话覆盖列表与回滚点都要重新拉（set 的响应里没有 snapshots）
-            await RefreshExpressAsync().ConfigureAwait(true);
+            result = await _api.CallAsync<ExpressStatusDto>("setExpressLevel", payload).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
             ExpressMessage = $"保存失败：{ex.Message}";
+            return;
+        }
+
+        if (result is null)
+        {
+            ExpressMessage = "保存没有返回结果（服务端可能未实现该接口）";
+            return;
+        }
+
+        ExpressMessage = result.Skipped ? "无变化（本来就是这个值）" : successMessage;
+        ApplyExpressStatus(result);
+
+        // 刷新是**附加动作**：它失败不能把已经成功的保存报成「保存失败」
+        // （以前这里串在同一个 try 里，网络一抖就变成「保存失败」而配置其实已经写进库了）
+        try
+        {
+            await RefreshExpressAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ExpressMessage += $"（刷新状态失败：{ex.Message}）";
         }
     }
 }

@@ -51,23 +51,31 @@ public sealed class SetGlobalPersonaAction : IApiAction
         var image = PersonaHandlerHelper.ReadString(payload, "image");
         var personality = PersonaHandlerHelper.ReadString(payload, "personality");
         var name = PersonaHandlerHelper.ReadString(payload, "name");
+        var expressFromClient = PersonaHandlerHelper.ReadString(payload, "express");
 
         if (string.IsNullOrWhiteSpace(image) && string.IsNullOrWhiteSpace(personality))
         {
             throw new ApiException(ApiResponse.BadRequest, "image 与 personality 至少要给一个（都为空会让人设消失）。");
         }
 
+        var global = await _personas.GetAsync(string.Empty, string.Empty, string.Empty, ct)
+            .ConfigureAwait(false);
+
         // name 为空时**沿用文件里原有的名字**（而不是塞一个技术默认名 "persona"）——
         // 否则客户端保存后读到 name="persona"，用户会以为"人设变回默认了"（实测踩到）。
         var effectiveName = name?.Trim();
         if (string.IsNullOrWhiteSpace(effectiveName))
         {
-            var global = await _personas.GetAsync(string.Empty, string.Empty, string.Empty, ct)
-                .ConfigureAwait(false);
             effectiveName = string.IsNullOrWhiteSpace(global.Name) ? "小衣" : global.Name;
         }
 
-        var persona = Persona.FromParts(effectiveName, image, personality);
+        // 【表达】段（B6）同理必须沿用它：客户端的编辑框只有形象 / 性格两个，
+        // 不带回去等于「保存一次人设，就把文件里的表达段整段删了」——
+        // 而那段是随 config/persona.md 一起交付的，删了还只能手改文件补回来。
+        // payload 里显式给 express 时以客户端为准（空串 = 清除该段）。
+        var express = expressFromClient ?? global.Express;
+
+        var persona = Persona.FromParts(effectiveName, image, personality, express);
 
         var path = Path.GetFullPath(_options.PersonaPath);
         var dir = Path.GetDirectoryName(path);
@@ -99,6 +107,7 @@ public sealed class SetGlobalPersonaAction : IApiAction
             name = persona.Name,
             image = persona.Image,
             personality = persona.Personality,
+            express = persona.Express,
             content = persona.Content,
             split = true,
         };

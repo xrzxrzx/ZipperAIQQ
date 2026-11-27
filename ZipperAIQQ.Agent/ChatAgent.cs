@@ -513,17 +513,29 @@ public sealed class ChatAgent : IChatAgent
 
             if (!ExpressHygiene.ShouldRegenerate(scan, expressLevel, expressSettings, hygieneRegenerated))
             {
-                // 日常档 / 开关关 / 本轮已纠过：不再动它，但要留痕（A-23：校不准不空转）
-                _logger.Warning(
-                    "免拒绝校准未纠正（档位 {Level}，已纠过 {Regenerated}）：{Category}｜{Preview}",
-                    ExpressLevelText.ToLabel(expressLevel), hygieneRegenerated, scan.Category, scan.Preview);
+                // 日常档 / 开关关 / 本轮已纠过：不再动它，但要留痕（A-23：校不准不空转）。
+                // 日常档是默认值，命中又不会重生成 —— 打 Warning 等于让一个常用默认档每轮刷一条日志。
+                if (expressLevel == ExpressLevel.Daily)
+                {
+                    _logger.Debug(
+                        "免拒绝校准未纠正（日常档）：{Category}｜{Preview}", scan.Category, scan.Preview);
+                }
+                else
+                {
+                    _logger.Warning(
+                        "免拒绝校准未纠正（档位 {Level}，已纠过 {Regenerated}）：{Category}｜{Preview}",
+                        ExpressLevelText.ToLabel(expressLevel), hygieneRegenerated, scan.Category, scan.Preview);
+                }
+
                 return text;
             }
 
             hygieneRegenerated = true;
             _express?.RecordHygieneRegeneration();
 
-            var regenerated = await RegenerateForExpressAsync(text, token).ConfigureAwait(false);
+            var regenerated = await RegenerateForExpressAsync(
+                    text, expressSettings, expressLevel, isOwner, isGroup, token)
+                .ConfigureAwait(false);
             if (regenerated is null)
             {
                 // 重生成失败 → 照发原文：校准是锦上添花，丢了回合成事故
@@ -1071,17 +1083,32 @@ public sealed class ChatAgent : IChatAgent
 
     /// <summary>免拒绝校准的重生成（B6）：让模型把同一件事换个说法说一遍。</summary>
     /// <remarks>
-    /// 只带「指令 + 这段话」两条消息，**不带整段上下文**：
+    /// <para>
+    /// 只带「指令 + 规则段 + 这段话」三条，**不带整段上下文**：
     /// 上下文里的自我审查句式会把它重新带回来，而且那样一次重生成就是一次完整对话的钱。
+    /// </para>
+    /// <para>
+    /// 但**必须带规则段**（档位）：只给「换个说法」会让重写句与人设 / 档位脱钩 ——
+    /// 露骨档的一次校准反而把话写回平淡，那就成了「越校准越不放开」。
+    /// </para>
     /// </remarks>
-    private async Task<string?> RegenerateForExpressAsync(string text, CancellationToken ct)
+    private async Task<string?> RegenerateForExpressAsync(
+        string text,
+        ExpressSettings settings,
+        ExpressLevel level,
+        bool isOwner,
+        bool isGroup,
+        CancellationToken ct)
     {
         try
         {
             using var purpose = CallPurposeScope.Begin(CallPurpose.ExpressRewrite);
+
+            var rules = PromptRules.ExpressLiberty(level, isOwner, isGroup, settings.CustomRules);
+
             var response = await _clients.Current.GetResponseAsync(
                 [
-                    new ChatMessage(ChatRole.System, ExpressHygiene.RegenerateInstruction),
+                    new ChatMessage(ChatRole.System, ExpressHygiene.RegenerateInstruction + "\n\n" + rules),
                     new ChatMessage(ChatRole.User, text),
                 ],
                 cancellationToken: ct).ConfigureAwait(false);

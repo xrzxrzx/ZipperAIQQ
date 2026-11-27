@@ -118,6 +118,18 @@ public static class ExpressHygiene
             slice += "…";
         }
 
-        return slice.Length <= PreviewMaxChars ? slice : slice[..PreviewMaxChars] + "…";
+        if (slice.Length <= PreviewMaxChars)
+        {
+            return slice;
+        }
+
+        // 硬切会把 emoji 切成孤立代理对（日志里变成 \uFFFD）：收一刀到码点边界
+        var cut = PreviewMaxChars;
+        if (char.IsHighSurrogate(slice[cut - 1]))
+        {
+            cut--;
+        }
+
+        return slice[..cut] + "…";
     }
 }

@@ -79,11 +79,13 @@ public sealed class ExpressOptionsService : IExpressSettingsSource
     {
         var raw = await _settings.GetAsync(StorageKey, ct).ConfigureAwait(false);
 
-        if (!ExpressSnapshotPayload.TryParse(raw, out var parsed, out var error))
+        var usable = ExpressSnapshotPayload.TryParse(raw, out var parsed, out var error);
+
+        if (!usable)
         {
             if (!string.IsNullOrWhiteSpace(raw))
             {
-                // 真的解析不了才报 Error；键不存在（首次启动）走默认，不算故障
+                // 键存在但内容解析不了：报 Error（那不是"首次启动"，是配置坏了）
                 _logger.Error("表达档位配置无法解析，已按默认（日常）处理：{Reason}", error);
             }
 
@@ -94,8 +96,12 @@ public sealed class ExpressOptionsService : IExpressSettingsSource
             _logger.Warning("表达档位配置有项认不出：{Reason}", error);
         }
 
-        // 老键迁移：JSON 里没有规则段而老键有值 → 搬进 JSON（不删老键）
-        if (parsed.CustomRules is null)
+        // 老键迁移：**只在没有可用的 `express` 配置时**做一次（键不存在，或内容解析不了）。
+        //
+        // ⚠️ 不能写成「JSON 里 promptExpress 是空就迁移」：老键不删（留人工恢复），
+        // 那样用户点了「恢复默认规则段」之后，下次重启又被搬回来 ——
+        // 而且每次重启都重写一次，表现成「恢复默认没生效」，极难自证。
+        if (!usable)
         {
             var legacyPrompt = await _settings.GetAsync(LegacyPromptKey, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(legacyPrompt))
@@ -106,7 +112,8 @@ public sealed class ExpressOptionsService : IExpressSettingsSource
                     .ConfigureAwait(false);
 
                 _logger.Information(
-                    "已把老的 {Legacy} 迁移进 {Key}（老键保留不删）", LegacyPromptKey, StorageKey);
+                    "已把老的 {Legacy} 迁移进 {Key}（老键保留不删，之后不再参与）",
+                    LegacyPromptKey, StorageKey);
             }
         }
 

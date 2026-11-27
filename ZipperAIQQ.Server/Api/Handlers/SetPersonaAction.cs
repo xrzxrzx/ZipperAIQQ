@@ -39,6 +39,7 @@ public sealed class SetPersonaAction : IApiAction
         var name = PersonaHandlerHelper.ReadString(payload, "name");
         var image = PersonaHandlerHelper.ReadString(payload, "image");
         var personality = PersonaHandlerHelper.ReadString(payload, "personality");
+        var expressFromClient = PersonaHandlerHelper.ReadString(payload, "express");
 
         var current = await _personas.GetAsync(platform, chatType, chatId, ct).ConfigureAwait(false);
 
@@ -64,10 +65,13 @@ public sealed class SetPersonaAction : IApiAction
             }
         }
 
+        // 【表达】段（B6）：与全局人设同理 —— 客户端的编辑框只有形象 / 性格，
+        // 不带回去等于「保存一次就把它删了」。payload 显式给了以客户端为准。
         var persona = Persona.FromParts(
             string.IsNullOrWhiteSpace(name) ? current.Name : name.Trim(),
             image,
-            personality);
+            personality,
+            expressFromClient ?? current.Express);
 
         // #16：enabled 可单独提交（只切开关时不必重传正文）
         var state = await _personas.GetStateAsync(sessionId, ct).ConfigureAwait(false);
@@ -87,6 +91,7 @@ public sealed class SetPersonaAction : IApiAction
                 name = persona.Name,
                 image = persona.Image,
                 personality = persona.Personality,
+                express = persona.Express,
                 content = persona.Content,
                 split = true,
                 enabled,
@@ -109,6 +114,7 @@ public sealed class SetPersonaAction : IApiAction
             name = persona.Name,
             image = persona.Image,
             personality = persona.Personality,
+            express = persona.Express,
             content = persona.Content,
             split = true,
             enabled,
@@ -118,3 +124,4 @@ public sealed class SetPersonaAction : IApiAction
         };
     }
 }
+
