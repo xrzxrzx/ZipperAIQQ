@@ -48,20 +48,36 @@ public sealed class AsrSpeechTranscriberTests
         }
     }
 
-    private sealed class FakeSource(byte[]? wav) : IAudioSource
+    private sealed class FakeSource(params byte[]?[] responses) : IAudioSource
     {
+        private int _index;
+
+        public int Calls { get; private set; }
+
         public string? LastFileId { get; private set; }
 
         public Task<byte[]?> GetWavAsync(string? fileId, string? filePath, CancellationToken ct = default)
         {
+            Calls++;
             LastFileId = fileId;
-            return Task.FromResult(wav);
+
+            if (responses.Length == 0)
+            {
+                return Task.FromResult<byte[]?>(null);
+            }
+
+            var value = responses[Math.Min(_index, responses.Length - 1)];
+            _index++;
+            return Task.FromResult(value);
         }
     }
 
+    /// <summary>默认把重试间隔压到 0：测的是"会不会重试"，不是"等多久"。</summary>
     private static AsrSpeechTranscriber Create(
-        IDeepSeekMediaClient media, IAudioSource source, AiOptions? options = null) =>
-        new(options ?? new AiOptions(), media, source, Logger);
+        IDeepSeekMediaClient media, IAudioSource source, AiOptions? options = null,
+        SpeechOptions? speech = null) =>
+        new(options ?? new AiOptions(), media, source,
+            speech ?? new SpeechOptions { AudioFetchRetryDelayMs = 0 }, Logger);
 
     private static AudioClip Clip() => new("a.amr", "https://x/a.amr", MessageId: "m1");
 
@@ -84,7 +100,7 @@ public sealed class AsrSpeechTranscriberTests
     {
         var media = new FakeMedia(new AsrResult("不该被调用", 0, []));
 
-        var text = await Create(media, new FakeSource(null)).TranscribeAsync(Clip());
+        var text = await Create(media, new FakeSource()).TranscribeAsync(Clip());
 
         Assert.Null(text);
         Assert.Equal(0, media.Calls);
@@ -157,4 +173,38 @@ public sealed class AsrSpeechTranscriberTests
         Assert.Null(text);
         Assert.Equal(0, media.Calls);
     }
+
+    // ══════════ 取音频重试（2026-11-28 实测：语音刚到时 QQ 索引还没好）══════════
+
+    [Fact]
+    public async Task Audio_fetch_retries_then_succeeds()
+    {
+        // 实测：刚到达时 get_record 等到超时，一两秒后同一请求只要 28 ms —— 所以必须重试
+        var source = new FakeSource([null, [1, 2, 3]]);
+        var media = new FakeMedia(new AsrResult("重试之后拿到了", 1200, []));
+
+        var text = await Create(media, source).TranscribeAsync(Clip());
+
+        Assert.Equal("重试之后拿到了", text);
+        Assert.Equal(2, source.Calls);
+        Assert.Equal(1, media.Calls);
+    }
+
+    [Fact]
+    public async Task Audio_fetch_retries_only_up_to_configured_attempts()
+    {
+        var source = new FakeSource();   // 永远 null
+        var media = new FakeMedia(new AsrResult("x", 0, []));
+
+        var text = await Create(media, source, speech: new SpeechOptions
+        {
+            AudioFetchAttempts = 3,
+            AudioFetchRetryDelayMs = 0,
+        }).TranscribeAsync(Clip());
+
+        Assert.Null(text);
+        Assert.Equal(3, source.Calls);
+        Assert.Equal(0, media.Calls);
+    }
 }
+

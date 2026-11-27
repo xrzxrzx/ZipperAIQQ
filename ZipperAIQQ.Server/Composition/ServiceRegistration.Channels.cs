@@ -81,6 +81,10 @@ public static partial class ServiceRegistration
         {
             var logger = sp.GetRequiredService<ILogger>();
 
+            // B00001：单条语音的墙上时间上限与全局 API 超时分开 ——
+            // 复用 30 秒会让「一条转不出来的语音」把事件接收卡 30~60 秒
+            var speech = new SpeechOptions { Enabled = options.SttEnabled, TimeoutMs = options.SttTimeoutMs };
+
             var channel = new NapCatChannel(
                 sp.GetRequiredService<IClientTransport>(),
                 sp.GetRequiredService<IChatFilter>(),
@@ -90,17 +94,15 @@ public static partial class ServiceRegistration
                     AccessToken = options.NapCatAccessToken,
                 },
                 logger,
-                // B00001：单条语音的墙上时间上限与全局 API 超时分开 ——
-                // 复用 30 秒会让「一条转不出来的语音」把事件接收卡 30~60 秒
-                new SpeechOptions { Enabled = options.SttEnabled, TimeoutMs = options.SttTimeoutMs });
+                speech);
 
             // 语音转写链（B00001，用户 2026-11-28 定）：**NapCat 自转优先，转不出走 DS ASR**。
-            // 顺序不能反：自转免费且不用下载音频；ASR 要取音频 + 转码 + 按秒计费。
+            // 顺序不能反：自转免费且不用下载音频；ASR 要取音频 + 按秒计费。
             // ASR 客户端在 Server 侧（要 key），通道只拿到一个 ISpeechTranscriber —— 依赖方向不变。
             var media = sp.GetService<ZipperAIQQ.Agent.Media.IDeepSeekMediaClient>();
             if (media is not null)
             {
-                var asr = new AsrSpeechTranscriber(options.Ai, media, channel, logger);
+                var asr = new AsrSpeechTranscriber(options.Ai, media, channel, speech, logger);
 
                 channel.UseSpeechTranscriber(
                     new FallbackSpeechTranscriber(channel.SpeechTranscriber, asr, logger));

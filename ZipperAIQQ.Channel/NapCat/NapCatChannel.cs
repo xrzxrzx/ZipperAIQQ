@@ -628,7 +628,25 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
             ["out_format"] = "wav",
         };
 
-        var timeoutMs = _speechOptions.TimeoutMs > 0 ? _speechOptions.TimeoutMs : 8_000;
+        // 只做**一次**：重试策略在上层（AsrSpeechTranscriber），这样它能被单测，
+        // 而不是埋在通道里只能靠真机碰运气。
+        var wav = await TryGetWavOnceAsync(parameters, fileId, ct).ConfigureAwait(false);
+        if (wav is null)
+        {
+            _logger.Warning("get_record 没给出可用的音频（file={File}，path={Path}）", fileId, filePath);
+        }
+
+        return wav;
+    }
+
+    /// <summary>取一次 WAV：成功返回字节，超时 / 失败返回 <c>null</c>。</summary>
+    private async Task<byte[]?> TryGetWavOnceAsync(
+        JsonObject parameters, string fileId, CancellationToken ct)
+    {
+        var timeoutMs = _speechOptions.AudioFetchTimeoutMs > 0
+            ? _speechOptions.AudioFetchTimeoutMs
+            : 5_000;
+
         var call = CallApiNodeAsync("get_record", parameters, ct);
 
         var finished = await Task.WhenAny(call, Task.Delay(timeoutMs, ct)).ConfigureAwait(false);
@@ -642,7 +660,7 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
                 TaskContinuationOptions.OnlyOnFaulted,
                 TaskScheduler.Default);
 
-            _logger.Warning(
+            _logger.Information(
                 "取语音音频超过 {TimeoutMs}ms 未返回（file={File}）", timeoutMs, fileId);
             return null;
         }
@@ -679,8 +697,6 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
             }
         }
 
-        _logger.Warning(
-            "get_record 没给出可用的音频（file={File}，path={Path}）", fileId, localPath ?? filePath);
         return null;
     }
 

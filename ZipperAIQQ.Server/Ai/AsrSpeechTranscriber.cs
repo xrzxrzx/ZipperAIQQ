@@ -32,22 +32,26 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
     private readonly AiOptions _options;
     private readonly IDeepSeekMediaClient _media;
     private readonly IAudioSource _source;
+    private readonly SpeechOptions _speech;
     private readonly ILogger _logger;
 
     public AsrSpeechTranscriber(
         AiOptions options,
         IDeepSeekMediaClient media,
         IAudioSource source,
+        SpeechOptions speech,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(media);
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(speech);
         ArgumentNullException.ThrowIfNull(logger);
 
         _options = options;
         _media = media;
         _source = source;
+        _speech = speech;
         _logger = logger;
     }
 
@@ -63,9 +67,7 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
 
         try
         {
-            var wav = await _source
-                .GetWavAsync(clip.FileId, clip.FilePath, ct)
-                .ConfigureAwait(false);
+            var wav = await FetchWavAsync(clip, ct).ConfigureAwait(false);
 
             if (wav is null || wav.Length == 0)
             {
@@ -108,5 +110,50 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
             _logger.Warning(ex, "ASR 转写异常（file={File}）", clip.FileId);
             return null;
         }
+    }
+
+    /// <summary>
+    /// 取音频（带重试）。
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ 重试是**必需**的，不是保守（2026-11-28 实测）：语音**刚到达**时 NapCat 的
+    /// <c>get_record</c> 会一直等到超时（它按文件名去 QQ 的媒体索引里搜，索引还没建好），
+    /// 而一两秒后同一个请求只要 **28 ms** 就拿到 WAV。
+    /// 不重试的话「越新的语音越转不出来」—— 正是用户报的「发了语音没反应」。
+    /// </remarks>
+    private async Task<byte[]?> FetchWavAsync(AudioClip clip, CancellationToken ct)
+    {
+        var attempts = Math.Max(1, _speech.AudioFetchAttempts);
+
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            var wav = await _source
+                .GetWavAsync(clip.FileId, clip.FilePath, ct)
+                .ConfigureAwait(false);
+
+            if (wav is { Length: > 0 })
+            {
+                return wav;
+            }
+
+            if (attempt >= attempts)
+            {
+                break;
+            }
+
+            _logger.Information(
+                "取语音音频失败，重试 {Attempt}/{Total}（file={File}）", attempt + 1, attempts, clip.FileId);
+
+            try
+            {
+                await Task.Delay(Math.Max(0, _speech.AudioFetchRetryDelayMs), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
+        }
+
+        return null;
     }
 }

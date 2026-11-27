@@ -58,4 +58,24 @@ public sealed record SpeechOptions
 
     /// <summary>重试前等待多久（毫秒）。</summary>
     public int RetryDelayMs { get; init; } = 700;
+
+    /// <summary>
+    /// 外部 ASR 回退路线上，<b>取音频</b>最多试几次（含首次）。默认 2。
+    /// </summary>
+    /// <remarks>
+    /// 2026-11-28 实测（B00001 第二版）：语音**刚到达**时 NapCat 的 <c>get_record</c>
+    /// 会一直等到超时（它按文件名去 QQ 的媒体索引里搜，而索引还没建好）；
+    /// 同一秒之后重试一次只要 **28 ms** 就拿到 WAV。
+    /// 所以「取不到就重试」不是保守，是**必需** —— 不重试的话，越新的语音越转不出来。
+    /// </remarks>
+    public int AudioFetchAttempts { get; init; } = 2;
+
+    /// <summary>取音频重试的间隔（毫秒）。索引延迟是秒级，等太久反而拖慢消息。</summary>
+    public int AudioFetchRetryDelayMs { get; init; } = 1_200;
+
+    /// <summary>
+    /// 取音频的**单次**超时（毫秒）。与 <see cref="TimeoutMs"/> 分开用：
+    /// 成功只要几十毫秒，等待的意义只在"索引还没好"，所以单次不必给 8 秒。
+    /// </summary>
+    public int AudioFetchTimeoutMs { get; init; } = 5_000;
 }
