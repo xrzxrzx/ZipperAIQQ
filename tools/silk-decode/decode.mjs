@@ -14,7 +14,7 @@
 // 失败时退出码非 0，并输出 {"ok":false,"error":"..."}
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { decode } from "./vendor/silk-wasm/index.mjs";
+import { decode } from "./vendor/silk-wasm/lib/index.mjs";
 
 const [, , silkPath, outPath, sampleRateArg] = process.argv;
 
