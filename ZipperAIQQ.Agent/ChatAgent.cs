@@ -5,6 +5,7 @@ using ZipperAIQQ.Agent.Events;
 using ZipperAIQQ.Agent.Faces;
 using ZipperAIQQ.Agent.Llm;
 using ZipperAIQQ.Agent.Cost;
+using ZipperAIQQ.Agent.Express;
 using ZipperAIQQ.Agent.Length;
 using ZipperAIQQ.Agent.Steering;
 using ZipperAIQQ.Agent.Memory;
@@ -69,6 +70,7 @@ public sealed class ChatAgent : IChatAgent
     private readonly IChannelHealthLookup? _channelHealth;
     private readonly ReplyLengthOptions? _replyLength;
     private readonly IReplyModeDecider? _replyModes;
+    private readonly IExpressSettingsSource? _express;
     private readonly Func<string, SteerQueue>? _steerQueues;
 
     /// <summary>按平台查主人（Server 用 AccessSettings 实现）；不传时退回旧键逻辑。</summary>
@@ -133,6 +135,7 @@ public sealed class ChatAgent : IChatAgent
         _channelHealth = deps.ChannelHealth;
         _replyLength = deps.ReplyLength;
         _replyModes = deps.ReplyModes;
+        _express = deps.Express;
         _steerQueues = deps.SteerQueues;
         _ownerLookup = deps.OwnerLookup;
         _workspace = deps.Workspace;
@@ -428,13 +431,35 @@ public sealed class ChatAgent : IChatAgent
                 .AppendLine($"【你现在的平台】{request.Chat.Platform}" +
                             $"（会话 {request.Chat.SessionId}）。跨平台查到别的会话时，结果前面会标 [会话] 来源。");
 
+        // ── 表达档位（B6）：轮次开头取一次快照，整轮自洽 ──
+        // 中途取三次（规则段 / 预算 / 卫生）会出现「规则段是亲近、预算按日常算」的半套口径。
+        var isOwner = _roles.Resolve(request.Sender.UserId, request.Chat.Platform) == Role.Owner;
+        var isGroup = request.Chat.Type == ChatType.Group;
+        var expressSettings = _express?.Current;
+        var expressLevel = expressSettings is null
+            ? ExpressLevel.Daily
+            : ExpressLevelPolicy.Resolve(expressSettings, request.Chat.SessionId, isGroup);
+        LogExpressLevel(expressSettings, expressLevel, isGroup, request.Chat.SessionId);
+
         // R-11 / J-1：本轮长度预算（场景由 JEV 模式 + 是否私聊/被 @ 决定，不额外调模型）
         var lengthBudget = await ResolveLengthBudgetAsync(request, selfId, ct).ConfigureAwait(false);
         if (lengthBudget is not null)
         {
+            // B6：档位联动（只放大不缩小）—— 不联动的话，规则段放开了也会被预算当场掐回去
+            lengthBudget = ReplyLengthPolicy.ApplyExpress(lengthBudget, expressLevel);
+
             reinject.AppendLine().AppendLine(
                 $"【本轮长度预算】约 {lengthBudget.MaxChars} 字以内、最多 {lengthBudget.MaxMessages} 条。" +
                 "超出的内容会被压缩甚至裁掉，所以先想把什么说清楚，别铺陈。");
+        }
+
+        // 表达自由规则段（B6）：与角色设定同级，紧贴当前消息 ——
+        // 档位是「当前状态」，放进锚点会在长对话里过期（锚点只装「最初设定」）。
+        if (expressSettings is not null)
+        {
+            reinject.AppendLine().AppendLine(
+                PromptRules.ExpressLiberty(
+                    expressLevel, isOwner, isGroup, expressSettings.CustomRules));
         }
 
         // 人设守卫（第 20 项）：每次重注入都带，位置紧贴当前消息 ——
@@ -442,7 +467,6 @@ public sealed class ChatAgent : IChatAgent
         // 主人有例外（问题记录 02 #2）：主人要求改设定/称呼/扮演时照做。
         // ⚠️ 用**角色解析**判主人（S3-C：每平台一套主人），不再读写死的 "owner.userId" ——
         //    那个键只代表 QQ，抖音会话里会把它的人也当主人。
-        var isOwner = _roles.Resolve(request.Sender.UserId, request.Chat.Platform) == Role.Owner;
         reinject.AppendLine().AppendLine(PromptRules.PersonaGuard(isOwner));
 
         var messages = new List<ChatMessage>
@@ -466,6 +490,59 @@ public sealed class ChatAgent : IChatAgent
         // send_message 绑定当前会话（模型无法指定发给谁）
         var sent = 0;
         _lastSendFailure = null;
+
+        // ── 免拒绝校准（B6）：只扫**最终要发出去的文本**，只纠一次，二次命中照发 ──
+        // 放在这里而不是工具内部：降级发送（sent==0 时代发）走的是另一条路，
+        // 两条路必须过同一道闸，否则「调了工具的被纠、没调工具的不纠」。
+        var hygieneRegenerated = false;
+
+        async Task<string> HygieneAsync(string text, CancellationToken token)
+        {
+            if (expressSettings is null || string.IsNullOrWhiteSpace(text))
+            {
+                return text;
+            }
+
+            var scan = ExpressHygiene.Scan(text);
+            if (!scan.Hit)
+            {
+                return text;
+            }
+
+            _express?.RecordHygieneHit(scan.Category!.Value);
+
+            if (!ExpressHygiene.ShouldRegenerate(scan, expressLevel, expressSettings, hygieneRegenerated))
+            {
+                // 日常档 / 开关关 / 本轮已纠过：不再动它，但要留痕（A-23：校不准不空转）
+                _logger.Warning(
+                    "免拒绝校准未纠正（档位 {Level}，已纠过 {Regenerated}）：{Category}｜{Preview}",
+                    ExpressLevelText.ToLabel(expressLevel), hygieneRegenerated, scan.Category, scan.Preview);
+                return text;
+            }
+
+            hygieneRegenerated = true;
+            _express?.RecordHygieneRegeneration();
+
+            var regenerated = await RegenerateForExpressAsync(text, token).ConfigureAwait(false);
+            if (regenerated is null)
+            {
+                // 重生成失败 → 照发原文：校准是锦上添花，丢了回合成事故
+                return text;
+            }
+
+            var second = ExpressHygiene.Scan(regenerated);
+            if (second.Hit)
+            {
+                _express?.RecordHygieneHit(second.Category!.Value);
+                _logger.Warning(
+                    "重生成后仍命中 {Category}，照发原文（会话 {SessionId}）：{Preview}",
+                    second.Category, SessionId, second.Preview);
+                return text;
+            }
+
+            return regenerated;
+        }
+
         var tool = SendMessageTool.Create(
             _channel,
             _store,
@@ -480,7 +557,8 @@ public sealed class ChatAgent : IChatAgent
             lengthBudget,
             lengthBudget is null
                 ? null
-                : (text, maxChars, token) => CondenseAsync(text, maxChars, token));
+                : (text, maxChars, token) => CondenseAsync(text, maxChars, token),
+            expressSettings is { HygieneEnabled: true } ? HygieneAsync : null);
 
         var chatOptions = new ChatOptions
         {
@@ -579,10 +657,13 @@ public sealed class ChatAgent : IChatAgent
 
             foreach (var part in parts)
             {
+                // 降级路径同样要过免拒绝校准：它与工具路径是同一个用户可见结果
+                var partText = await HygieneAsync(part, ct).ConfigureAwait(false);
+
                 // 会话级最小发送间隔（防风控）：不是"第几条之后才等"，而是每次真正发送前都排一次队
                 await _sendThrottle.WaitAsync(_options.MinSendIntervalMs, ct).ConfigureAwait(false);
 
-                if (await TrySendAsync(request.Chat, MessageContentParser.Parse(part, _faces), ct).ConfigureAwait(false))
+                if (await TrySendAsync(request.Chat, MessageContentParser.Parse(partText, _faces), ct).ConfigureAwait(false))
                 {
                     sent++;
                 }
@@ -957,6 +1038,66 @@ public sealed class ChatAgent : IChatAgent
 
         var scene = ReplyLengthPolicy.Decide(mode, request.Chat.Type, mentioned, request.UserText);
         return ReplyLengthPolicy.BudgetFor(scene, _replyLength);
+    }
+
+    /// <summary>
+    /// 本轮档位留痕（A-19：日志里能核到本轮注入的是哪一档）。
+    /// </summary>
+    /// <remarks>
+    /// 日常档且没有会话覆盖时**不打**：那是默认值，每轮一条等于刷屏；
+    /// 非日常档量很小，而「改了档之后到底注入的是哪一档」正是要核的那几轮。
+    /// </remarks>
+    private void LogExpressLevel(
+        ExpressSettings? settings, ExpressLevel level, bool isGroup, string sessionId)
+    {
+        if (settings is null)
+        {
+            return;
+        }
+
+        var overridden = settings.SessionOverrides.ContainsKey(sessionId);
+        if (level == ExpressLevel.Daily && !overridden)
+        {
+            return;
+        }
+
+        _logger.Information(
+            "表达档位：本轮注入 {Level}（来源 {Source}，{Scope}，会话 {SessionId}）",
+            ExpressLevelText.ToLabel(level),
+            overridden ? "会话覆盖" : isGroup ? "群上限/全局" : "全局",
+            isGroup ? "群聊" : "私聊",
+            sessionId);
+    }
+
+    /// <summary>免拒绝校准的重生成（B6）：让模型把同一件事换个说法说一遍。</summary>
+    /// <remarks>
+    /// 只带「指令 + 这段话」两条消息，**不带整段上下文**：
+    /// 上下文里的自我审查句式会把它重新带回来，而且那样一次重生成就是一次完整对话的钱。
+    /// </remarks>
+    private async Task<string?> RegenerateForExpressAsync(string text, CancellationToken ct)
+    {
+        try
+        {
+            using var purpose = CallPurposeScope.Begin(CallPurpose.ExpressRewrite);
+            var response = await _clients.Current.GetResponseAsync(
+                [
+                    new ChatMessage(ChatRole.System, ExpressHygiene.RegenerateInstruction),
+                    new ChatMessage(ChatRole.User, text),
+                ],
+                cancellationToken: ct).ConfigureAwait(false);
+
+            var rewritten = response.Text?.Trim();
+            return string.IsNullOrWhiteSpace(rewritten) ? null : rewritten;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "免拒绝校准重生成失败（会话 {SessionId}），照发原文", SessionId);
+            return null;
+        }
     }
 
     /// <summary>让模型把超长回复压缩到预算内（J-2；拍板选择「重写」而不是粗暴截断）。</summary>

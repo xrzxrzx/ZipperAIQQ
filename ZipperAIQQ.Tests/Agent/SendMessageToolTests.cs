@@ -197,4 +197,78 @@ public sealed class SendMessageToolTests
         Assert.Contains("1 条失败", result);
         Assert.Contains("不要原样无限重试", result);
     }
+
+    // ── B6：免拒绝校准（只扫最终文本）──
+    [Fact]
+    public async Task Hygiene_rewrites_text_before_sending()
+    {
+        var channel = new RecordingChannel();
+        var calls = new List<string>();
+
+        var tool = NewTool(
+            channel,
+            hygiene: (text, ct) =>
+            {
+                calls.Add(text);
+                return Task.FromResult("好呀，那我们出门吧");
+            });
+
+        await tool.InvokeAsync(
+            new AIFunctionArguments { ["messages"] = new[] { "作为一个 AI，我不能聊这个" } },
+            CancellationToken.None);
+
+        Assert.Equal(["作为一个 AI，我不能聊这个"], calls);
+        Assert.Equal(["好呀，那我们出门吧"], channel.Sent);
+    }
+
+    [Fact]
+    public async Task Hygiene_result_is_trimmed_back_to_budget()
+    {
+        var channel = new RecordingChannel();
+
+        var tool = NewTool(
+            channel,
+            budget: new ZipperAIQQ.Agent.Length.ReplyLengthBudget(MaxChars: 8, MaxMessages: 2),
+            hygiene: (_, _) => Task.FromResult("这句话被改写之后明显变长了很多。第二句也长。"));
+
+        await tool.InvokeAsync(
+            new AIFunctionArguments { ["messages"] = new[] { "短句" } },
+            CancellationToken.None);
+
+        var sent = Assert.Single(channel.Sent);
+
+        // 只做本地句末裁剪，不再调模型（再调一次既费钱也会把刚换好的说法切碎）
+        Assert.True(sent.Length <= 8, $"实际长度 {sent.Length}：{sent}");
+    }
+
+    [Fact]
+    public async Task Without_hygiene_text_is_sent_unchanged()
+    {
+        var channel = new RecordingChannel();
+
+        var tool = NewTool(channel);
+
+        await tool.InvokeAsync(
+            new AIFunctionArguments { ["messages"] = new[] { "作为一个 AI，我不能聊这个" } },
+            CancellationToken.None);
+
+        Assert.Equal(["作为一个 AI，我不能聊这个"], channel.Sent);
+    }
+
+    private static AIFunction NewTool(
+        RecordingChannel channel,
+        ZipperAIQQ.Agent.Length.ReplyLengthBudget? budget = null,
+        Func<string, CancellationToken, Task<string>>? hygiene = null) =>
+        SendMessageTool.Create(
+            channel,
+            new NoopStore(),
+            "bot",
+            new ChatRef { Platform = "qq", Type = ChatType.Private, Id = "10001" },
+            maxMessages: 5,
+            waitInterval: _ => Task.CompletedTask,
+            faces: FaceCatalog.Empty,
+            metrics: new NoopMetrics(),
+            onSent: _ => { },
+            budget: budget,
+            hygiene: hygiene);
 }

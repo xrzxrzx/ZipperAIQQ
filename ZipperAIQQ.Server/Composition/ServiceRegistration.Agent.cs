@@ -139,6 +139,8 @@ public static partial class ServiceRegistration
                 ChannelHealth = sp.GetRequiredService<ZipperAIQQ.Agent.IChannelHealthLookup>(),
                 ReplyLength = new ZipperAIQQ.Agent.Length.ReplyLengthOptions(),
                 ReplyModes = sp.GetRequiredService<ZipperAIQQ.Agent.IReplyModeDecider>(),
+                // 表达档位（B6）：未注册时按日常档 = 与 B6 之前完全一致
+                Express = sp.GetService<ZipperAIQQ.Agent.Express.IExpressSettingsSource>(),
                 SteerQueues = sp.GetRequiredService<Orchestration.TurnCoordinator>().SteerQueueFor,
                 Options = BuildAgentOptions(options),
                 Logger = sp.GetRequiredService<ILogger>(),

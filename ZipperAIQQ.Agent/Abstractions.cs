@@ -134,6 +134,15 @@ public sealed record ChatAgentDependencies
     /// <summary>JEV 模式（判长度场景用；只读模式，不触发模型调用）。</summary>
     public IReplyModeDecider? ReplyModes { get; init; }
 
+    /// <summary>
+    /// 表达档位（B6）：规则段注入 / 长度联动 / 免拒绝校准都靠它。
+    /// </summary>
+    /// <remarks>
+    /// 未注册（单测或精简装配）时按**日常档**处理 —— 也就是「与 B6 之前完全一致」的行为，
+    /// 新能力缺失不该让老部署变样。
+    /// </remarks>
+    public Express.IExpressSettingsSource? Express { get; init; }
+
     /// <summary>取某会话的引导队列（K-3）；未注册时不做 steer 注入。</summary>
     public Func<string, Steering.SteerQueue>? SteerQueues { get; init; }
 

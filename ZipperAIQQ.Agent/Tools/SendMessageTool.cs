@@ -35,7 +35,8 @@ public static class SendMessageTool
         Action<int> onSent,
         Action<FailureKind>? onFailure = null,
         ReplyLengthBudget? budget = null,
-        Func<string, int, CancellationToken, Task<string>>? condense = null)
+        Func<string, int, CancellationToken, Task<string>>? condense = null,
+        Func<string, CancellationToken, Task<string>>? hygiene = null)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(store);
@@ -81,6 +82,19 @@ public static class SendMessageTool
                             : await condense(finalText, budget.MaxChars, ct).ConfigureAwait(false);
                         finalText = ReplyLengthPolicy.TrimToBudget(rewritten, budget.MaxChars);
                         await RecordMetricsAsync(metrics, chat.SessionId, "reply.trimmed").ConfigureAwait(false);
+                    }
+
+                    // B6：免拒绝校准 —— 只扫**最终文本**，不扫工具返回、不扫错误信息
+                    if (hygiene is not null)
+                    {
+                        finalText = await hygiene(finalText, ct).ConfigureAwait(false);
+
+                        // 纠正后的文本仍要守预算：这里只做本地句末裁剪，不再调模型
+                        // （再调一次既费钱，也容易把刚换好的说法重新切碎）
+                        if (budget is not null && finalText.Length > budget.MaxChars)
+                        {
+                            finalText = ReplyLengthPolicy.TrimToBudget(finalText, budget.MaxChars);
+                        }
                     }
 
                     // 会话级最小间隔：**每次真正发送前**都排一次队。

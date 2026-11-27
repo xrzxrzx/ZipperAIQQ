@@ -247,6 +247,12 @@ public static partial class ServiceRegistration
         services.AddSingleton<IApiAction, GetDialogEnhanceAction>();
         services.AddSingleton<IApiAction, SetDialogEnhanceAction>();
 
+        // ── 表达档位（B6）：运行期设置，Agent 每轮读快照；改完即时生效 ──
+        // 同一个实例必须能按 Agent 侧窄接口解析出来 —— 两处各建一个会让「写入的」与「读到的」不是同一份。
+        services.AddSingleton<Express.ExpressOptionsService>();
+        services.AddSingleton<ZipperAIQQ.Agent.Express.IExpressSettingsSource>(
+            sp => sp.GetRequiredService<Express.ExpressOptionsService>());
+
         // 图片（问题记录 03 #2）：下载字节 + 真实 MIME + GIF/WebP 首帧转 PNG
         services.AddSingleton<IImageFetcher>(sp =>
         {

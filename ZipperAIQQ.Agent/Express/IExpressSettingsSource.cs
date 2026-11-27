@@ -22,4 +22,13 @@ public interface IExpressSettingsSource
     /// </summary>
     /// <param name="category">命中的类别。</param>
     void RecordHygieneHit(ExpressHygieneCategory category);
+
+    /// <summary>
+    /// 记一次「已请模型把同一件事重说一遍」（用于 <c>getExpressStatus.hygiene.regenerated</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 与 <see cref="RecordHygieneHit"/> 分开计：命中多、重生成少说明**规则段本身**没压住自我审查，
+    /// 两个数放一起才能看出是哪种情况（只记命中会让人以为一直在烧重生成的钱）。
+    /// </remarks>
+    void RecordHygieneRegeneration();
 }

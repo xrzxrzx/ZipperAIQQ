@@ -216,6 +216,9 @@ static async Task<int> RunAsync(WebApplicationBuilder builder, ServerOptions opt
     // 对话增强开关（T2.6）：必须在 ReloadAsync 之前读回，否则首轮客户端拿到的是"全关"快照。
     await app.Services.GetRequiredService<ZipperAIQQ.Server.Ai.DialogEnhanceService>().InitializeAsync();
 
+    // 表达档位（B6）：Agent 每轮读它的快照；不读回就一直是默认的「日常」档
+    await app.Services.GetRequiredService<ZipperAIQQ.Server.Express.ExpressOptionsService>().InitializeAsync();
+
     // 外部 WS 配置（客户端可改）先读回 RuntimeSettings
     await app.Services.GetRequiredService<ExternalOptionsService>().InitializeAsync();
 

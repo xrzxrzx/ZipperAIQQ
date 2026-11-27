@@ -18,6 +18,11 @@ public enum CallPurpose
     Judge = 7,
     Search = 8,
     Embedding = 9,
+
+    /// <summary>
+    /// 免拒绝校准的重生成（B6）：**非关键** —— 被额度拦掉时照发原文，不丢消息。
+    /// </summary>
+    ExpressRewrite = 10,
 }
 
 /// <summary>调用关键性作用域（<see cref="AsyncLocal{T}"/>，不必给每个调用点加参数）。</summary>
