@@ -14,6 +14,21 @@ public sealed record Persona(string Name, string Content)
     public const string PersonalityHeader = "【性格】";
 
     /// <summary>
+    /// 表达小节的标头（说话放得开的态度，B6 / 表达档位设计 §3.5）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// **可选**：老人设没有这一段完全不影响 —— 具体档位（日常 / 亲近 / 露骨）由每轮注入的
+    /// 规则段决定，这里只放「与档位无关的态度」（不拿"作为 AI"当挡箭牌这类）。
+    /// </para>
+    /// <para>
+    /// ⚠️ 它必须进 <see cref="ExtractSection"/> 的边界表：否则【表达】段会被算进【性格】，
+    /// 客户端编辑性格框时看到多出来的文字、一保存就把它删了。
+    /// </para>
+    /// </remarks>
+    public const string ExpressHeader = "【表达】";
+
+    /// <summary>
     /// 由「形象 + 性格」拼出一份完整人设。
     /// </summary>
     /// <remarks>
@@ -21,7 +36,13 @@ public sealed record Persona(string Name, string Content)
     /// ① 存储层（会话表 + 全局文件）都要改，改动面大；
     /// ② 标头方式对老数据**向后兼容** —— 没有标头的旧人设仍然整体生效。
     /// </remarks>
-    public static Persona FromParts(string name, string? image, string? personality)
+    public static Persona FromParts(string name, string? image, string? personality) =>
+        FromParts(name, image, personality, express: null);
+
+    /// <summary>
+    /// 由「形象 + 性格 + 表达」拼出一份完整人设（表达段可空）。
+    /// </summary>
+    public static Persona FromParts(string name, string? image, string? personality, string? express)
     {
         var sb = new StringBuilder();
 
@@ -42,6 +63,17 @@ public sealed record Persona(string Name, string Content)
             sb.AppendLine(personality.Trim());
         }
 
+        if (!string.IsNullOrWhiteSpace(express))
+        {
+            if (sb.Length > 0)
+            {
+                sb.AppendLine();
+            }
+
+            sb.AppendLine(ExpressHeader);
+            sb.AppendLine(express.Trim());
+        }
+
         return new Persona(name, sb.ToString().Trim());
     }
 
@@ -50,6 +82,9 @@ public sealed record Persona(string Name, string Content)
 
     /// <summary>性格小节内容（旧人设没有标头时返回 <c>null</c>）。</summary>
     public string? Personality => ExtractSection(PersonalityHeader);
+
+    /// <summary>表达小节内容（老人设没有这一段时返回 <c>null</c>）。</summary>
+    public string? Express => ExtractSection(ExpressHeader);
 
     private string? ExtractSection(string header)
     {
@@ -67,7 +102,7 @@ public sealed record Persona(string Name, string Content)
         start += header.Length;
         var end = Content.Length;
 
-        foreach (var other in new[] { ImageHeader, PersonalityHeader })
+        foreach (var other in new[] { ImageHeader, PersonalityHeader, ExpressHeader })
         {
             if (other == header)
             {

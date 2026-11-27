@@ -107,4 +107,45 @@ public sealed class PersonaTests
         Assert.Equal("第一行\n第二行\n第三行", p.Image);
         Assert.Equal("性格一\n性格二", p.Personality);
     }
+
+    // ── 【表达】段（B6 / 表达档位设计 §3.5）──
+
+    [Fact]
+    public void Express_section_is_extracted_and_does_not_bleed_into_personality()
+    {
+        var p = Persona.FromParts("小衣", "蓝发", "嫌麻烦", "说话别先自我审查");
+
+        Assert.Equal("蓝发", p.Image);
+        Assert.Equal("嫌麻烦", p.Personality);          // ← 不能把【表达】段算进性格
+        Assert.Equal("说话别先自我审查", p.Express);
+    }
+
+    [Fact]
+    public void Legacy_persona_with_full_content_bypasses_express_section()
+    {
+        // config/persona.md 的形态：三段都有，但整体作为 system 内容（不走 FromParts）
+        var legacy = new Persona("persona", """
+            【形象】
+            蓝发
+
+            【性格】
+            嫌麻烦
+
+            【表达】
+            直白一点
+            """);
+
+        Assert.Equal("蓝发", legacy.Image);
+        Assert.Equal("嫌麻烦", legacy.Personality);     // 边界正确，不会吞掉【表达】
+        Assert.Equal("直白一点", legacy.Express);
+    }
+
+    [Fact]
+    public void Persona_without_express_section_returns_null()
+    {
+        var p = Persona.FromParts("小衣", "蓝发", "嫌麻烦");
+
+        Assert.Null(p.Express);
+        Assert.DoesNotContain("【表达】", p.Content);
+    }
 }
