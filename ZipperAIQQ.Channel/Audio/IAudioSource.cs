@@ -1,28 +1,37 @@
 namespace ZipperAIQQ.Channel.Audio;
 
 /// <summary>
-/// 把平台上的语音**取成 PCM WAV 字节**（B00001）。
+/// 一段语音的原始字节 + 格式提示（B00001）。
+/// </summary>
+/// <param name="Bytes">音频字节。</param>
+/// <param name="Format">格式提示（<c>silk</c> / <c>wav</c> / <c>amr</c> …），未知为 <c>null</c>。</param>
+/// <remarks>
+/// <see cref="Format"/> 只是提示：QQ 的语音文件名叫 <c>.amr</c>，真身是 <c>#!SILK_V3</c>。
+/// 真正可靠的判据是**头部魔数**，由消费方自己看（<c>RIFF/WAVE</c> 才是 WAV）。
+/// </remarks>
+public sealed record AudioBytes(byte[] Bytes, string? Format);
+
+/// <summary>
+/// 把平台上的语音取成**原始音频字节**（B00001）。
 /// </summary>
 /// <remarks>
 /// <para>
-/// 为什么是"取 WAV"而不是"取原始字节 + 自己转码"：QQ 的语音是 <c>SILK_V3</c>
-/// （文件名叫 <c>.amr</c> 也一样，2026-11-28 实测头部是 <c>#!SILK_V3</c>），
-/// 而本机上的 ffmpeg **是坏的**（<c>not a valid application for this OS platform</c>）。
-/// 但 NapCat 自己能解：<c>get_record</c> 带 <c>out_format: "wav"</c> 会返回
-/// 24 kHz 单声道 16-bit 的 RIFF/WAVE（实测 361 ms）。
+/// 2026-11-28 实测后改成"取原始字节"而不是"取 WAV"：
+/// NapCat 的 <c>get_record + out_format=wav</c> 确实能把 SILK 转成 WAV（30 ms），
+/// 但它要按文件名去 **QQ 的消息索引**里搜 —— 而语音**刚到达的 1~2 分钟内索引还没建好**，
+/// 请求会一路等到超时（实测服务端 5 秒超时，两分钟后同一请求 30 ms 成功）。
 /// </para>
 /// <para>
-/// 所以转码这活交给**本来就懂这个格式的那一端**，我们只管取字节。
+/// 唯一"消息一到达就可用"的原料是 OneBot 给的本地路径（<c>record.data.path</c>，silk 文件）。
+/// 所以这里**本地路径优先**，解码交给上层（Server 有 Node + silk-wasm），
+/// <c>get_record</c> 只作兜底（老消息 / 跨机部署时路径读不到）。
 /// </para>
 /// </remarks>
 public interface IAudioSource
 {
-    /// <summary>
-    /// 取语音的 WAV 字节。
-    /// </summary>
+    /// <summary>取语音的原始音频字节；取不到返回 <c>null</c>（不抛）。</summary>
     /// <param name="fileId">平台文件标识（OneBot 的 <c>record.data.file</c>）。</param>
-    /// <param name="filePath">平台给的本地原始路径（可选，仅用于诊断）。</param>
+    /// <param name="filePath">平台给的本地原始路径（OneBot 的 <c>record.data.path</c>）。</param>
     /// <param name="ct">取消令牌。</param>
-    /// <returns>WAV 字节；取不到返回 <c>null</c>（契约同 <see cref="ISpeechTranscriber"/>：不抛）。</returns>
-    Task<byte[]?> GetWavAsync(string? fileId, string? filePath, CancellationToken ct = default);
+    Task<AudioBytes?> GetAudioAsync(string? fileId, string? filePath, CancellationToken ct = default);
 }

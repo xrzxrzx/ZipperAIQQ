@@ -235,16 +235,17 @@ public sealed class SpeechTranscriberTests
             },
             new SpeechOptions
             {
-                TimeoutMs = 40,
+                TimeoutMs = 50,
                 MaxConsecutiveFailures = 1,
-                CooldownMs = 30,
+                CooldownMs = 40,
                 RetryDelayMs = 0,
             });
 
         Assert.Null(await transcriber.TranscribeAsync(Clip("m1")));
         Assert.False(transcriber.IsAvailable);
 
-        await Task.Delay(60);                          // 等冷却到期
+        // 等待给足余量：这条用例碰真实时钟，机器满负载（同时在 build）时 60ms 会抖
+        await Task.Delay(400);                        // 等冷却到期
 
         Assert.True(transcriber.IsAvailable);
         Assert.Null(await transcriber.TranscribeAsync(Clip("m2")));

@@ -599,24 +599,45 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
     }
 
     /// <summary>
-    /// 取语音的 WAV 字节（B00001 的 ASR 回退路线用）。
+    /// 取语音原始字节（B00001）：**本地文件优先**，<c>get_record</c> 兜底。
     /// </summary>
     /// <remarks>
     /// <para>
-    /// 用 <c>get_record</c> + <c>out_format: "wav"</c>：NapCat 内部能把 <c>SILK_V3</c> 解成
-    /// 24 kHz 单声道 16-bit RIFF/WAVE（2026-11-28 实测 361 ms）。
-    /// 本机 ffmpeg 是坏的，转码只能靠它。
+    /// 为什么本地优先（2026-11-28 实测）：OneBot 事件已经给了 <c>record.data.path</c>
+    /// （<c>…\nt_data\Ptt\2026-11\Ori\xxx.amr</c>，真身是 <c>#!SILK_V3</c>），
+    /// 它在**消息到达那一刻就在磁盘上**；
+    /// 而 NapCat 的 <c>get_record</c> 要按文件名去 QQ 的消息索引里搜 ——
+    /// 语音刚到的 1~2 分钟内索引还没建好，请求会一路等到超时
+    /// （实测：服务端 5 秒超时，两分钟后同一请求 30 ms 成功）。
     /// </para>
     /// <para>
-    /// 优先用返回里的 <c>base64</c>，其次读它给的本地路径：
-    /// <c>enableLocalFile2Url=false</c>（默认）时 NapCat 不给 base64，只给路径。
+    /// <c>get_record</c> 留着兜底：跨机部署（路径读不到）、或老消息的本地文件被清掉时仍可用。
     /// </para>
     /// <para>
-    /// ⚠️ 有超时保护：这条调用跑在**事件接收路径**上，不能像 B00001 的老版本那样卡满全局 30 秒。
+    /// ⚠️ 兜底那次调用也有超时保护：它跑在**事件接收路径**上，不能像 B00001 的老版本那样卡满 30 秒。
     /// </para>
     /// </remarks>
-    async Task<byte[]?> IAudioSource.GetWavAsync(string? fileId, string? filePath, CancellationToken ct)
+    async Task<AudioBytes?> IAudioSource.GetAudioAsync(
+        string? fileId, string? filePath, CancellationToken ct)
     {
+        // ① 本地原始文件（silk）：秒级、不依赖任何索引
+        if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
+        {
+            try
+            {
+                var bytes = await File.ReadAllBytesAsync(filePath, ct).ConfigureAwait(false);
+                if (bytes.Length > 0)
+                {
+                    return new AudioBytes(bytes, Path.GetExtension(filePath).TrimStart('.'));
+                }
+            }
+            catch (IOException ex)
+            {
+                _logger.Warning(ex, "读语音本地文件失败：{Path}", filePath);
+            }
+        }
+
+        // ② 兜底：NapCat 侧转 WAV
         if (string.IsNullOrWhiteSpace(fileId))
         {
             return null;
@@ -628,18 +649,18 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
             ["out_format"] = "wav",
         };
 
-        // 只做**一次**：重试策略在上层（AsrSpeechTranscriber），这样它能被单测，
-        // 而不是埋在通道里只能靠真机碰运气。
         var wav = await TryGetWavOnceAsync(parameters, fileId, ct).ConfigureAwait(false);
         if (wav is null)
         {
-            _logger.Warning("get_record 没给出可用的音频（file={File}，path={Path}）", fileId, filePath);
+            _logger.Warning(
+                "语音既读不到本地文件也取不到 WAV（file={File}，path={Path}）", fileId, filePath);
+            return null;
         }
 
-        return wav;
+        return new AudioBytes(wav, "wav");
     }
 
-    /// <summary>取一次 WAV：成功返回字节，超时 / 失败返回 <c>null</c>。</summary>
+    /// <summary>取一次 WAV（NapCat 侧转码）：成功返回字节，超时 / 失败返回 <c>null</c>。</summary>
     private async Task<byte[]?> TryGetWavOnceAsync(
         JsonObject parameters, string fileId, CancellationToken ct)
     {

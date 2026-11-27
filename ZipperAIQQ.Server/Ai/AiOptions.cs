@@ -47,4 +47,20 @@ public sealed record AiOptions
     /// 把整个 PDF / 长音频一次塞进来既费钱又费内存，先卡住，需要时再调配置。
     /// </remarks>
     public int MaxUploadBytes { get; init; } = 20 * 1024 * 1024;
+
+    /// <summary>
+    /// SILK 解码脚本（默认 <c>tools/silk-decode/decode.mjs</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 2026-11-28 实测后加的：NapCat 的 <c>get_record</c> 要等 QQ 的消息索引
+    /// （语音刚到达的 1~2 分钟内查不到），而 OneBot 给的本地 silk 文件是即时可用的 ——
+    /// 所以自己解。脚本依赖的 <c>silk-wasm</c> 已 vendored 进仓库，部署时不用 npm。
+    /// </remarks>
+    public string SilkDecodeScript { get; init; } = "tools/silk-decode/decode.mjs";
+
+    /// <summary>Node 可执行文件（默认 <c>node</c>，走 PATH；服务器上 sidecar 就在用它）。</summary>
+    public string NodePath { get; init; } = "node";
+
+    /// <summary>解码用的临时目录（默认 <c>./data/asr-tmp</c>，已 gitignore）。</summary>
+    public string AsrTempDir { get; init; } = "./data/asr-tmp";
 }

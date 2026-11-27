@@ -227,6 +227,9 @@ public static class ServerConfigLoader
                 TtsOutputDir = s.Str("ai", "ttsOutputDir", o.Ai.TtsOutputDir)!,
                 TimeoutSeconds = s.Int("ai", "timeoutSeconds", o.Ai.TimeoutSeconds),
                 MaxUploadBytes = s.Int("ai", "maxUploadBytes", o.Ai.MaxUploadBytes),
+                SilkDecodeScript = s.Str("ai", "silkDecodeScript", o.Ai.SilkDecodeScript)!,
+                NodePath = s.Str("ai", "nodePath", o.Ai.NodePath)!,
+                AsrTempDir = s.Str("ai", "asrTempDir", o.Ai.AsrTempDir)!,
             },
 
             // ── limits ──

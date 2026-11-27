@@ -102,7 +102,14 @@ public static partial class ServiceRegistration
             var media = sp.GetService<ZipperAIQQ.Agent.Media.IDeepSeekMediaClient>();
             if (media is not null)
             {
-                var asr = new AsrSpeechTranscriber(options.Ai, media, channel, speech, logger);
+                // silk 解码走外置 Node（silk-wasm 已 vendored 进仓库，部署时不用 npm）
+                var asr = new AsrSpeechTranscriber(
+                    options.Ai,
+                    media,
+                    channel,
+                    new NodeSilkDecoder(options.Ai, logger),
+                    speech,
+                    logger);
 
                 channel.UseSpeechTranscriber(
                     new FallbackSpeechTranscriber(channel.SpeechTranscriber, asr, logger));

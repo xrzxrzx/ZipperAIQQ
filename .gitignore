@@ -77,3 +77,4 @@ logs/
 
 # 本地临时产物（AI 取证/PoC，不入库）
 tmp/
+/data/asr-tmp/

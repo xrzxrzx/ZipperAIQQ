@@ -32,6 +32,7 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
     private readonly AiOptions _options;
     private readonly IDeepSeekMediaClient _media;
     private readonly IAudioSource _source;
+    private readonly ISilkDecoder _decoder;
     private readonly SpeechOptions _speech;
     private readonly ILogger _logger;
 
@@ -39,18 +40,21 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
         AiOptions options,
         IDeepSeekMediaClient media,
         IAudioSource source,
+        ISilkDecoder decoder,
         SpeechOptions speech,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(media);
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(decoder);
         ArgumentNullException.ThrowIfNull(speech);
         ArgumentNullException.ThrowIfNull(logger);
 
         _options = options;
         _media = media;
         _source = source;
+        _decoder = decoder;
         _speech = speech;
         _logger = logger;
     }
@@ -113,13 +117,18 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
     }
 
     /// <summary>
-    /// 取音频（带重试）。
+    /// 取音频并转成 WAV（带重试）。
     /// </summary>
     /// <remarks>
-    /// ⚠️ 重试是**必需**的，不是保守（2026-11-28 实测）：语音**刚到达**时 NapCat 的
-    /// <c>get_record</c> 会一直等到超时（它按文件名去 QQ 的媒体索引里搜，索引还没建好），
-    /// 而一两秒后同一个请求只要 **28 ms** 就拿到 WAV。
-    /// 不重试的话「越新的语音越转不出来」—— 正是用户报的「发了语音没反应」。
+    /// <para>
+    /// 2026-11-28 实测后的结论：**本地 silk 文件是唯一"消息一到达就可用"的原料**
+    /// （<see cref="IAudioSource"/> 本地优先），解码交给 <see cref="ISilkDecoder"/>；
+    /// <c>get_record</c> 只是兜底，它要等 QQ 的消息索引（刚到的 1~2 分钟内查不到）。
+    /// </para>
+    /// <para>
+    /// 重试仍然保留：兜底那条路会因索引延迟而失败，一两秒后再试往往就通了。
+    /// 但**解码失败不重试** —— 同样的字节再解一次还是解不开。
+    /// </para>
     /// </remarks>
     private async Task<byte[]?> FetchWavAsync(AudioClip clip, CancellationToken ct)
     {
@@ -127,13 +136,28 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
 
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
-            var wav = await _source
-                .GetWavAsync(clip.FileId, clip.FilePath, ct)
+            var audio = await _source
+                .GetAudioAsync(clip.FileId, clip.FilePath, ct)
                 .ConfigureAwait(false);
 
-            if (wav is { Length: > 0 })
+            if (audio is { Bytes.Length: > 0 })
             {
-                return wav;
+                if (IsWav(audio.Bytes))
+                {
+                    return audio.Bytes;
+                }
+
+                var wav = await _decoder.ToWavAsync(audio.Bytes, ct).ConfigureAwait(false);
+                if (wav is { Length: > 44 })
+                {
+                    _logger.Information(
+                        "语音已解码（silk {Silk} 字节 → WAV {Wav} 字节，file={File}）",
+                        audio.Bytes.Length, wav.Length, clip.FileId);
+                    return wav;
+                }
+
+                _logger.Warning("语音解码失败（{Bytes} 字节，file={File}）", audio.Bytes.Length, clip.FileId);
+                return null;
             }
 
             if (attempt >= attempts)
@@ -156,4 +180,10 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
 
         return null;
     }
+
+    /// <summary>是不是已经是 WAV（看魔数，不信扩展名）。</summary>
+    private static bool IsWav(byte[] bytes) =>
+        bytes.Length > 44 &&
+        bytes[0] == (byte)'R' && bytes[1] == (byte)'I' && bytes[2] == (byte)'F' && bytes[3] == (byte)'F' &&
+        bytes[8] == (byte)'W' && bytes[9] == (byte)'A' && bytes[10] == (byte)'V' && bytes[11] == (byte)'E';
 }
