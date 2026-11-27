@@ -60,6 +60,21 @@ public sealed partial class PersonaViewModel : ObservableObject
     partial void OnSelectedSessionChanged(string value)
     {
         _ = LoadPersonaAsync();
+
+        // 会话覆盖是「这个会话单独一档」，换会话必须重新读 —— 否则界面上显示的会是上一个会话的档位
+        _ = RefreshExpressOnSessionChangeAsync();
+    }
+
+    private async Task RefreshExpressOnSessionChangeAsync()
+    {
+        try
+        {
+            await RefreshExpressAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ExpressMessage = $"读取档位失败：{ex.Message}";
+        }
     }
 
     [RelayCommand]
@@ -99,6 +114,7 @@ public sealed partial class PersonaViewModel : ObservableObject
             }
 
             await LoadPersonaAsync().ConfigureAwait(true);
+            await LoadExpressAsync().ConfigureAwait(true);
 
             var prompt = await _api.CallAsync<SystemPromptDto>("getSystemPrompt").ConfigureAwait(true);
             SystemPrompt = prompt?.Text ?? string.Empty;
@@ -247,6 +263,265 @@ public sealed partial class PersonaViewModel : ObservableObject
         catch (Exception ex)
         {
             PromptStatus = $"恢复失败：{ex.Message}";
+        }
+    }
+
+    // ══════════════ 表达档位（B6 / 表达档位设计 §9）══════════════
+    //
+    // 为什么放在人设页：档位改的是「她说话怎么放得开」，与人设 / 系统提示词是同一类东西 ——
+    // 三处口径分在三个页面里，改了人设忘了改档位是最常见的漂移。
+
+    /// <summary>三档的中文标签（顺序 = 由收 to 放）。</summary>
+    public ObservableCollection<string> ExpressLevelOptions { get; } = ["日常", "亲近", "露骨"];
+
+    /// <summary>标签 → 键值。</summary>
+    /// <remarks>
+    /// 客户端只在这一处做映射，且**保存后一律用服务端回显的标签纠正界面**：
+    /// 哪天服务端改了档位名字，这里最多失效一次提示，不会出现"选了没生效还以为生效了"。
+    /// </remarks>
+    private static readonly Dictionary<string, string> ExpressLabelToKey = new(StringComparer.Ordinal)
+    {
+        ["日常"] = "daily",
+        ["亲近"] = "close",
+        ["露骨"] = "explicit",
+    };
+
+    [ObservableProperty]
+    public partial string SelectedExpressLevel { get; set; } = "日常";
+
+    [ObservableProperty]
+    public partial string SelectedGroupCap { get; set; } = "露骨";
+
+    [ObservableProperty]
+    public partial string SelectedSessionLevel { get; set; } = "日常";
+
+    /// <summary>当前选中会话是否已有自己的档位覆盖。</summary>
+    [ObservableProperty]
+    public partial bool HasSessionExpress { get; set; }
+
+    [ObservableProperty]
+    public partial string ExpressRules { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string ExpressStatusLine { get; set; } = "尚未读取";
+
+    [ObservableProperty]
+    public partial string ExpressMessage { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial bool ExpressHygieneEnabled { get; set; } = true;
+
+    [ObservableProperty]
+    public partial bool ExpressHygieneRegenerate { get; set; } = true;
+
+    public ObservableCollection<ExpressSnapshotDto> ExpressSnapshots { get; } = [];
+
+    [ObservableProperty]
+    public partial ExpressSnapshotDto? SelectedExpressSnapshot { get; set; }
+
+    [RelayCommand]
+    private async Task LoadExpressAsync()
+    {
+        try
+        {
+            await RefreshExpressAsync().ConfigureAwait(true);
+            ExpressMessage = "已读取";
+        }
+        catch (Exception ex)
+        {
+            ExpressMessage = $"读取档位失败：{ex.Message}";
+        }
+    }
+
+    private async Task RefreshExpressAsync()
+    {
+        var sessionId = CurrentSessionId();
+        var status = await _api
+            .CallAsync<ExpressStatusDto>("getExpressStatus", new { sessionId })
+            .ConfigureAwait(true);
+
+        if (status is null)
+        {
+            ExpressStatusLine = "服务端没有返回档位状态";
+            return;
+        }
+
+        ApplyExpressStatus(status);
+    }
+
+    /// <summary>把服务端状态贴上界面（**不自己猜**，全部照抄回显）。</summary>
+    private void ApplyExpressStatus(ExpressStatusDto status)
+    {
+        SelectedExpressLevel = string.IsNullOrWhiteSpace(status.LevelLabel) ? "日常" : status.LevelLabel;
+        SelectedGroupCap = string.IsNullOrWhiteSpace(status.GroupCapLabel) ? "露骨" : status.GroupCapLabel;
+        ExpressHygieneEnabled = status.Hygiene.Enabled;
+        ExpressHygieneRegenerate = status.Hygiene.Regenerate;
+        ExpressRules = status.PromptExpress.Text;
+
+        var sessionId = CurrentSessionId();
+        var sessionOverride = sessionId is null
+            ? null
+            : status.SessionOverrides.FirstOrDefault(o => o.SessionId == sessionId);
+
+        HasSessionExpress = sessionOverride is not null;
+        SelectedSessionLevel = sessionOverride?.LevelLabel ?? SelectedExpressLevel;
+
+        var changedAt = status.LastChangedAt > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(status.LastChangedAt).ToLocalTime().ToString("MM-dd HH:mm")
+            : "从未改动";
+
+        ExpressStatusLine =
+            $"当前档：{status.LevelLabel}（来源：{(status.Source == "session" ? "本会话" : "全局")}）" +
+            $"｜群聊上限：{status.GroupCapLabel}" +
+            $"｜卫生命中 {status.Hygiene.Hits} 次（重说 {status.Hygiene.Regenerated} 次）" +
+            $"｜上次改动 {changedAt}";
+
+        ExpressSnapshots.Clear();
+        foreach (var snapshot in status.Snapshots)
+        {
+            ExpressSnapshots.Add(snapshot);
+        }
+
+        SelectedExpressSnapshot ??= ExpressSnapshots.FirstOrDefault();
+    }
+
+    /// <summary>当前选中会话的完整 ID；选中「全局」时为 <c>null</c>。</summary>
+    private string? CurrentSessionId() =>
+        SelectedSession == GlobalLabel ? null : _displayToSession.GetValueOrDefault(SelectedSession);
+
+    [RelayCommand]
+    private async Task SetExpressLevelAsync(string? label)
+    {
+        if (string.IsNullOrWhiteSpace(label) || !ExpressLabelToKey.TryGetValue(label, out var key))
+        {
+            ExpressMessage = $"认不出的档位：{label}";
+            return;
+        }
+
+        await SaveExpressAsync(new { level = key }, $"全局档已改为{label}").ConfigureAwait(true);
+    }
+
+    [RelayCommand]
+    private async Task SetGroupCapAsync(string? label)
+    {
+        if (string.IsNullOrWhiteSpace(label) || !ExpressLabelToKey.TryGetValue(label, out var key))
+        {
+            ExpressMessage = $"认不出的档位：{label}";
+            return;
+        }
+
+        await SaveExpressAsync(new { groupCap = key }, $"群聊上限已改为{label}").ConfigureAwait(true);
+    }
+
+    [RelayCommand]
+    private async Task SetSessionLevelAsync(string? label)
+    {
+        var sessionId = CurrentSessionId();
+        if (sessionId is null)
+        {
+            ExpressMessage = "先在上面选一个具体会话，再设它的档位（「全局」没有覆盖一说）。";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(label) || !ExpressLabelToKey.TryGetValue(label, out var key))
+        {
+            ExpressMessage = $"认不出的档位：{label}";
+            return;
+        }
+
+        await SaveExpressAsync(
+            new { sessionId, sessionLevel = key }, $"本会话档位已设为{label}").ConfigureAwait(true);
+    }
+
+    [RelayCommand]
+    private async Task ClearSessionLevelAsync()
+    {
+        var sessionId = CurrentSessionId();
+        if (sessionId is null)
+        {
+            ExpressMessage = "「全局」没有会话覆盖可清除。";
+            return;
+        }
+
+        // 只给 sessionId、不给 sessionLevel = 显式删除这条覆盖
+        await SaveExpressAsync(new { sessionId }, "已清除本会话的档位覆盖").ConfigureAwait(true);
+    }
+
+    [RelayCommand]
+    private async Task SaveExpressRulesAsync()
+    {
+        await SaveExpressAsync(
+            new { promptExpress = ExpressRules },
+            string.IsNullOrWhiteSpace(ExpressRules) ? "规则段已恢复默认" : "规则段已保存").ConfigureAwait(true);
+    }
+
+    [RelayCommand]
+    private async Task ResetExpressRulesAsync()
+    {
+        ExpressRules = string.Empty;
+        await SaveExpressAsync(new { promptExpress = string.Empty }, "规则段已恢复默认").ConfigureAwait(true);
+    }
+
+    [RelayCommand]
+    private async Task SaveExpressHygieneAsync()
+    {
+        await SaveExpressAsync(
+            new { hygieneEnabled = ExpressHygieneEnabled, hygieneRegenerate = ExpressHygieneRegenerate },
+            "免拒绝校准设置已保存").ConfigureAwait(true);
+    }
+
+    [RelayCommand]
+    private async Task RollbackExpressAsync()
+    {
+        if (SelectedExpressSnapshot is null)
+        {
+            ExpressMessage = "先选一个回滚点。";
+            return;
+        }
+
+        try
+        {
+            var result = await _api
+                .CallAsync<ExpressStatusDto>("rollbackExpress", new { id = SelectedExpressSnapshot.Id })
+                .ConfigureAwait(true);
+
+            if (result is null)
+            {
+                ExpressMessage = "回滚没有返回结果";
+                return;
+            }
+
+            ExpressMessage = $"已回滚到 #{SelectedExpressSnapshot.Id}（{result.LevelLabel}）";
+            await RefreshExpressAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ExpressMessage = $"回滚失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>保存档位（统一入口）：**回显服务端返回值**，不在客户端猜结果。</summary>
+    private async Task SaveExpressAsync(object payload, string successMessage)
+    {
+        try
+        {
+            var result = await _api.CallAsync<ExpressStatusDto>("setExpressLevel", payload).ConfigureAwait(true);
+
+            if (result is null)
+            {
+                ExpressMessage = "保存没有返回结果（服务端可能未实现该接口）";
+                return;
+            }
+
+            ExpressMessage = result.Skipped ? "无变化（本来就是这个值）" : successMessage;
+            ApplyExpressStatus(result);
+
+            // 改完刷新一次：会话覆盖列表与回滚点都要重新拉（set 的响应里没有 snapshots）
+            await RefreshExpressAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ExpressMessage = $"保存失败：{ex.Message}";
         }
     }
 }

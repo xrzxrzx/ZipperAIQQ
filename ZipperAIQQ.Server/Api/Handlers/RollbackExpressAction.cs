@@ -104,6 +104,7 @@ public sealed class RollbackExpressAction : IApiAction
             {
                 customized = next.CustomRules is not null,
                 length = next.CustomRules?.Length ?? 0,
+                text = next.CustomRules ?? string.Empty,
             },
         };
     }

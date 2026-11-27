@@ -94,6 +94,98 @@
                     </StackPanel>
                 </StackPanel>
             </Border>
+
+            <!-- 表达档位（B6）：说话放开到什么程度 + 免拒绝校准 + 回滚点 -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="表达档位" Style="{StaticResource SectionHeaderStyle}" />
+                    <TextBlock Text="档位管「放开到什么程度」，不管「能不能说实话」：事实准确性、工具权限与档位无关。改完立刻生效。"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                    <TextBlock Text="{x:Bind Vm.ExpressStatusLine, Mode=OneWay}"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <TextBlock Text="全局档" VerticalAlignment="Center" Width="120" />
+                        <Button Content="日常" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.SetExpressLevelCommand}" CommandParameter="日常" />
+                        <Button Content="亲近" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.SetExpressLevelCommand}" CommandParameter="亲近" />
+                        <Button Content="露骨" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.SetExpressLevelCommand}" CommandParameter="露骨" />
+                        <TextBlock Text="{x:Bind Vm.SelectedExpressLevel, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <TextBlock Text="群聊上限" VerticalAlignment="Center" Width="120" />
+                        <Button Content="日常" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.SetGroupCapCommand}" CommandParameter="日常" />
+                        <Button Content="亲近" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.SetGroupCapCommand}" CommandParameter="亲近" />
+                        <Button Content="露骨" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.SetGroupCapCommand}" CommandParameter="露骨" />
+                        <TextBlock Text="{x:Bind Vm.SelectedGroupCap, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                        <TextBlock Text="（只收紧不放宽）" Style="{StaticResource CaptionStyle}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <TextBlock Text="本会话档位" VerticalAlignment="Center" Width="120" />
+                        <Button Content="日常" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.SetSessionLevelCommand}" CommandParameter="日常" />
+                        <Button Content="亲近" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.SetSessionLevelCommand}" CommandParameter="亲近" />
+                        <Button Content="露骨" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.SetSessionLevelCommand}" CommandParameter="露骨" />
+                        <Button Content="清除覆盖" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.ClearSessionLevelCommand}" />
+                        <TextBlock Text="{x:Bind Vm.SelectedSessionLevel, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <TextBlock Text="规则段（留空 = 用内置默认；这段会替换内置的三档规则）"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                    <TextBox Text="{x:Bind Vm.ExpressRules, Mode=TwoWay}"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             MinHeight="140"
+                             FontFamily="Consolas"
+                             FontSize="12" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button Content="保存规则段" Style="{StaticResource JpAccentButtonStyle}"
+                                Command="{x:Bind Vm.SaveExpressRulesCommand}" />
+                        <Button Content="恢复默认规则段" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.ResetExpressRulesCommand}" />
+                        <ToggleSwitch Header="免拒绝校准" OnContent="开" OffContent="关"
+                                      IsOn="{x:Bind Vm.ExpressHygieneEnabled, Mode=TwoWay}" />
+                        <ToggleSwitch Header="命中后重说一遍" OnContent="开" OffContent="关"
+                                      IsOn="{x:Bind Vm.ExpressHygieneRegenerate, Mode=TwoWay}" />
+                        <Button Content="保存校准设置" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.SaveExpressHygieneCommand}" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <ComboBox Width="360"
+                                  PlaceholderText="选一个回滚点"
+                                  ItemsSource="{x:Bind Vm.ExpressSnapshots}"
+                                  SelectedItem="{x:Bind Vm.SelectedExpressSnapshot, Mode=TwoWay}"
+                                  DisplayMemberPath="Display" />
+                        <Button Content="回滚到这份" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.RollbackExpressCommand}" />
+                        <Button Content="刷新" Style="{StaticResource JpButtonStyle}"
+                                Command="{x:Bind Vm.LoadExpressCommand}" />
+                        <TextBlock Text="{x:Bind Vm.ExpressMessage, Mode=OneWay}"
+                                   Style="{StaticResource CaptionStyle}" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <TextBlock Text="回滚会先校验快照校验和：不一致（库被手改过）直接拒绝，不会半途改。回滚本身也会留一份快照。"
+                               Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </Page>

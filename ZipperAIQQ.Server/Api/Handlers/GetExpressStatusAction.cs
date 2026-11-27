@@ -78,6 +78,10 @@ public sealed class GetExpressStatusAction : IApiAction
             {
                 customized = current.CustomRules is not null,
                 length = current.CustomRules?.Length ?? 0,
+
+                // 全文回给客户端：不给正文，界面上那个「规则段」输入框就没法编辑
+                // （规则段是提示词文本，不是会话内容 —— 与「不回显密钥 / 不含会话正文」不冲突）
+                text = current.CustomRules ?? string.Empty,
             },
             snapshots = snapshots
                 .Select(s => new { id = s.Id, atMs = s.AtMs, actor = s.Actor })
