@@ -1,131 +1,228 @@
 ﻿<#
 .SYNOPSIS
-    抖音 **浏览器底座** sidecar（douyin-web-sidecar）管理脚本模板。
+    抖音 **浏览器底座** sidecar 专用管理脚本（模板）。**只管抖音侧**。
 
 .DESCRIPTION
-    旧底座（`douyin-sidecar` / `douyin-im`）已于 2026-11-21 从仓库移除 —— 本脚本是**唯一**的抖音 sidecar 部署入口。
-    两个 sidecar 都往同一个 `/ws/channel` 反连，**由服务端 `douyin.driver` 决定收哪一个**。
+    与 `deploy-server.local.ps1`（全量）的分工：
+      - 本脚本：只碰 `douyin-web-sidecar` 与计划任务 `ZipperAIQQ-DouyinWeb`，
+        改 sidecar 代码时不必重启服务端本体；
+      - 全量脚本：编排「本体 + 抖音侧」，内部就是调本脚本和 `deploy-body.local.ps1`。
 
-    ⚠️ 本文件是**模板**（占位符 `<server-ip-redacted>` 等要换成真值，或用参数覆盖）。
-    复制成 `douyin-web-sidecar-deploy.local.ps1` 再改，那个文件名已被 .gitignore 排除。
+    部署动作（deploy）= 同步源码 → 远端 npm install → 远端 tsc 编译，**不覆盖**运行态文件：
+      config.json（profile 目录等）、data/（登录态）、sidecar.log、run-web-sidecar.cmd（含 token）。
+      覆盖它们等于要求重新扫码，所以刻意不同步。
 
 .PARAMETER Action
-    status（默认）| install | build | start | stop | restart | logs | login-check
+    status（默认）| deploy | install | build | start | stop | restart | logs | login-check
 
-.PARAMETER Mode
-    remote（默认，管服务器）| local（本机开发调试）
+.PARAMETER Install
+    为 `deploy` 追加 `npx playwright install chromium`（约 400 MB，只在换机 / 升 Playwright 时需要）。
+
+.PARAMETER Token
+    Sidecar Token；**不给就沿用服务器 launcher 里已有的那个**（避免覆盖成空 → 401）。
 
 .EXAMPLE
-    .\douyin-web-sidecar-deploy.local.ps1                       # 看服务器上的状态
-    .\douyin-web-sidecar-deploy.local.ps1 -Action install        # 服务器上装依赖 + Chromium
-    .\douyin-web-sidecar-deploy.local.ps1 -Action start -Token <token>
-    .\douyin-web-sidecar-deploy.local.ps1 -Action logs
+    .\douyin-web-sidecar-deploy.local.ps1                 # 看状态
+    .\douyin-web-sidecar-deploy.local.ps1 -Action deploy  # 同步源码 + 编译（不重启）
+    .\douyin-web-sidecar-deploy.local.ps1 -Action restart # 重启 sidecar
+    .\douyin-web-sidecar-deploy.local.ps1 -Action logs    # 跟日志
 
 .NOTES
-    编码：本文件必须存为 **UTF-8 带 BOM**（Windows PowerShell 5.1 才认中文）。
-    计划任务身份：SYSTEM / onstart（**没有交互桌面 → 只能 headless**，见实施方案 §C.6）。
+    编码：本文件（及复制出的 .local 版）必须存为 **UTF-8 带 BOM**（Windows PowerShell 5.1 才认中文）。
+    计划任务身份：SYSTEM / onstart（没有交互桌面 → 只能 headless）。
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('status', 'install', 'build', 'start', 'stop', 'restart', 'logs', 'login-check')]
+    [ValidateSet('status', 'deploy', 'install', 'build', 'start', 'stop', 'restart', 'logs', 'login-check')]
     [string]$Action = 'status',
 
-    [ValidateSet('remote', 'local')]
-    [string]$Mode = 'remote',
-
     [string]$Server = '<server-ip-redacted>',
-    [string]$SshUser = 'Administrator',
-    [string]$TargetPath = 'D:\App\ZipperAIQQ',
+    [string]$SshUser = '<ssh-user>',
+    [string]$TargetPath = 'D:\App\<project-root>',
     [string]$TaskName = 'ZipperAIQQ-DouyinWeb',
-    [string]$Token,
-    [string]$LogLevel = 'info'
+    [string]$Token = '',
+    [switch]$Install,
+    [switch]$SkipBuild,
+    [string]$LogLevel = 'info',
+
+    # Playwright 浏览器目录。默认放在**项目目录内**（<TargetPath>\.playwright）：
+    # SYSTEM 与 Administrator 的家目录不同，装到各自的 AppData 里互相看不见
+    # （实测：以 Administrator 装完，SYSTEM 任务仍报 Executable doesn't exist）。
+    [string]$BrowsersPath
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($Server -like '<*') { throw '还没填服务器地址：复制成 .local.ps1 并改 -Server（或用参数传）' }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $sidecarDir = Join-Path $repoRoot 'douyin-web-sidecar'
 $remote = "$SshUser@$Server"
 $remoteSidecar = "$TargetPath\douyin-web-sidecar"
 
+if ([string]::IsNullOrWhiteSpace($BrowsersPath)) {
+    $BrowsersPath = "$TargetPath\.playwright"
+}
+
 function Step([string]$t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 function Ok([string]$t) { Write-Host "  OK  $t" -ForegroundColor Green }
 function Warn([string]$t) { Write-Host "  !!  $t" -ForegroundColor Yellow }
 
-function Assert-Remote {
-    if ($Server -eq '<server-ip-redacted>') {
-        throw '还没填服务器地址：复制成 douyin-web-sidecar-deploy.local.ps1 并改 -Server（或用参数传）'
-    }
-}
-
-function Assert-LocalNode {
-    $v = try { & node -v } catch { $null }
-    if (-not $v) { throw '本机没有 node；先装 Node.js ≥ 22.5' }
-    $major = [int](($v.TrimStart('v') -split '\.')[0])
-    if ($major -lt 22) { throw "Node 版本过低：$v（需要 ≥ 22.5）" }
-    Ok "node $v"
-}
-
+<#
+    远端执行：stderr 不许变成终止错误。
+    PS 5.1 在 $ErrorActionPreference='Stop' 下会把原生 stderr 当 NativeCommandError 抛，
+    哪怕远端 exit code 是 0（备份"看似失败"就是这么来的）。
+#>
 function Invoke-Remote([string]$script) {
-    & ssh -o BatchMode=yes $remote "powershell -NoProfile -Command `"$script`""
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & ssh -o BatchMode=yes -o ConnectTimeout=10 $remote $script 2>&1
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+
+    $text = ($out | Out-String).Trim()
+    if ($code -ne 0) { throw "远端命令失败（exit $code）：$script`n$text" }
+    return $text
 }
 
-# ─────────────────────────── remote ───────────────────────────
+# ⚠️ 进程判据用命令行里的 `dist\main.js`：launcher 是 `node dist\main.js`，
+#    命令行里**不含目录名** —— 早先用 `*douyin-web-sidecar*` 永远数出 0（实测踩过）。
+$sidecarProcessFilter = "Name='node.exe'"
 
 function Remote-Status {
-    Assert-Remote
-    Step "服务器状态（$remote）"
+    Step "sidecar 状态（$Server）"
     $out = Invoke-Remote @"
 Write-Host ('task=' + ((schtasks /query /tn $TaskName /fo list 2>&1 | Select-String 'Status|状态') -join ' '));
-Write-Host ('procs=' + ((Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { `$_.CommandLine -like '*douyin-web-sidecar*' } | Measure-Object).Count));
+Write-Host ('procs=' + ((Get-CimInstance Win32_Process -Filter "$sidecarProcessFilter" | Where-Object { `$_.CommandLine -like '*dist*main.js*' } | Measure-Object).Count));
 if (Test-Path '$remoteSidecar\sidecar.log') { Get-Content '$remoteSidecar\sidecar.log' -Encoding UTF8 -Tail 6 }
 "@
     Write-Host $out
-    if ($out -match 'procs=0') { Warn 'sidecar 进程数为 0 —— 用 -Action start 起来，或看日志' }
     if ($out -match 'procs=[1-9]') { Ok 'sidecar 在运行' }
+    else { Warn 'sidecar 进程数为 0 —— 用 -Action start 起来，或看日志' }
+    if ($out -match '已连上 Server') { Ok '已连上服务端' }
+    if ($out -match '抖音已上线|已登录') { Ok '抖音已登录' }
+}
+
+function Remote-Deploy {
+    Step '同步源码（src / package.json / tsconfig）'
+    if (-not (Test-Path $sidecarDir)) { throw "找不到 sidecar 目录：$sidecarDir" }
+
+    $null = Invoke-Remote "New-Item -ItemType Directory -Force -Path '$remoteSidecar\src' | Out-Null; 'ok'"
+
+    & scp -r -q -o BatchMode=yes "$sidecarDir/src" "${remote}:$remoteSidecar/"
+    if ($LASTEXITCODE -ne 0) { throw 'sidecar src 上传失败' }
+
+    foreach ($f in @('package.json', 'tsconfig.json', 'README.md')) {
+        $local = Join-Path $sidecarDir $f
+        if (Test-Path $local) {
+            & scp -q -o BatchMode=yes $local "${remote}:$remoteSidecar/$f"
+            if ($LASTEXITCODE -ne 0) { throw "sidecar $f 上传失败" }
+        }
+    }
+
+    Ok '源码已传（config.json / data / launcher 保持原样）'
+
+    Remote-Install
 }
 
 function Remote-Install {
-    Assert-Remote
-    Step '安装依赖（服务器）'
-    Warn '这一步会下载 Playwright 自带的 Chromium（约 400 MB），并落盘到服务器 —— 需要你明确同意'
+    Step '远端装依赖'
+    $extra = if ($Install) { 'npx playwright install chromium 2>&1 | Select-Object -Last 3;' } else { '' }
     $out = Invoke-Remote @"
+`$env:Path = 'C:\Program Files\nodejs;' + `$env:Path;
 Set-Location '$remoteSidecar';
-npm install --no-audit --no-fund 2>&1 | Select-Object -Last 5;
-npx playwright install chromium 2>&1 | Select-Object -Last 5;
+npm install --no-audit --no-fund 2>&1 | Select-Object -Last 3;
+$extra
 Write-Host ('nodeModules=' + (Test-Path '$remoteSidecar\node_modules'))
 "@
     Write-Host $out
     if ($out -notmatch 'nodeModules=True') { throw '依赖没装上：看上面的输出' }
-    Ok '依赖已装'
+    Ok '依赖就绪'
+
+    if (-not $SkipBuild) { Remote-Build }
+
+    Ensure-Chromium
+}
+
+<#
+    Playwright 浏览器自愈（2026-11-28 实测踩到）。
+
+    `npm install` 会把 Playwright 升到新版本，而**对应版本的 Chromium 不会自动下载** ——
+    表现是 sidecar 进程起得来、也连上了 Server，但日志里
+    `浏览器启动失败：Executable doesn't exist at ...ms-playwright\chromium_headless_shell-1194\...`，
+    抖音通道实际是死的。不主动补这一句，就会「部署显示成功、抖音悄悄坏掉」。
+#>
+function Ensure-Chromium {
+    $probe = Invoke-Remote @"
+`$log = '$remoteSidecar\sidecar.log';
+if (Test-Path `$log) {
+  `$lines = Get-Content `$log -Encoding UTF8 -Tail 300;
+  `$lastFail = (`$lines | Select-String "Executable doesn't exist|浏览器启动失败" | Select-Object -Last 1).LineNumber;
+  `$lastOk = (`$lines | Select-String '抖音已登录|浏览器已就绪|已旁听入站' | Select-Object -Last 1).LineNumber;
+  # 只有「最后一次失败晚于最后一次成功」才算真的缺浏览器；
+  # 否则历史失败会把每次部署都误判成要重装（日志是追加的，旧记录一直在）
+  `$need = (`$lastFail -ne `$null) -and ((`$lastOk -eq `$null) -or (`$lastFail -gt `$lastOk));
+  Write-Host ('needBrowser=' + `$need);
+}
+"@
+    Write-Host $probe
+
+    if ($probe -match 'needBrowser=False') {
+        Ok 'Chromium 与 Playwright 版本匹配'
+        return
+    }
+
+    Warn 'Playwright 找不到对应版本的 Chromium —— 正在补装（约 150~400 MB，只在版本变化时需要）'
+    $out = Invoke-Remote @"
+`$env:Path = 'C:\Program Files\nodejs;' + `$env:Path;
+`$env:PLAYWRIGHT_BROWSERS_PATH = '$BrowsersPath';
+Set-Location '$remoteSidecar';
+npx playwright install chromium 2>&1 | Select-Object -Last 5;
+Write-Host ('installExit=' + `$LASTEXITCODE);
+Write-Host ('browsersPath=' + `$env:PLAYWRIGHT_BROWSERS_PATH)
+"@
+    Write-Host $out
+
+    if ($out -notmatch 'installExit=0') {
+        Warn 'Chromium 补装失败：抖音通道会起不来（sidecar 进程在，但浏览器启动报 Executable doesn''t exist）'
+        return
+    }
+
+    Ok 'Chromium 已补装（记得 restart sidecar 才生效）'
 }
 
 function Remote-Build {
-    Assert-Remote
-    Step '编译（服务器）'
+    Step '远端编译（tsc）'
     $out = Invoke-Remote @"
+`$env:Path = 'C:\Program Files\nodejs;' + `$env:Path;
 Set-Location '$remoteSidecar';
 npm run build 2>&1 | Select-Object -Last 8;
+Write-Host ('buildExit=' + `$LASTEXITCODE);
 Write-Host ('dist=' + (Test-Path '$remoteSidecar\dist\main.js'))
 "@
     Write-Host $out
-    if ($out -notmatch 'dist=True') { throw '编译失败：看上面的输出' }
-    Ok '编译完成'
+    if ($out -notmatch 'buildExit=0') { throw '编译失败：看上面的 tsc 输出' }
+    if ($out -notmatch 'dist=True') { throw '编译产物缺失（dist/main.js）' }
+    Ok '编译通过'
 }
 
 function Remote-WriteLauncher {
-    # 启动器里只有环境变量与命令行；token 明文只存在该机器的本地文件里（不进仓库 / 不进日志）
+    # token 明文只存在该机器的本地 launcher 里（不进仓库 / 不进日志）
     $tokenLine = if ($Token) { "set ZIPPER_DOUYIN_WEB_TOKEN=$Token" } else { 'rem 未配置 token（loopback 免验）' }
     $content = @"
 @echo off
 cd /d $remoteSidecar
 $tokenLine
 set ZIPPER_DOUYIN_WEB_LOG_LEVEL=$LogLevel
+set PLAYWRIGHT_BROWSERS_PATH=$BrowsersPath
 node dist\main.js >> sidecar.log 2>&1
 "@
 
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($content)
-    $b64 = [Convert]::ToBase64String($bytes)
+    $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($content))
     Invoke-Remote @"
 [IO.File]::WriteAllBytes('$remoteSidecar\run-web-sidecar.cmd', [Convert]::FromBase64String('$b64'))
 Write-Host 'launcher=written'
@@ -134,49 +231,66 @@ Write-Host 'launcher=written'
     if ($Token) { Ok "启动器已写（token 长度 $($Token.Length)，不回显）" } else { Warn '启动器已写（未带 token）' }
 }
 
+function Read-RemoteToken {
+    if ($Token) { return $Token }
+
+    $line = Invoke-Remote @"
+if (Test-Path '$remoteSidecar\run-web-sidecar.cmd') {
+  (Get-Content '$remoteSidecar\run-web-sidecar.cmd' -Encoding ASCII | Select-String 'ZIPPER_DOUYIN_WEB_TOKEN=' | Select-Object -First 1).Line
+}
+"@
+
+    if ($line -match 'ZIPPER_DOUYIN_WEB_TOKEN=(.+)$') {
+        $found = $Matches[1].Trim()
+        if ($found) {
+            Ok "已沿用服务器上的 token（长度 $($found.Length)，不回显）"
+            return $found
+        }
+    }
+
+    Warn '服务器上没有可沿用的 token；若服务端配了 Sidecar Token，这次启动会 401 —— 用 -Token 指定'
+    return ''
+}
+
 function Remote-Start {
-    Assert-Remote
-    Step '启动 sidecar（服务器）'
+    Step '启动 sidecar'
+    if (-not $Token) { $Token = Read-RemoteToken }
     Remote-WriteLauncher | Out-Null
 
-    # ⚠️ 只结束本 sidecar 的进程：过渡期旧 sidecar 可能还在跑，`Get-Process node | Stop-Process`
-    #    会把两个一起打死（旧脚本就是这么写的，这里刻意不沿用）。
     $out = Invoke-Remote @"
 schtasks /create /f /tn $TaskName /tr '$remoteSidecar\run-web-sidecar.cmd' /sc onstart /ru SYSTEM 2>&1 | Out-Null;
 schtasks /end /tn $TaskName 2>&1 | Out-Null;
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { `$_.CommandLine -like '*douyin-web-sidecar*' } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue };
+Get-CimInstance Win32_Process -Filter "$sidecarProcessFilter" | Where-Object { `$_.CommandLine -like '*dist*main.js*' } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue };
 Start-Sleep -Seconds 2;
 schtasks /run /tn $TaskName 2>&1 | Out-Null;
 Start-Sleep -Seconds 20;
-Write-Host ('procs=' + ((Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { `$_.CommandLine -like '*douyin-web-sidecar*' } | Measure-Object).Count));
-if (Test-Path '$remoteSidecar\sidecar.log') { Get-Content '$remoteSidecar\sidecar.log' -Encoding UTF8 -Tail 12 }
+Write-Host ('procs=' + ((Get-CimInstance Win32_Process -Filter "$sidecarProcessFilter" | Where-Object { `$_.CommandLine -like '*dist*main.js*' } | Measure-Object).Count));
+if (Test-Path '$remoteSidecar\sidecar.log') { Get-Content '$remoteSidecar\sidecar.log' -Encoding UTF8 -Tail 10 }
 "@
     Write-Host $out
-    if ($out -notmatch 'procs=[1-9]') { throw 'sidecar 没起来 —— 看服务器上的 sidecar.log' }
-    Ok '已启动（接下来在客户端点「登录」，扫二维码）'
+    if ($out -notmatch 'procs=[1-9]') { throw 'sidecar 没起来 —— 看服务器上的 douyin-web-sidecar\sidecar.log' }
+    Ok '已启动（需要登录就在客户端点「登录」扫码）'
 }
 
 function Remote-Stop {
-    Assert-Remote
-    Step '停止 sidecar（服务器）'
+    Step '停止 sidecar'
     $out = Invoke-Remote @"
 schtasks /end /tn $TaskName 2>&1 | Out-Null;
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { `$_.CommandLine -like '*douyin-web-sidecar*' } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue };
+Get-CimInstance Win32_Process -Filter "$sidecarProcessFilter" | Where-Object { `$_.CommandLine -like '*dist*main.js*' } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue };
 Start-Sleep -Seconds 2;
-Write-Host ('procs=' + ((Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { `$_.CommandLine -like '*douyin-web-sidecar*' } | Measure-Object).Count))
+Write-Host ('procs=' + ((Get-CimInstance Win32_Process -Filter "$sidecarProcessFilter" | Where-Object { `$_.CommandLine -like '*dist*main.js*' } | Measure-Object).Count))
 "@
     Write-Host $out
+    if ($out -notmatch 'procs=0') { throw 'sidecar 停不下来' }
     Ok '已停止'
 }
 
 function Remote-Logs {
-    Assert-Remote
     Write-Host "跟随服务器 $remoteSidecar\sidecar.log（Ctrl+C 退出）`n" -ForegroundColor Cyan
     & ssh -o BatchMode=yes $remote "powershell -NoProfile -Command `"Get-Content '$remoteSidecar\sidecar.log' -Encoding UTF8 -Tail 40 -Wait`""
 }
 
 function Remote-LoginCheck {
-    Assert-Remote
     Step '登录态体检（只看不写）'
     # profile 是登录态的唯一载体：看它多大、有没有 cookie 落盘
     $out = Invoke-Remote @"
@@ -185,6 +299,7 @@ if (Test-Path `$p) {
   `$bytes = (Get-ChildItem `$p -Recurse -File | Measure-Object -Property Length -Sum).Sum;
   Write-Host ('profileMB=' + [math]::Round(`$bytes/1MB,1));
 } else { Write-Host 'profileMB=missing' }
+Write-Host ('storageState=' + (Test-Path '$remoteSidecar\data\storage-state.json'));
 if (Test-Path '$remoteSidecar\sidecar.log') {
   Get-Content '$remoteSidecar\sidecar.log' -Encoding UTF8 | Select-String '已登录|登录成功|二维码|旁听入站' | Select-Object -Last 6
 }
@@ -193,56 +308,20 @@ if (Test-Path '$remoteSidecar\sidecar.log') {
     if ($out -match 'profileMB=missing') { Warn '还没有 profile：说明一次都没登录成功（或 profileDir 配错了）' }
 }
 
-# ─────────────────────────── local（本机开发）───────────────────────────
-
-function Local-Run([string]$npmArgs) {
-    Assert-LocalNode
-    Push-Location $sidecarDir
-    try {
-        Write-Host "`n> npm $npmArgs" -ForegroundColor DarkGray
-        & npm $npmArgs
-        if ($LASTEXITCODE -ne 0) { throw "npm $npmArgs 失败（$LASTEXITCODE）" }
-    }
-    finally {
-        Pop-Location
-    }
-}
-
 # ─────────────────────────── 入口 ───────────────────────────
 
-switch ($Mode) {
-    'remote' {
-        switch ($Action) {
-            'status' { Remote-Status }
-            'install' { Remote-Install }
-            'build' { Remote-Build }
-            'start' { Remote-Start }
-            'stop' { Remote-Stop }
-            'restart' { Remote-Stop; Remote-Start }
-            'logs' { Remote-Logs }
-            'login-check' { Remote-LoginCheck }
-        }
-    }
+if (-not (Test-Connection -ComputerName $Server -Count 1 -Quiet)) { throw "ping 不通 $Server" }
 
-    'local' {
-        switch ($Action) {
-            'status' { Assert-LocalNode; Write-Host "本地目录：$sidecarDir" }
-            'install' { Local-Run 'install' }
-            'build' { Local-Run 'run build' }
-            'start' { Local-Run 'start' }
-            'stop' { Warn '本地模式：Ctrl+C 结束即可（脚本不替你杀进程）' }
-            'restart' { Warn '本地模式：Ctrl+C 后重新 -Action start' }
-            'logs' { Warn '本地模式日志直接打在窗口里' }
-            'login-check' {
-                $profile = Join-Path $sidecarDir 'data\douyin-web-profile'
-                if (Test-Path $profile) {
-                    $mb = [math]::Round(((Get-ChildItem $profile -Recurse -File | Measure-Object -Property Length -Sum).Sum) / 1MB, 1)
-                    Ok "profile 大小 ${mb} MB"
-                }
-                else {
-                    Warn "还没有 profile：$profile"
-                }
-            }
-        }
-    }
+switch ($Action) {
+    'status' { Remote-Status }
+    # deploy 只做「同步 + 编译」，**不重启、也不报进程状态** ——
+    # 全量编排里它是"停着的时候同步"，此时报 procs=0 会被误读成失败
+    'deploy' { Remote-Deploy }
+    'install' { Remote-Install }
+    'build' { Remote-Build }
+    'start' { Remote-Start; Remote-Status }
+    'stop' { Remote-Stop }
+    'restart' { Remote-Stop; Remote-Start; Remote-Status }
+    'logs' { Remote-Logs }
+    'login-check' { Remote-LoginCheck }
 }

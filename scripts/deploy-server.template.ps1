@@ -1,162 +1,241 @@
 ﻿<#
 .SYNOPSIS
-    ZipperAIQQ 服务端部署脚本（Windows / 计划任务方案）。
+    ZipperAIQQ **全量部署编排**（模板）。
 
 .DESCRIPTION
-    和 Linux 上一样：先停 -> 再传 -> 再拉起。
+    三个脚本的分工（本文件是**编排**，不重复实现任何一侧的细节）：
+      - `deploy-body.local.ps1`              → 服务端本体（计划任务 ZipperAIQQ）
+      - `douyin-web-sidecar-deploy.local.ps1` → 抖音侧（计划任务 ZipperAIQQ-DouyinWeb）
+      - 本文件                                → 两边一起，按正确顺序
 
-    为什么用计划任务而不是 Windows 服务：
-      - ZipperAIQQ.Server.exe 是控制台程序，不实现 SCM 协议
-        => sc create 会以 1053（服务未及时响应）失败
-      - 而 Start-Process 启动的进程会随 SSH 会话结束被清理
-        => 用「计划任务（SYSTEM + onstart）」托底：
-           schtasks /run 启动、schtasks /end + taskkill 停止、开机自启
+    顺序是有讲究的：
+      停：先 sidecar（它反连本体、还锁着浏览器 profile）→ 再本体
+      起：先本体（sidecar 要连它）→ 再 sidecar
+      备份/上传：在两边都停、**上传之前**做，回滚点才是"改之前"的样子。
 
 .PARAMETER Action
-    deploy（默认：发布+传输+启动）| stop | start | restart（只停+起）
+    deploy（默认）| status（只读）| stop | start | restart | rollback
+
+.PARAMETER SkipSidecar
+    只部署服务端本体（等价于直接跑 `deploy-body.local.ps1`）。
+
+.PARAMETER SkipBody
+    只部署抖音侧。
+
+.PARAMETER SkipBuild
+    透传给本体：复用上次发布产物。
+
+.PARAMETER SkipBackup
+    跳过备份（本编排默认会备份整个目录；只在已知场景用）。
+
+.PARAMETER SidecarToken
+    透传给抖音侧；不给就沿用服务器 launcher 里已有的那个。
 
 .EXAMPLE
-    .\deploy-server.ps1
-    .\deploy-server.ps1 -Action restart
-    .\deploy-server.ps1 -Action stop
+    .\deploy-server.local.ps1                     # 全量（本体 + 抖音侧）
+    .\deploy-server.local.ps1 -Action status       # 两边状态
+    .\deploy-server.local.ps1 -SkipSidecar         # 只发本体
+    .\deploy-server.local.ps1 -SkipBody            # 只发抖音侧
+    .\deploy-server.local.ps1 -Action rollback -BackupDir D:\App\<project-root>.bak-20261128-0214
 
 .NOTES
-    前置：本机已配 administrator@<server> 的 SSH 免密。
+    编码：本文件（及复制出的 .local 版）必须存为 **UTF-8 带 BOM**（Windows PowerShell 5.1 才认中文）。
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('deploy', 'stop', 'start', 'restart')]
+    [ValidateSet('deploy', 'status', 'stop', 'start', 'restart', 'rollback')]
     [string]$Action = 'deploy',
-    [string]$Server = '<server-ip>',
-    [string]$SshUser = 'administrator',
-    [string]$TargetPath = '<target-path>',
-    [string]$TaskName = 'ZipperAIQQ',
-    [string]$ProcessName = 'ZipperAIQQ.Server',
-    [switch]$SkipBuild,
 
-    # ── 抖音 sidecar（和服务器一起部署）──
+    [string]$Server = '<server-ip-redacted>',
+    [string]$SshUser = '<ssh-user>',
+    [string]$TargetPath = 'D:\App\<project-root>',
+
+    [string]$BackupDir,
+    [string]$SidecarToken = '',
+    [switch]$SkipSidecar,
+    [switch]$SkipBody,
+    [switch]$SkipBuild,
+    [switch]$SkipBackup
 )
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$publishDir = Join-Path $repoRoot 'artifacts/deploy'
-$remote = "$SshUser@$Server"
-$remotePosix = $TargetPath -replace '\\', '/'
+
+if ($Server -like '<*') { throw '还没填服务器地址：复制成 .local.ps1 并改 -Server（或用参数传）' }
+
+$bodyScript = Join-Path $PSScriptRoot 'deploy-body.local.ps1'
+$sidecarScript = Join-Path $PSScriptRoot 'douyin-web-sidecar-deploy.local.ps1'
+
+foreach ($s in @($bodyScript, $sidecarScript)) {
+    if (-not (Test-Path $s)) { throw "缺少配套脚本：$s" }
+}
+
+$doBody = -not $SkipBody
+$doSidecar = -not $SkipSidecar
 
 function Step([string]$t) { Write-Host "`n=== $t ===" -ForegroundColor Cyan }
 function Ok([string]$t) { Write-Host "  OK  $t" -ForegroundColor Green }
 function Warn([string]$t) { Write-Host "  !!  $t" -ForegroundColor Yellow }
 
+$common = @{
+    Server = $Server
+    SshUser = $SshUser
+    TargetPath = $TargetPath
+}
+
+$remote = "$SshUser@$Server"
+$remotePosix = $TargetPath -replace '\\', '/'
+
+<# 远端执行：stderr 不许变成终止错误（PS 5.1 会把原生 stderr 当 NativeCommandError 抛，哪怕 exit code 是 0）。 #>
 function Invoke-Remote([string]$script) {
-    $out = & ssh -o BatchMode=yes $remote $script 2>&1
-    return ($out | Out-String).Trim()
-}
-
-function Stop-Remote {
-    Step '停止远端服务'
-    Invoke-Remote "schtasks /end /tn $TaskName 2>`$null; taskkill /F /IM $ProcessName.exe 2>`$null; 'stopped'" | Out-Null
-    Start-Sleep -Seconds 2
-    $alive = Invoke-Remote "(Get-Process $ProcessName -ErrorAction SilentlyContinue | Measure-Object).Count"
-    if ($alive -eq '0') { Ok '已停止' } else { Warn "仍有 $alive 个进程" }
-}
-
-function Start-Remote {
-    Step '启动远端服务'
-    $r = Invoke-Remote "schtasks /run /tn $TaskName"
-    if ($r -match 'SUCCESS') { Ok '计划任务已触发' } else { Warn $r }
-
-    Write-Host '  等待 14 秒...'
-    Start-Sleep -Seconds 14
-
-    $line = Invoke-Remote "tasklist /fi `"imagename eq $ProcessName.exe`" /fo csv /nh"
-    if ($line -match $ProcessName) {
-        Ok "进程在跑：$line"
-        $tail = Invoke-Remote "Get-Content '$TargetPath\stdout.log' -Tail 2"
-        Write-Host "  日志: $tail"
-        if ($tail -match '消息路由已启动') { Ok '启动正常（日志已确认）' } else { Warn '日志里没看到「消息路由已启动」' }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & ssh -o BatchMode=yes -o ConnectTimeout=10 $remote $script 2>&1
+        $code = $LASTEXITCODE
     }
-    else {
-        Warn '进程没起来 —— 去看远端 stdout.log'
+    finally {
+        $ErrorActionPreference = $prev
     }
+
+    $text = ($out | Out-String).Trim()
+    if ($code -ne 0) { throw "远端命令失败（exit $code）：$script`n$text" }
+    return $text
 }
 
-
+function Show-AllStatus {
+    Step '两边状态'
+    $info = Invoke-Remote @"
+Write-Host ('host=' + `$env:COMPUTERNAME);
+Write-Host ('now=' + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'));
+Write-Host ('serverProc=' + (Get-Process ZipperAIQQ.Server -ErrorAction SilentlyContinue | Measure-Object).Count);
+Write-Host ('serverExeAt=' + (Get-Item '$TargetPath\ZipperAIQQ.Server.exe' -ErrorAction SilentlyContinue).LastWriteTime);
+Write-Host ('diskFreeGB=' + [math]::Round((Get-PSDrive D).Free/1GB,1));
+Write-Host ('task-server=' + ((schtasks /query /tn ZipperAIQQ /fo list 2>&1 | Select-String 'Status|状态') -join ' '));
+Write-Host ('task-sidecar=' + ((schtasks /query /tn ZipperAIQQ-DouyinWeb /fo list 2>&1 | Select-String 'Status|状态') -join ' '));
+Write-Host ('sidecarProcs=' + ((Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { `$_.CommandLine -like '*dist*main.js*' } | Measure-Object).Count));
 "@
-    Write-Host $r
-
-    if ($r -match 'nodeCount=0') { Warn 'sidecar 进程没起来 —— 看远端 sidecar.log' }
-    else { Ok 'sidecar 已启动（首次登录需要扫码：看 sidecar.log 里「登录二维码已保存」的路径）' }
-    Write-Host "  远端目录：$remoteSidecar"
-    Write-Host "  远端日志：$remoteSidecar\sidecar.log"
-    Write-Host '  ⚠️ 登录要人机交互：二维码文件在远端 data\login-qr.png，需要通过 RDP 打开或用 scp 取回'
+    Write-Host $info
 }
 
-if (-not (Test-Connection -ComputerName $Server -Count 1 -Quiet)) {
-    throw "ping 不通 $Server"
+<#
+    备份整个部署目录（本体 + sidecar + data）。
+    用 robocopy 并排除**运行中的 Chromium profile**（465 MB，被 sidecar 的浏览器锁着，
+    Copy-Item 会因 Cookies 占用直接失败 —— 实测踩到过）。
+#>
+function Backup-All {
+    Step '备份 + 校验（整个部署目录）'
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
+    $path = "D:\App\<project-root>.bak-$stamp"
+
+    $report = Invoke-Remote @"
+`$ErrorActionPreference = 'Stop'
+
+if ($Server -like '<*') { throw '还没填服务器地址：复制成 .local.ps1 并改 -Server（或用参数传）' };
+`$bak = '$path';
+if (Test-Path `$bak) { throw ('备份目录已存在: ' + `$bak) }
+`$exclude1 = '$TargetPath\douyin-web-sidecar\data\douyin-web-profile';
+`$exclude2 = '$TargetPath\.playwright';
+robocopy '$TargetPath' `$bak /E /XD `$exclude1 `$exclude2 /R:1 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null;
+`$code = `$LASTEXITCODE;
+Write-Host ('robocopyExit=' + `$code);
+if (`$code -ge 8) { throw ('robocopy 失败（exit ' + `$code + '）') }
+`$db = '$TargetPath\data\zipperaiqq.db';
+`$dbBak = Join-Path `$bak 'data\zipperaiqq.db';
+Write-Host ('backup=' + `$bak);
+Write-Host ('serverExe=' + (Test-Path (Join-Path `$bak 'ZipperAIQQ.Server.exe')));
+Write-Host ('sidecarDist=' + (Test-Path (Join-Path `$bak 'douyin-web-sidecar\dist\main.js')));
+if (Test-Path `$db) {
+  Write-Host ('dbHashEqual=' + ((Get-FileHash `$db -Algorithm SHA256).Hash -eq (Get-FileHash `$dbBak -Algorithm SHA256).Hash));
 }
-Ok (Invoke-Remote "'host=' + `$env:COMPUTERNAME + ' targetExists=' + (Test-Path '$TargetPath')")
+Write-Host ('storageState=' + (Test-Path (Join-Path `$bak 'douyin-web-sidecar\data\storage-state.json')));
+"@
+    Write-Host $report
+
+    if ($report -notmatch 'robocopyExit=([0-7])') { throw '备份 robocopy 退出码异常（>=8 或没输出），已中止' }
+    if ($report -match 'dbHashEqual=False') { throw '备份 db 哈希与源不一致，已中止' }
+    if ($report -notmatch 'serverExe=True') { throw '备份里没有服务端主程序，已中止' }
+    Ok "备份完成：$path（浏览器 profile 未备份，登录态走 storage-state.json）"
+    return $path
+}
+
+# ─────────────────────────── 入口 ───────────────────────────
+
+if (-not (Test-Connection -ComputerName $Server -Count 1 -Quiet)) { throw "ping 不通 $Server" }
 
 switch ($Action) {
-    'stop' { Stop-Remote }
-    'start' { Start-Remote }
-    'restart' {
-        Stop-Remote
-        Start-Remote
+    'status' {
+        Show-AllStatus
+        exit 0
     }
-    'deploy' {
-        Stop-Remote
 
-        if (-not $SkipBuild) {
-            Step '发布（Release / self-contained，服务器无需装 .NET）'
-            & dotnet publish (Join-Path $repoRoot 'ZipperAIQQ.Server/ZipperAIQQ.Server.csproj') `
-                -c Release -o $publishDir -r win-x64 --self-contained true -nologo
-            if ($LASTEXITCODE -ne 0) { throw "发布失败（exit $LASTEXITCODE）" }
-            $size = [math]::Round((Get-ChildItem $publishDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)
-            Ok "产物 $size MB"
-        }
+    'stop' {
+        if ($doSidecar) { & $sidecarScript -Action stop @common }
+        if ($doBody) { & $bodyScript -Action stop @common }
+        exit 0
+    }
 
-        Step '传输主程序'
-        & scp -r -q -o BatchMode=yes "$publishDir\*" "${remote}:$remotePosix/"
-        if ($LASTEXITCODE -ne 0) { throw 'scp 主程序失败' }
-        Ok '主程序已传'
+    'start' {
+        # 本体先起：sidecar 要连它
+        if ($doBody) { & $bodyScript -Action start @common }
+        if ($doSidecar) { & $sidecarScript -Action start @common -Token $SidecarToken }
+        exit 0
+    }
 
-        Step '传输附属文件（embedding 模型 / 表情表 / 人设）'
-        Invoke-Remote "New-Item -ItemType Directory -Force -Path '$TargetPath\temp\bge-small-zh-v1.5','$TargetPath\config' | Out-Null; 'ok'" | Out-Null
+    'restart' {
+        if ($doSidecar) { & $sidecarScript -Action stop @common }
+        if ($doBody) { & $bodyScript -Action restart @common }
+        else { & $sidecarScript -Action start @common -Token $SidecarToken }
+        exit 0
+    }
 
-        $modelDir = Join-Path $repoRoot 'temp/bge-small-zh-v1.5'
-        if (Test-Path $modelDir) {
-            & scp -q -o BatchMode=yes "$modelDir\*" "${remote}:$remotePosix/temp/bge-small-zh-v1.5/"
-            Ok '模型已传'
-        }
-        else { Warn "本机没有模型目录：$modelDir" }
+    'rollback' {
+        if (-not $BackupDir) { throw '回滚需要 -BackupDir' }
 
-        foreach ($cfg in @('config/faces.qq.json', 'config/persona.md')) {
-            $p = Join-Path $repoRoot $cfg
-            if (Test-Path $p) { & scp -q -o BatchMode=yes $p "${remote}:$remotePosix/config/" }
-        }
+        # 先停两边，再让本体脚本做「改名 → 复制 → 起」
+        if ($doSidecar) { & $sidecarScript -Action stop @common }
 
-        # server.yaml：服务端主配置（含 token/key，**不入仓库**）
-        # 放在 artifacts/ 下，已被 .gitignore 排除；这里每次部署同步，避免 YAML 改动漏传
-        $yamlPath = Join-Path $repoRoot 'artifacts/server.yaml'
-        if (Test-Path $yamlPath) {
-            & scp -q -o BatchMode=yes $yamlPath "${remote}:$remotePosix/config/"
-            Ok 'server.yaml 已同步（含 token/key，不入仓库）'
-        }
-        else {
-            Warn "本机没有 $yamlPath —— 服务端会沿用已有的 config/server.yaml 或环境变量"
-        }
+        & $bodyScript -Action rollback -BackupDir $BackupDir @common
 
-        Ok '配置已传'
-
-        Start-Remote
-
-        # 抖音底座已换成 douyin-web-sidecar（Playwright 浏览器底座）；
-        # 它的部署不在这份脚本里：见 docs/08-上手/抖音web底座部署与登录.md
-        # 与 scripts/douyin-web-sidecar-deploy.template.ps1
+        if ($doSidecar) { & $sidecarScript -Action start @common -Token $SidecarToken }
+        Ok '回滚完成（两边都已恢复并验证）'
+        exit 0
     }
 }
 
-Step '完成'
-Write-Host "  远端：$Server`:$TargetPath"
-Write-Host "  日志：$TargetPath\stdout.log"
-Write-Host "  任务：$TaskName（开机自启 / SYSTEM 账户）"
+# ── deploy（全量编排）──
+Show-AllStatus
+
+# ① 先停两边：sidecar 反连本体、还锁着浏览器 profile；本体锁着 SQLite
+#    —— 只要还有一边在跑，备份就取不到 db 哈希（实测：Get-FileHash 报文件被占用）
+if ($doSidecar) { & $sidecarScript -Action stop @common }
+if ($doBody) { & $bodyScript -Action stop @common }
+
+# ② 备份（整个目录；两边都已停）
+$backup = $null
+if ($SkipBackup) { Warn '跳过备份（-SkipBackup）' }
+else { $backup = Backup-All }
+
+# ③ 本体：发布 → 上传 → 起 → 验证（备份已由本编排做过，传 -SkipBackup 避免重复；
+#    它内部的 stop 是幂等的，此时进程已经是 0）
+if ($doBody) {
+    $bodyArgs = @{ Action = 'deploy'; SkipBackup = $true }
+    if ($SkipBuild) { $bodyArgs['SkipBuild'] = $true }
+    & $bodyScript @bodyArgs @common
+}
+else { Warn '跳过服务端本体（-SkipBody）' }
+
+# ④ 抖音侧：同步源码 → 远端编译 → 起（此时本体已就绪）
+if ($doSidecar) {
+    & $sidecarScript -Action deploy @common
+    & $sidecarScript -Action start @common -Token $SidecarToken
+}
+else { Warn '跳过抖音侧（-SkipSidecar）' }
+
+Step '全量部署完成'
+Write-Host "  服务端：$Server`:$TargetPath（任务 ZipperAIQQ）"
+Write-Host "  抖音侧：$Server`:$TargetPath\douyin-web-sidecar（任务 ZipperAIQQ-DouyinWeb）"
+Write-Host "  日志：$TargetPath\stdout.log ｜ $TargetPath\douyin-web-sidecar\sidecar.log"
+if ($backup) {
+    Write-Host "  备份：$backup"
+    Write-Host "  回滚：.\deploy-server.local.ps1 -Action rollback -BackupDir `"$backup`""
+}
