@@ -84,6 +84,17 @@ public sealed class AsrSpeechTranscriberTests
         }
     }
 
+    private sealed class FakeTranscoder(byte[]? wav) : IAudioTranscoder
+    {
+        public int Calls { get; private set; }
+
+        public Task<byte[]?> ToWavAsync(byte[] source, string? format, CancellationToken ct = default)
+        {
+            Calls++;
+            return Task.FromResult(wav);
+        }
+    }
+
     private sealed class FakeDecoder(byte[]? wav) : ISilkDecoder
     {
         public int Calls { get; private set; }
@@ -126,12 +137,14 @@ public sealed class AsrSpeechTranscriberTests
         IDeepSeekMediaClient media,
         IAudioSource source,
         ISilkDecoder? decoder = null,
+        IAudioTranscoder? transcoder = null,
         AiOptions? options = null,
         SpeechOptions? speech = null,
         IHttpClientFactory? http = null) =>
         new(options ?? new AiOptions(),
             media,
             source,
+            transcoder ?? new FakeTranscoder(null),
             decoder ?? new FakeDecoder(WavBytes()),
             speech ?? new SpeechOptions { AudioFetchRetryDelayMs = 0 },
             http ?? new StubHttpFactory(),
@@ -271,6 +284,43 @@ public sealed class AsrSpeechTranscriberTests
         Assert.Equal(0, media.Calls);
     }
 
+    [Fact]
+    public async Task Amr_audio_is_transcoded_by_ffmpeg_before_asr()
+    {
+        // URL 下载到的是 AMR（实测 1616 字节），ffmpeg 转 WAV 后再喂 ASR
+        var amr = new byte[] { 0x23, 0x21, 0x41, 0x4D, 0x52, 0x0A };      // #!AMR
+        var wav = WavBytes(256);
+        var media = new FakeMedia(new AsrResult("amr 转出来的话", 2300, []));
+        var transcoder = new FakeTranscoder(wav);
+        var decoder = new FakeDecoder(WavBytes());   // 不该被调到
+
+        var text = await Create(media, new FakeSource(new AudioBytes(amr, "amr")), decoder, transcoder)
+            .TranscribeAsync(Clip());
+
+        Assert.Equal("amr 转出来的话", text);
+        Assert.Equal(1, transcoder.Calls);
+        Assert.Equal(0, decoder.Calls);              // ffmpeg 成了就不必再试 silk
+        Assert.Equal(wav, media.LastAudio);
+    }
+
+    [Fact]
+    public async Task Silk_falls_back_to_silk_decoder_when_ffmpeg_cannot_handle_it()
+    {
+        // ffmpeg 解不了 SILK（Invalid frame size）→ silk-wasm 兜底
+        var decoded = WavBytes(512);
+        var media = new FakeMedia(new AsrResult("silk 兜底的话", 1740, []));
+        var transcoder = new FakeTranscoder(null);
+
+        var text = await Create(
+                media, new FakeSource(new AudioBytes(SilkBytes(), "silk")),
+                new FakeDecoder(decoded), transcoder)
+            .TranscribeAsync(Clip());
+
+        Assert.Equal("silk 兜底的话", text);
+        Assert.Equal(1, transcoder.Calls);
+        Assert.Equal(decoded, media.LastAudio);
+    }
+
     // ══════════ 主线：走网络（record.data.url），不读本地文件 ══════════
 
     [Fact]
@@ -305,4 +355,6 @@ public sealed class AsrSpeechTranscriberTests
         Assert.Equal("兜底拿到的", text);
     }
 }
+
+
 

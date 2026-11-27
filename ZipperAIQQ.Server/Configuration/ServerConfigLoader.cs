@@ -229,6 +229,7 @@ public static class ServerConfigLoader
                 MaxUploadBytes = s.Int("ai", "maxUploadBytes", o.Ai.MaxUploadBytes),
                 SilkDecodeScript = s.Str("ai", "silkDecodeScript", o.Ai.SilkDecodeScript)!,
                 NodePath = s.Str("ai", "nodePath", o.Ai.NodePath)!,
+                FfmpegPath = s.Str("ai", "ffmpegPath", o.Ai.FfmpegPath)!,
                 AsrTempDir = s.Str("ai", "asrTempDir", o.Ai.AsrTempDir)!,
             },
 

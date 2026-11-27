@@ -61,6 +61,17 @@ public sealed record AiOptions
     /// <summary>Node 可执行文件（默认 <c>node</c>，走 PATH；服务器上 sidecar 就在用它）。</summary>
     public string NodePath { get; init; } = "node";
 
-    /// <summary>解码用的临时目录（默认 <c>./data/asr-tmp</c>，已 gitignore）。</summary>
+    /// <summary>
+    /// ffmpeg 可执行文件（默认 <c>tools/ffmpeg/ffmpeg.exe</c>，部署目录里那一份）。
+    /// </summary>
+    /// <remarks>
+    /// 2026-11-28 实测（Server 2016）：机器上原有的 <c>@ffmpeg-installer</c> 那份一跑就报
+    /// <c>not a valid application for this OS platform</c>（加壳的被拒），
+    /// 而 npm 的 <c>ffmpeg-static</c> 6.1.1 能跑、能转 AMR → 16k mono WAV。
+    /// 换成裸命令名（<c>ffmpeg</c>）就走系统 PATH。
+    /// </remarks>
+    public string FfmpegPath { get; init; } = "tools/ffmpeg/ffmpeg.exe";
+
+    /// <summary>解码 / 转码用的临时目录（默认 <c>./data/asr-tmp</c>，已 gitignore）。</summary>
     public string AsrTempDir { get; init; } = "./data/asr-tmp";
 }

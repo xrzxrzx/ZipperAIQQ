@@ -32,6 +32,7 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
     private readonly AiOptions _options;
     private readonly IDeepSeekMediaClient _media;
     private readonly IAudioSource _source;
+    private readonly IAudioTranscoder _transcoder;
     private readonly ISilkDecoder _decoder;
     private readonly SpeechOptions _speech;
     private readonly IHttpClientFactory _http;
@@ -41,6 +42,7 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
         AiOptions options,
         IDeepSeekMediaClient media,
         IAudioSource source,
+        IAudioTranscoder transcoder,
         ISilkDecoder decoder,
         SpeechOptions speech,
         IHttpClientFactory http,
@@ -49,6 +51,7 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(media);
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(transcoder);
         ArgumentNullException.ThrowIfNull(decoder);
         ArgumentNullException.ThrowIfNull(speech);
         ArgumentNullException.ThrowIfNull(http);
@@ -57,6 +60,7 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
         _options = options;
         _media = media;
         _source = source;
+        _transcoder = transcoder;
         _decoder = decoder;
         _speech = speech;
         _http = http;
@@ -151,7 +155,15 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
                     return audio.Bytes;
                 }
 
-                var wav = await _decoder.ToWavAsync(audio.Bytes, ct).ConfigureAwait(false);
+                // ① 先 ffmpeg：URL 下载到的是 **AMR**，它能转（实测 Server 2016 上 ffmpeg-static 可用）
+                var wav = await _transcoder.ToWavAsync(audio.Bytes, audio.Format, ct).ConfigureAwait(false);
+
+                // ② 再试 silk-wasm：ffmpeg 解不了 SILK（Invalid frame size），由它兜底
+                if (wav is null)
+                {
+                    wav = await _decoder.ToWavAsync(audio.Bytes, ct).ConfigureAwait(false);
+                }
+
                 if (wav is { Length: > 44 })
                 {
                     _logger.Information(

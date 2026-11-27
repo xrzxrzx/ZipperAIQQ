@@ -108,6 +108,7 @@ public static partial class ServiceRegistration
                     options.Ai,
                     media,
                     channel,
+                    new FfmpegAudioTranscoder(options.Ai, logger),
                     new NodeSilkDecoder(options.Ai, logger),
                     speech,
                     sp.GetRequiredService<IHttpClientFactory>(),
