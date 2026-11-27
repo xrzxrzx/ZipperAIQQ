@@ -1,3 +1,4 @@
+using ZipperAIQQ.Agent.Express;
 using ZipperAIQQ.Channel.Models;
 
 namespace ZipperAIQQ.Agent.Length;
@@ -79,6 +80,43 @@ public static class ReplyLengthPolicy
             ReplyLengthScene.Long => options.Long,
             _ => options.Normal,
         };
+    }
+
+    /// <summary>
+    /// 表达档位联动（问题记录 06 B6 / 表达档位设计 §4）：**只放大不缩小**。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 为什么必须联动：现状的预算（私聊 600 字 / 5 条）本身就是「把话说短」的闸门 ——
+    /// 规则段再怎么放开，预算照样把话掐住，「放得开」就成了一句空话。
+    /// </para>
+    /// <para>
+    /// ⚠️ 条数**至少 +1**：<c>2 × 1.5 = 3</c> 还好，但 <c>2 × 1.0</c> 与整数截断随时会让
+    /// 「放开」在短预算场景下等于没发生（群里插话正是最常见的场景）。
+    /// 条数用**向下取整**是为了对上设计文档的数值表（600 字 / 5 条 → close = 900 / 7，不是 8）。
+    /// </para>
+    /// </remarks>
+    public static ReplyLengthBudget ApplyExpress(ReplyLengthBudget budget, ExpressLevel level)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+
+        var factor = level switch
+        {
+            ExpressLevel.Close => 1.5,
+            ExpressLevel.Explicit => 2.0,
+            _ => 1.0,
+        };
+
+        // 日常档原样返回：倍数 1.0 也要走同一条路，免得以后有人以为日常档「少算了一次」
+        if (factor <= 1.0)
+        {
+            return budget;
+        }
+
+        var chars = (int)(budget.MaxChars * factor);
+        var messages = Math.Max(budget.MaxMessages + 1, (int)(budget.MaxMessages * factor));
+
+        return new ReplyLengthBudget(chars, messages);
     }
 
     /// <summary>
