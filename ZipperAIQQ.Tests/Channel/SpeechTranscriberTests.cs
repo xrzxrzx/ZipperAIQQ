@@ -173,4 +173,104 @@ public sealed class SpeechTranscriberTests
 
         Assert.Null(await transcriber.TranscribeAsync(Clip()));
     }
+
+    // ══════════ B00001：超时与熔断（NapCat 侧无响应时别再卡整条接收链）══════════
+
+    [Fact]
+    public async Task Timeout_gives_up_without_retry()
+    {
+        // NapCat 那条链路一步卡住就是 10 秒 ×3：超时后再问一轮只是把等待翻倍
+        var calls = 0;
+        var transcriber = Create(
+            async (_, _, ct) =>
+            {
+                calls++;
+                await Task.Delay(2_000, ct).ConfigureAwait(false);
+                return JsonNode.Parse("""{ "text": "太晚了" }""");
+            },
+            new SpeechOptions { TimeoutMs = 40, MaxAttempts = 2, RetryDelayMs = 0 });
+
+        var started = DateTimeOffset.UtcNow;
+        Assert.Null(await transcriber.TranscribeAsync(Clip()));
+        var elapsed = DateTimeOffset.UtcNow - started;
+
+        Assert.Equal(1, calls);                       // 没有第二次
+        Assert.True(elapsed < TimeSpan.FromSeconds(1), $"实际等了 {elapsed.TotalMilliseconds:0}ms");
+        Assert.True(transcriber.IsAvailable);          // 一次超时还不至于熔断（默认阈值 2）
+    }
+
+    [Fact]
+    public async Task Timeouts_count_as_failures_and_trip_the_breaker()
+    {
+        var calls = 0;
+        var transcriber = Create(
+            async (_, _, ct) =>
+            {
+                calls++;
+                await Task.Delay(2_000, ct).ConfigureAwait(false);
+                return null;
+            },
+            new SpeechOptions { TimeoutMs = 40, MaxConsecutiveFailures = 2, RetryDelayMs = 0 });
+
+        Assert.Null(await transcriber.TranscribeAsync(Clip("m1")));
+        Assert.Null(await transcriber.TranscribeAsync(Clip("m2")));
+
+        Assert.False(transcriber.IsAvailable);         // 两次超时 → 熔断
+
+        Assert.Null(await transcriber.TranscribeAsync(Clip("m3")));
+        Assert.Equal(2, calls);                        // 熔断后不再发起调用
+    }
+
+    [Fact]
+    public async Task Breaker_recovers_after_cooldown_without_restart()
+    {
+        // 没有半开的话，一次熔断要等进程重启 —— 用户看到的是「语音永远坏着」
+        var calls = 0;
+        var transcriber = Create(
+            async (_, _, ct) =>
+            {
+                calls++;
+                await Task.Delay(2_000, ct).ConfigureAwait(false);
+                return null;
+            },
+            new SpeechOptions
+            {
+                TimeoutMs = 40,
+                MaxConsecutiveFailures = 1,
+                CooldownMs = 30,
+                RetryDelayMs = 0,
+            });
+
+        Assert.Null(await transcriber.TranscribeAsync(Clip("m1")));
+        Assert.False(transcriber.IsAvailable);
+
+        await Task.Delay(60);                          // 等冷却到期
+
+        Assert.True(transcriber.IsAvailable);
+        Assert.Null(await transcriber.TranscribeAsync(Clip("m2")));
+        Assert.Equal(2, calls);                        // 到期后又试了一次
+    }
+
+    [Fact]
+    public async Task Cancellation_is_not_counted_as_platform_failure()
+    {
+        // 停机 / 收轮取消不该把 NapCat 判成"不支持语音"
+        var transcriber = Create(
+            async (_, _, ct) =>
+            {
+                await Task.Delay(2_000, ct).ConfigureAwait(false);
+                return null;
+            },
+            new SpeechOptions { TimeoutMs = 5_000, MaxConsecutiveFailures = 1 });
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Null(await transcriber.TranscribeAsync(Clip($"c{i}"), cts.Token));
+        }
+
+        Assert.True(transcriber.IsAvailable);          // 三次取消，仍然可用
+    }
 }

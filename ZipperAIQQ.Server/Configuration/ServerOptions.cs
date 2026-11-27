@@ -28,6 +28,16 @@ public sealed record ServerOptions
     /// </summary>
     public bool SttEnabled { get; init; } = true;
 
+    /// <summary>
+    /// 单条语音转写的墙上时间上限（毫秒，默认 8 秒）。**与 <c>ApiTimeoutSeconds</c> 分开**。
+    /// </summary>
+    /// <remarks>
+    /// B00001：NapCat 那条链路一步卡住就是 10 秒 ×3，复用 30 秒的全局超时会让
+    /// 「一条语音把事件接收卡 30~60 秒」。成功路径是秒级的，失败路径不该让消息队列陪等。
+    /// 需要更宽松就在这里调大（代价是消息延迟变大）。
+    /// </remarks>
+    public int SttTimeoutMs { get; init; } = 8_000;
+
     // ── 模型 ──
     public required string LlmApiKey { get; init; }
     public required string LlmBaseUrl { get; init; }
@@ -240,6 +250,7 @@ public sealed record ServerOptions
             Whitelist = (Optional("ZIPPER_WHITELIST") ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             SttEnabled = Optional("ZIPPER_STT_ENABLED") is not "0",
+            SttTimeoutMs = IntOrDefault("ZIPPER_STT_TIMEOUT_MS", 8_000),
 
             LlmApiKey = Optional("ZIPPER_LLM_APIKEY") ?? string.Empty,
             LlmBaseUrl = Optional("ZIPPER_LLM_BASEURL") ?? string.Empty,

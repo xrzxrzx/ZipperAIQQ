@@ -575,10 +575,15 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
         }
     }
 
-    /// <summary>把语音段补齐成转写文本；转写不可用时原样返回。</summary>
+    /// <summary>把语音段补齐成转写文本；转写关闭时原样返回。</summary>
+    /// <remarks>
+    /// ⚠️ 失败也**标记**（<see cref="RecordSegment.TranscriptionFailed"/>）：只有 <c>[语音]</c> 的话，
+    /// 模型分不清「没试」与「试了没拿到」，而后者该追问一句「语音没听清」。
+    /// 熔断中也算「试过没成功」（用户视角就是这么回事）。
+    /// </remarks>
     private async Task<IncomingMessage> EnrichRecordsAsync(IncomingMessage message)
     {
-        if (!_speechOptions.Enabled || !_speech.IsAvailable)
+        if (!_speechOptions.Enabled)
         {
             return message;
         }
@@ -592,20 +597,31 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
                 continue;
             }
 
-            var text = await _speech
-                .TranscribeAsync(new AudioClip(
-                    record.FileId,
-                    record.Url,
-                    MessageId: message.EventId))
-                .ConfigureAwait(false);
-
-            if (string.IsNullOrWhiteSpace(text))
+            string? text = null;
+            if (_speech.IsAvailable)
             {
-                continue;
+                text = await _speech
+                    .TranscribeAsync(new AudioClip(
+                        record.FileId,
+                        record.Url,
+                        MessageId: message.EventId))
+                    .ConfigureAwait(false);
             }
 
             replaced ??= message.Segments.ToList();
-            replaced[i] = record with { Text = text, Transcriber = NapCatPttTextTranscriber.ActionName };
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                replaced[i] = record with { TranscriptionFailed = true };
+                continue;
+            }
+
+            replaced[i] = record with
+            {
+                Text = text,
+                Transcriber = NapCatPttTextTranscriber.ActionName,
+                TranscriptionFailed = false,
+            };
 
             _logger.Information("语音已转写：file={File} 长度 {Length}", record.FileId, text.Length);
         }

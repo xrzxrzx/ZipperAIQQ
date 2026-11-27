@@ -54,7 +54,24 @@ public sealed record RecordSegment(
     string? FileId,
     string? Url,
     string? Text,
-    string? Transcriber) : MessageSegment;
+    string? Transcriber) : MessageSegment
+{
+    /// <summary>
+    /// 转写**尝试过但没成功**（平台无响应 / QQ 侧转不出文字）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// B00001：<see cref="Text"/> 为 <c>null</c> 有两种完全不同的含义 ——
+    /// 「没试」（转写关闭 / 熔断中）与「试了但没拿到」。两者对模型的下一步不一样：
+    /// 后者应该追问「语音没听清，再说一次？」，前者只是「我看到你发了条语音」。
+    /// </para>
+    /// <para>
+    /// 用 <c>init</c> 属性而不是加构造参数：位置参数会让所有既有构造点跟着改，
+    /// 而这条信息只在转写失败时才用得上。
+    /// </para>
+    /// </remarks>
+    public bool TranscriptionFailed { get; init; }
+}
 
 /// <summary>
 /// QQ **表情包**（<c>mface</c>）—— 和系统表情（<see cref="FaceSegment"/>）不是一回事。

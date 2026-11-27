@@ -1451,7 +1451,7 @@ public sealed class ChatAgent : IChatAgent
                     break;
 
                 case RecordSegment record:
-                    contents.Add(new TextContent(RenderRecord(record)));
+                    contents.Add(new TextContent(RecordDisplay.Render(record)));
                     break;
 
                 case ImageSegment image when Uri.TryCreate(image.Url, UriKind.Absolute, out _):
@@ -1509,7 +1509,7 @@ public sealed class ChatAgent : IChatAgent
                 TextSegment text => text.Text,
                 FaceSegment face => RenderFace(face),
                 // 语音：**转写已在通道层完成**（FR-1.5），这里只负责呈现结果
-                RecordSegment record => RenderRecord(record),
+                RecordSegment record => RecordDisplay.Render(record),
                 // 历史里的图片：**当前消息**会把图作为 UriContent 传给模型（多模态），
                 // 但历史回放只能给占位文本 —— 所以这里标"历史"，不要让它以为现在也看不见。
                 ImageSegment => "[图片]",
@@ -1545,13 +1545,5 @@ public sealed class ChatAgent : IChatAgent
         return entry is null ? "[表情:" + face.Id + "]" : "[表情:" + entry.Name + "]";
     }
 
-    /// <summary>
-    /// 把通道层转写好的语音渲染成模型能读的文本。
-    /// </summary>
-    /// <remarks>
-    /// 未转写时保留 <c>[语音]</c>：模型需要知道"对方发了语音但内容不可见"，
-    /// 而不是以为消息里什么都没有。
-    /// </remarks>
-    private static string RenderRecord(RecordSegment record) =>
-        string.IsNullOrWhiteSpace(record.Text) ? "[语音]" : "[语音转写:" + record.Text + "]";
+    // 语音段的渲染见 RecordDisplay（三种情形要分开，那段判断自带单测）
 }

@@ -85,7 +85,9 @@ public static partial class ServiceRegistration
                 AccessToken = options.NapCatAccessToken,
             },
             sp.GetRequiredService<ILogger>(),
-            new SpeechOptions { Enabled = options.SttEnabled }));
+            // B00001：单条语音的墙上时间上限与全局 API 超时分开 ——
+            // 复用 30 秒会让「一条转不出来的语音」把事件接收卡 30~60 秒
+            new SpeechOptions { Enabled = options.SttEnabled, TimeoutMs = options.SttTimeoutMs }));
 
         services.AddSingleton<IContactDirectory>(sp => sp.GetRequiredService<NapCatChannel>());
 
