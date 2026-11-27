@@ -32,14 +32,23 @@ namespace ZipperAIQQ.Channel.NapCat;
 /// 两者**不能用同一条路**：事件是 1:N 广播，API 响应是 1:1 定向。
 /// </para>
 /// </remarks>
-public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechTranscriber, IRecoverableChannel
+public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechTranscriber, IAudioSource, IRecoverableChannel
 {
     private readonly IClientTransport _transport;
     private readonly IChatFilter _filter;
     private readonly NapCatOptions _options;
     private readonly ILogger _logger;
     private readonly SpeechOptions _speechOptions;
-    private readonly NapCatPttTextTranscriber _speech;
+
+    /// <summary>
+    /// 语音转写（可被组合根替换成「NapCat → 外部 ASR」的链，B00001）。
+    /// </summary>
+    /// <remarks>
+    /// 默认是 NapCat 自带的 <c>fetch_ptt_text</c>；服务端会把它包成
+    /// <c>FallbackSpeechTranscriber(自转, ASR)</c> 再塞回来 ——
+    /// 因为 ASR 客户端在 Server 侧（要 key），而通道不该知道 key 存在。
+    /// </remarks>
+    private ISpeechTranscriber _speech;
 
     private readonly System.Threading.Channels.Channel<InboundEvent> _queue =
         System.Threading.Channels.Channel.CreateUnbounded<InboundEvent>(new UnboundedChannelOptions
@@ -78,6 +87,20 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
 
     /// <summary>语音转写器（供 DI 暴露；通道内部也用它）。</summary>
     public ISpeechTranscriber SpeechTranscriber => _speech;
+
+    /// <summary>
+    /// 换一条转写链（组合根用：把自转 + 外部 ASR 包成 <c>FallbackSpeechTranscriber</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 为什么是 setter 而不是构造参数：ASR 回退要拿 <c>IDeepSeekMediaClient</c>，
+    /// 而那个服务的实现又要在通道建好之后才能装配（它可能要读通道自己的能力）——
+    /// 构造参数会把这条顺序钉死在一个地方。
+    /// </remarks>
+    public void UseSpeechTranscriber(ISpeechTranscriber transcriber)
+    {
+        ArgumentNullException.ThrowIfNull(transcriber);
+        _speech = transcriber;
+    }
 
     bool ISpeechTranscriber.IsAvailable => _speech.IsAvailable;
 
@@ -575,6 +598,92 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
         }
     }
 
+    /// <summary>
+    /// 取语音的 WAV 字节（B00001 的 ASR 回退路线用）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 用 <c>get_record</c> + <c>out_format: "wav"</c>：NapCat 内部能把 <c>SILK_V3</c> 解成
+    /// 24 kHz 单声道 16-bit RIFF/WAVE（2026-11-28 实测 361 ms）。
+    /// 本机 ffmpeg 是坏的，转码只能靠它。
+    /// </para>
+    /// <para>
+    /// 优先用返回里的 <c>base64</c>，其次读它给的本地路径：
+    /// <c>enableLocalFile2Url=false</c>（默认）时 NapCat 不给 base64，只给路径。
+    /// </para>
+    /// <para>
+    /// ⚠️ 有超时保护：这条调用跑在**事件接收路径**上，不能像 B00001 的老版本那样卡满全局 30 秒。
+    /// </para>
+    /// </remarks>
+    async Task<byte[]?> IAudioSource.GetWavAsync(string? fileId, string? filePath, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(fileId))
+        {
+            return null;
+        }
+
+        var parameters = new JsonObject
+        {
+            ["file"] = fileId,
+            ["out_format"] = "wav",
+        };
+
+        var timeoutMs = _speechOptions.TimeoutMs > 0 ? _speechOptions.TimeoutMs : 8_000;
+        var call = CallApiNodeAsync("get_record", parameters, ct);
+
+        var finished = await Task.WhenAny(call, Task.Delay(timeoutMs, ct)).ConfigureAwait(false);
+        if (finished != call)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            _ = call.ContinueWith(
+                t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+
+            _logger.Warning(
+                "取语音音频超过 {TimeoutMs}ms 未返回（file={File}）", timeoutMs, fileId);
+            return null;
+        }
+
+        if (await call.ConfigureAwait(false) is not JsonObject data)
+        {
+            return null;
+        }
+
+        if (data["base64"] is JsonValue base64Value &&
+            base64Value.TryGetValue<string>(out var base64) &&
+            !string.IsNullOrWhiteSpace(base64))
+        {
+            try
+            {
+                return Convert.FromBase64String(base64);
+            }
+            catch (FormatException ex)
+            {
+                _logger.Warning(ex, "语音 base64 解不开（file={File}）", fileId);
+            }
+        }
+
+        var localPath = data["file"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath))
+        {
+            try
+            {
+                return await File.ReadAllBytesAsync(localPath, ct).ConfigureAwait(false);
+            }
+            catch (IOException ex)
+            {
+                _logger.Warning(ex, "语音文件读不了：{Path}", localPath);
+            }
+        }
+
+        _logger.Warning(
+            "get_record 没给出可用的音频（file={File}，path={Path}）", fileId, localPath ?? filePath);
+        return null;
+    }
+
     /// <summary>把语音段补齐成转写文本；转写关闭时原样返回。</summary>
     /// <remarks>
     /// ⚠️ 失败也**标记**（<see cref="RecordSegment.TranscriptionFailed"/>）：只有 <c>[语音]</c> 的话，
@@ -604,7 +713,10 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
                     .TranscribeAsync(new AudioClip(
                         record.FileId,
                         record.Url,
-                        MessageId: message.EventId))
+                        MessageId: message.EventId)
+                    {
+                        FilePath = record.FilePath,
+                    })
                     .ConfigureAwait(false);
             }
 

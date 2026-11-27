@@ -13,6 +13,7 @@ using ZipperAIQQ.Agent.Tools;
 using ZipperAIQQ.Channel;
 using ZipperAIQQ.Channel.Reliability;
 using ZipperAIQQ.Channel.Apis;
+using ZipperAIQQ.Server.Ai;
 using ZipperAIQQ.Channel.Audio;
 using ZipperAIQQ.Channel.Filtering;
 using ZipperAIQQ.Channel.NapCat;
@@ -76,18 +77,37 @@ public static partial class ServiceRegistration
             new ClientTransport(sp.GetRequiredService<ILogger>()));
         // 内层通道单独注册：IContactDirectory（好友/群/群成员查询）需要它，
         // 而消息发送要过外层节流 —— 两者拿的不是同一个对象。
-        services.AddSingleton<NapCatChannel>(sp => new NapCatChannel(
-            sp.GetRequiredService<IClientTransport>(),
-            sp.GetRequiredService<IChatFilter>(),
-            new NapCatOptions
+        services.AddSingleton<NapCatChannel>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger>();
+
+            var channel = new NapCatChannel(
+                sp.GetRequiredService<IClientTransport>(),
+                sp.GetRequiredService<IChatFilter>(),
+                new NapCatOptions
+                {
+                    WebSocketUrl = options.NapCatWebSocketUrl,
+                    AccessToken = options.NapCatAccessToken,
+                },
+                logger,
+                // B00001：单条语音的墙上时间上限与全局 API 超时分开 ——
+                // 复用 30 秒会让「一条转不出来的语音」把事件接收卡 30~60 秒
+                new SpeechOptions { Enabled = options.SttEnabled, TimeoutMs = options.SttTimeoutMs });
+
+            // 语音转写链（B00001，用户 2026-11-28 定）：**NapCat 自转优先，转不出走 DS ASR**。
+            // 顺序不能反：自转免费且不用下载音频；ASR 要取音频 + 转码 + 按秒计费。
+            // ASR 客户端在 Server 侧（要 key），通道只拿到一个 ISpeechTranscriber —— 依赖方向不变。
+            var media = sp.GetService<ZipperAIQQ.Agent.Media.IDeepSeekMediaClient>();
+            if (media is not null)
             {
-                WebSocketUrl = options.NapCatWebSocketUrl,
-                AccessToken = options.NapCatAccessToken,
-            },
-            sp.GetRequiredService<ILogger>(),
-            // B00001：单条语音的墙上时间上限与全局 API 超时分开 ——
-            // 复用 30 秒会让「一条转不出来的语音」把事件接收卡 30~60 秒
-            new SpeechOptions { Enabled = options.SttEnabled, TimeoutMs = options.SttTimeoutMs }));
+                var asr = new AsrSpeechTranscriber(options.Ai, media, channel, logger);
+
+                channel.UseSpeechTranscriber(
+                    new FallbackSpeechTranscriber(channel.SpeechTranscriber, asr, logger));
+            }
+
+            return channel;
+        });
 
         services.AddSingleton<IContactDirectory>(sp => sp.GetRequiredService<NapCatChannel>());
 
@@ -241,3 +261,4 @@ public static partial class ServiceRegistration
         });
     }
 }
+

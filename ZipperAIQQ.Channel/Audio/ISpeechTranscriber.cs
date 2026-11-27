@@ -13,7 +13,17 @@ public sealed record AudioClip(
     string? FileId,
     string? Url,
     string? Format = null,
-    string? MessageId = null);
+    string? MessageId = null)
+{
+    /// <summary>
+    /// 平台给的**本地文件路径**（OneBot <c>record.data.path</c>）。
+    /// </summary>
+    /// <remarks>
+    /// 外部 ASR 回退路径优先读它：同机部署时它是真实存在的 amr 文件，
+    /// 比重新调一次 <c>get_record</c> 更快，也比带 rkey 的临时 URL 更可靠。
+    /// </remarks>
+    public string? FilePath { get; init; }
+}
 
 /// <summary>
 /// 语音转文字（FR-1.5：**必须发生在通道层**，上层只读结果）。

@@ -284,11 +284,16 @@ public static class OneBotEventMapper
                 case "record":
                     // 语音：先保留文件标识，**转写由通道层补齐**（FR-1.5）。
                     // 以前这里落进 default 直接变成 "[语音]"，音频内容从未被获取（问题记录 #1）。
+                    // path（B00001）：NapCat 顺手给的本地 amr 绝对路径 —— 外部 ASR 回退要靠它，
+                    // 比再调一次 get_record 更稳（少一次往返、不依赖会过期的 rkey）。
                     segments.Add(new RecordSegment(
                         FileId: GetNonEmpty(data, "file"),
                         Url: GetNonEmpty(data, "url"),
                         Text: null,
-                        Transcriber: null));
+                        Transcriber: null)
+                    {
+                        FilePath = GetNonEmpty(data, "path"),
+                    });
                     break;
 
                 default:

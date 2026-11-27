@@ -57,6 +57,17 @@ public sealed record RecordSegment(
     string? Transcriber) : MessageSegment
 {
     /// <summary>
+    /// 平台**本地文件路径**（OneBot 的 <c>record.data.path</c>）。
+    /// </summary>
+    /// <remarks>
+    /// B00001 的回退路径要用它：NapCat 的 <c>fetch_ptt_text</c> 在某些环境里转不出来
+    /// （QQ 侧 ASR 卡死），而 OneBot 事件里**已经给了 amr 的本地绝对路径** ——
+    /// 直接读这个文件比再走一次 <c>get_record</c> 更稳（少一次往返还少一条过期 URL）。
+    /// 与机器相关（NapCat 装在哪就在哪），所以只在同机部署时可用，读不到就退回 URL。
+    /// </remarks>
+    public string? FilePath { get; init; }
+
+    /// <summary>
     /// 转写**尝试过但没成功**（平台无响应 / QQ 侧转不出文字）。
     /// </summary>
     /// <remarks>
