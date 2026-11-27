@@ -102,13 +102,15 @@ public static partial class ServiceRegistration
             var media = sp.GetService<ZipperAIQQ.Agent.Media.IDeepSeekMediaClient>();
             if (media is not null)
             {
-                // silk 解码走外置 Node（silk-wasm 已 vendored 进仓库，部署时不用 npm）
+                // B00001（用户 2026-11-28 定）：音频走网络（record.data.url）下载，
+                // 不读 NapCat 那台机器的本地文件；SILK → WAV 的必要转码用 vendored silk-wasm。
                 var asr = new AsrSpeechTranscriber(
                     options.Ai,
                     media,
                     channel,
                     new NodeSilkDecoder(options.Ai, logger),
                     speech,
+                    sp.GetRequiredService<IHttpClientFactory>(),
                     logger);
 
                 channel.UseSpeechTranscriber(

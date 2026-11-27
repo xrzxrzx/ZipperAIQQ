@@ -599,45 +599,23 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
     }
 
     /// <summary>
-    /// 取语音原始字节（B00001）：**本地文件优先**，<c>get_record</c> 兜底。
+    /// 取语音原始字节（B00001）：走 NapCat 的 <c>get_record</c>（平台侧把 SILK 转成 WAV）。
     /// </summary>
     /// <remarks>
     /// <para>
-    /// 为什么本地优先（2026-11-28 实测）：OneBot 事件已经给了 <c>record.data.path</c>
-    /// （<c>…\nt_data\Ptt\2026-11\Ori\xxx.amr</c>，真身是 <c>#!SILK_V3</c>），
-    /// 它在**消息到达那一刻就在磁盘上**；
-    /// 而 NapCat 的 <c>get_record</c> 要按文件名去 QQ 的消息索引里搜 ——
-    /// 语音刚到的 1~2 分钟内索引还没建好，请求会一路等到超时
-    /// （实测：服务端 5 秒超时，两分钟后同一请求 30 ms 成功）。
+    /// 用户 2026-11-28 定「不要走本地」：**不读 NapCat 那台机器上的 <c>record.data.path</c>**，
+    /// 所以这里只走平台 API。外部 ASR 主线是从 <c>record.data.url</c> 走网络下载
+    /// （见 <c>AsrSpeechTranscriber</c>），这里只是它的兜底。
     /// </para>
     /// <para>
-    /// <c>get_record</c> 留着兜底：跨机部署（路径读不到）、或老消息的本地文件被清掉时仍可用。
-    /// </para>
-    /// <para>
-    /// ⚠️ 兜底那次调用也有超时保护：它跑在**事件接收路径**上，不能像 B00001 的老版本那样卡满 30 秒。
+    /// ⚠️ 已知限制：<c>get_record</c> 要按文件名去 QQ 的消息索引里搜，
+    /// 语音刚到达的 1~2 分钟内会一直等到超时（实测服务端 5 秒超时、两分钟后 30 ms 成功）。
+    /// 所以它是兜底而不是主线。
     /// </para>
     /// </remarks>
     async Task<AudioBytes?> IAudioSource.GetAudioAsync(
         string? fileId, string? filePath, CancellationToken ct)
     {
-        // ① 本地原始文件（silk）：秒级、不依赖任何索引
-        if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
-        {
-            try
-            {
-                var bytes = await File.ReadAllBytesAsync(filePath, ct).ConfigureAwait(false);
-                if (bytes.Length > 0)
-                {
-                    return new AudioBytes(bytes, Path.GetExtension(filePath).TrimStart('.'));
-                }
-            }
-            catch (IOException ex)
-            {
-                _logger.Warning(ex, "读语音本地文件失败：{Path}", filePath);
-            }
-        }
-
-        // ② 兜底：NapCat 侧转 WAV
         if (string.IsNullOrWhiteSpace(fileId))
         {
             return null;
@@ -653,7 +631,7 @@ public sealed class NapCatChannel : IMessageChannel, IContactDirectory, ISpeechT
         if (wav is null)
         {
             _logger.Warning(
-                "语音既读不到本地文件也取不到 WAV（file={File}，path={Path}）", fileId, filePath);
+                "NapCat 侧取不到 WAV（file={File}，path={Path}）", fileId, filePath);
             return null;
         }
 

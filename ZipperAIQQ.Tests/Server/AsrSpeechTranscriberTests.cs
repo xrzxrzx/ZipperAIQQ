@@ -95,21 +95,49 @@ public sealed class AsrSpeechTranscriberTests
         }
     }
 
+    /// <summary>假的 HTTP：默认 404（走兜底），需要时给一段"QQ 下载地址"的内容。</summary>
+    private sealed class StubHttpFactory(byte[]? downloadBody = null) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) =>
+            new(new StubHandler(downloadBody), disposeHandler: true);
+    }
+
+    private sealed class StubHandler(byte[]? body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (body is null)
+            {
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+            }
+
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(body),
+            };
+
+            return Task.FromResult(response);
+        }
+    }
+
     /// <summary>默认把重试间隔压到 0：测的是"会不会重试"，不是"等多久"。</summary>
     private static AsrSpeechTranscriber Create(
         IDeepSeekMediaClient media,
         IAudioSource source,
         ISilkDecoder? decoder = null,
         AiOptions? options = null,
-        SpeechOptions? speech = null) =>
+        SpeechOptions? speech = null,
+        IHttpClientFactory? http = null) =>
         new(options ?? new AiOptions(),
             media,
             source,
             decoder ?? new FakeDecoder(WavBytes()),
             speech ?? new SpeechOptions { AudioFetchRetryDelayMs = 0 },
+            http ?? new StubHttpFactory(),
             Logger);
 
-    private static AudioClip Clip() => new("a.amr", "https://x/a.amr", MessageId: "m1");
+    private static AudioClip Clip(string? url = null) => new("a.amr", url, MessageId: "m1");
 
     [Fact]
     public async Task Wav_audio_goes_straight_to_asr_without_decoding()
@@ -242,4 +270,39 @@ public sealed class AsrSpeechTranscriberTests
         Assert.Null(text);
         Assert.Equal(0, media.Calls);
     }
+
+    // ══════════ 主线：走网络（record.data.url），不读本地文件 ══════════
+
+    [Fact]
+    public async Task Downloads_from_url_and_transcodes_silk_before_asr()
+    {
+        var silk = SilkBytes();
+        var decoded = WavBytes(512);
+        var media = new FakeMedia(new AsrResult("网络下载后转出来的话", 1740, []));
+        var decoder = new FakeDecoder(decoded);
+
+        var text = await Create(
+                media,
+                new FakeSource(),                       // 兜底不参与
+                decoder,
+                http: new StubHttpFactory(silk))
+            .TranscribeAsync(Clip("https://multimedia.example/voice?format=amr"));
+
+        Assert.Equal("网络下载后转出来的话", text);
+        Assert.Equal(1, decoder.Calls);
+        Assert.Equal(decoded, media.LastAudio);
+    }
+
+    [Fact]
+    public async Task Falls_back_to_napcat_record_when_download_fails()
+    {
+        // 下载 404 时退回 NapCat 的 get_record（兜底），仍能转出来
+        var media = new FakeMedia(new AsrResult("兜底拿到的", 900, []));
+
+        var text = await Create(media, new FakeSource(new AudioBytes(WavBytes(), "wav")))
+            .TranscribeAsync(Clip("https://multimedia.example/voice?format=amr"));
+
+        Assert.Equal("兜底拿到的", text);
+    }
 }
+

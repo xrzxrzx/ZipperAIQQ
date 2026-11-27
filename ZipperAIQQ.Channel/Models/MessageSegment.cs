@@ -57,13 +57,12 @@ public sealed record RecordSegment(
     string? Transcriber) : MessageSegment
 {
     /// <summary>
-    /// 平台**本地文件路径**（OneBot 的 <c>record.data.path</c>）。
+    /// 平台给的**本地文件路径**（OneBot 的 <c>record.data.path</c>）。**只用于诊断，不参与转写**。
     /// </summary>
     /// <remarks>
-    /// B00001 的回退路径要用它：NapCat 的 <c>fetch_ptt_text</c> 在某些环境里转不出来
-    /// （QQ 侧 ASR 卡死），而 OneBot 事件里**已经给了 amr 的本地绝对路径** ——
-    /// 直接读这个文件比再走一次 <c>get_record</c> 更稳（少一次往返还少一条过期 URL）。
-    /// 与机器相关（NapCat 装在哪就在哪），所以只在同机部署时可用，读不到就退回 URL。
+    /// 2026-11-28 用户定「语音不要走本地」：转写主线改成从 <c>record.data.url</c> 下载。
+    /// 这个字段留着是为了排障时能直接打开 NapCat 那边的原件听一听 ——
+    /// 它是 <c>#!SILK_V3</c>，不是扩展名写的 <c>.amr</c>。
     /// </remarks>
     public string? FilePath { get; init; }
 
@@ -95,3 +94,4 @@ public sealed record RecordSegment(
 /// 只能文字描述"蓝蓝的一坨"。这个类型就是为了补上出站通道。
 /// </remarks>
 public sealed record MfaceSegment(string? EmojiId, string? Url, string? Summary) : MessageSegment;
+

@@ -34,6 +34,7 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
     private readonly IAudioSource _source;
     private readonly ISilkDecoder _decoder;
     private readonly SpeechOptions _speech;
+    private readonly IHttpClientFactory _http;
     private readonly ILogger _logger;
 
     public AsrSpeechTranscriber(
@@ -42,6 +43,7 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
         IAudioSource source,
         ISilkDecoder decoder,
         SpeechOptions speech,
+        IHttpClientFactory http,
         ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -49,6 +51,7 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(decoder);
         ArgumentNullException.ThrowIfNull(speech);
+        ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(logger);
 
         _options = options;
@@ -56,6 +59,7 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
         _source = source;
         _decoder = decoder;
         _speech = speech;
+        _http = http;
         _logger = logger;
     }
 
@@ -117,17 +121,18 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
     }
 
     /// <summary>
-    /// 取音频并转成 WAV（带重试）。
+    /// 取音频（带重试）：**先走网络（QQ 的下载地址），NapCat 转码只作兜底**。
     /// </summary>
     /// <remarks>
     /// <para>
-    /// 2026-11-28 实测后的结论：**本地 silk 文件是唯一"消息一到达就可用"的原料**
-    /// （<see cref="IAudioSource"/> 本地优先），解码交给 <see cref="ISilkDecoder"/>；
-    /// <c>get_record</c> 只是兜底，它要等 QQ 的消息索引（刚到的 1~2 分钟内查不到）。
+    /// 用户 2026-11-28 明确要求「不走本地」：不读 NapCat 那台机器上的 <c>record.data.path</c>。
+    /// 改成从 <c>record.data.url</c> 下载 —— 它同样是"消息到达即有效"，且**不绑定部署机器**。
     /// </para>
     /// <para>
-    /// 重试仍然保留：兜底那条路会因索引延迟而失败，一两秒后再试往往就通了。
-    /// 但**解码失败不重试** —— 同样的字节再解一次还是解不开。
+    /// 但 ASR 接口只收 <b>16 位 PCM WAV 或 Ogg Opus</b>（[官方指南](https://api-docs.deepseek.com/zh-cn/guides/asr/)，
+    /// 按文件内容判断），而 QQ 语音是 SILK —— 所以中间**必须有一次转码**，这不是选择：
+    /// 本机 ffmpeg 是坏的，于是只有两条路：本地解码器（silk-wasm）或 NapCat 的 <c>get_record</c>。
+    /// 这里用前者（快、不依赖 QQ 消息索引），后者作为兜底。
     /// </para>
     /// </remarks>
     private async Task<byte[]?> FetchWavAsync(AudioClip clip, CancellationToken ct)
@@ -136,9 +141,8 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
 
         for (var attempt = 1; attempt <= attempts; attempt++)
         {
-            var audio = await _source
-                .GetAudioAsync(clip.FileId, clip.FilePath, ct)
-                .ConfigureAwait(false);
+            var audio = await DownloadAsync(clip, ct).ConfigureAwait(false)
+                        ?? await _source.GetAudioAsync(clip.FileId, null, ct).ConfigureAwait(false);
 
             if (audio is { Bytes.Length: > 0 })
             {
@@ -151,12 +155,12 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
                 if (wav is { Length: > 44 })
                 {
                     _logger.Information(
-                        "语音已解码（silk {Silk} 字节 → WAV {Wav} 字节，file={File}）",
-                        audio.Bytes.Length, wav.Length, clip.FileId);
+                        "语音已转码（{Format} {In} 字节 → WAV {Out} 字节，file={File}）",
+                        audio.Format ?? "?", audio.Bytes.Length, wav.Length, clip.FileId);
                     return wav;
                 }
 
-                _logger.Warning("语音解码失败（{Bytes} 字节，file={File}）", audio.Bytes.Length, clip.FileId);
+                _logger.Warning("语音转码失败（{Bytes} 字节，file={File}）", audio.Bytes.Length, clip.FileId);
                 return null;
             }
 
@@ -179,6 +183,54 @@ public sealed class AsrSpeechTranscriber : ISpeechTranscriber
         }
 
         return null;
+    }
+
+    /// <summary>从 QQ 的下载地址取原始音频（网络，不碰本地文件）。</summary>
+    private async Task<AudioBytes?> DownloadAsync(AudioClip clip, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(clip.Url) ||
+            !Uri.TryCreate(clip.Url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            return null;
+        }
+
+        try
+        {
+            var http = _http.CreateClient(nameof(AsrSpeechTranscriber));
+            http.Timeout = TimeSpan.FromSeconds(Math.Max(10, _options.TimeoutSeconds));
+
+            using var response = await http.GetAsync(uri, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.Warning(
+                    "语音下载失败（{Status}）：file={File}", (int)response.StatusCode, clip.FileId);
+                return null;
+            }
+
+            if (response.Content.Headers.ContentLength is { } length && length > _options.MaxUploadBytes)
+            {
+                _logger.Warning("语音体积超上限（{Bytes} > {Max}），已放弃", length, _options.MaxUploadBytes);
+                return null;
+            }
+
+            var data = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            if (data.Length == 0 || data.Length > _options.MaxUploadBytes)
+            {
+                return null;
+            }
+
+            return new AudioBytes(data, clip.Format);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning(ex, "语音下载异常（file={File}）", clip.FileId);
+            return null;
+        }
     }
 
     /// <summary>是不是已经是 WAV（看魔数，不信扩展名）。</summary>
