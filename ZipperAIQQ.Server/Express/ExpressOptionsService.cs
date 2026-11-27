@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Serilog;
 using ZipperAIQQ.Agent.Express;
 using ZipperAIQQ.Storage.Settings;
@@ -19,8 +18,9 @@ namespace ZipperAIQQ.Server.Express;
 /// 而这种分裂要等下次对话才暴露（与 B2-c 的 <c>ai.dialogEnhance</c> 同一条理由）。
 /// </para>
 /// <para>
-/// 规则段文本另存 <c>prompt.express</c>：它和 <c>prompt.system</c> 是同一类东西（可长文本、客户端编辑），
-/// 塞进 JSON 里会让「恢复默认」与「编辑中」两件事互相踩。
+/// 规则段（<c>prompt.express</c>）现在是 <c>express</c> JSON 里的 <c>promptExpress</c> 字段。
+/// 老键只在启动时读一次并迁移过来（**不删**，留人工恢复）：两份真相必然漂移，
+/// 而漂移的表现是「回滚后规则段还是新的」这种最难查的一类。
 /// </para>
 /// </remarks>
 public sealed class ExpressOptionsService : IExpressSettingsSource
@@ -28,8 +28,10 @@ public sealed class ExpressOptionsService : IExpressSettingsSource
     /// <summary>档位单键（JSON）。</summary>
     public const string StorageKey = "express";
 
-    /// <summary>规则段覆盖文本（空 = 用内置默认）。</summary>
-    public const string PromptKey = "prompt.express";
+    /// <summary>
+    /// 老键（2026-11-28 之前的独立规则段键）：**只用于一次性迁移**，写路径不再碰它。
+    /// </summary>
+    public const string LegacyPromptKey = "prompt.express";
 
     private readonly IRuntimeSettingsStore _settings;
     private readonly ILogger _logger;
@@ -76,9 +78,39 @@ public sealed class ExpressOptionsService : IExpressSettingsSource
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         var raw = await _settings.GetAsync(StorageKey, ct).ConfigureAwait(false);
-        var prompt = await _settings.GetAsync(PromptKey, ct).ConfigureAwait(false);
 
-        _current = Parse(raw) with { CustomRules = string.IsNullOrWhiteSpace(prompt) ? null : prompt };
+        if (!ExpressSnapshotPayload.TryParse(raw, out var parsed, out var error))
+        {
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                // 真的解析不了才报 Error；键不存在（首次启动）走默认，不算故障
+                _logger.Error("表达档位配置无法解析，已按默认（日常）处理：{Reason}", error);
+            }
+
+            parsed = new ExpressSettings();
+        }
+        else if (error is not null)
+        {
+            _logger.Warning("表达档位配置有项认不出：{Reason}", error);
+        }
+
+        // 老键迁移：JSON 里没有规则段而老键有值 → 搬进 JSON（不删老键）
+        if (parsed.CustomRules is null)
+        {
+            var legacyPrompt = await _settings.GetAsync(LegacyPromptKey, ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(legacyPrompt))
+            {
+                parsed = parsed with { CustomRules = legacyPrompt.Trim() };
+                await _settings
+                    .SetAsync(StorageKey, ExpressSnapshotPayload.ToJson(parsed), ct)
+                    .ConfigureAwait(false);
+
+                _logger.Information(
+                    "已把老的 {Legacy} 迁移进 {Key}（老键保留不删）", LegacyPromptKey, StorageKey);
+            }
+        }
+
+        _current = parsed;
 
         _logger.Information(
             "表达档位：{Level}（群上限 {Cap}，会话覆盖 {Count} 个，免拒绝校准 {Hygiene}）",
@@ -94,18 +126,13 @@ public sealed class ExpressOptionsService : IExpressSettingsSource
     /// <param name="level">全局档；<c>null</c> = 不改。</param>
     /// <param name="groupCap">群聊上限；<c>null</c> = 不改。</param>
     /// <param name="sessionId">会话覆盖的目标；<c>null</c> = 不动任何会话覆盖。</param>
-    /// <param name="sessionLevel">
-    /// 该会话的档位；传 <c>null</c> = **删除**这条覆盖（回到全局/上限）。
-    /// </param>
-    /// <param name="promptExpress">
-    /// 规则段覆盖文本；<c>null</c> = 不改，空串 = 恢复内置默认。
-    /// </param>
+    /// <param name="sessionLevel">该会话的档位；传 <c>null</c> = **删除**这条覆盖（回到全局/上限）。</param>
+    /// <param name="promptExpress">规则段覆盖文本；<c>null</c> = 不改，空串 = 恢复内置默认。</param>
     /// <param name="hygieneEnabled">免拒绝校准总开关；<c>null</c> = 不改。</param>
     /// <param name="hygieneRegenerate">命中后是否重生成；<c>null</c> = 不改。</param>
     /// <param name="actor">操作者（写进 <c>updatedBy</c>）。</param>
     /// <param name="ct">取消令牌。</param>
     /// <returns>实际改动的字段名（供审计与回显）；空 = 没有任何变化。</returns>
-    /// <exception cref="ArgumentException">档位值认不出。</exception>
     public async Task<IReadOnlyList<string>> UpdateAsync(
         ExpressLevel? level,
         ExpressLevel? groupCap,
@@ -172,15 +199,13 @@ public sealed class ExpressOptionsService : IExpressSettingsSource
             }
 
             // 规则段：null = 不改，空串 = 恢复默认（与 DouyinOptionsService 的 token 同口径）
-            string? nextPrompt = promptExpress;
-            var promptChanged = false;
+            var nextPrompt = current.CustomRules;
             if (promptExpress is not null)
             {
                 var normalized = string.IsNullOrWhiteSpace(promptExpress) ? null : promptExpress.Trim();
-                promptChanged = !string.Equals(normalized, current.CustomRules, StringComparison.Ordinal);
-                nextPrompt = normalized;
-                if (promptChanged)
+                if (!string.Equals(normalized, current.CustomRules, StringComparison.Ordinal))
                 {
+                    nextPrompt = normalized;
                     changed.Add("promptExpress");
                 }
             }
@@ -202,12 +227,9 @@ public sealed class ExpressOptionsService : IExpressSettingsSource
                 UpdatedBy = actor,
             };
 
-            await _settings.SetAsync(StorageKey, Serialize(next), ct).ConfigureAwait(false);
-
-            if (promptChanged)
-            {
-                await _settings.SetAsync(PromptKey, nextPrompt ?? string.Empty, ct).ConfigureAwait(false);
-            }
+            await _settings
+                .SetAsync(StorageKey, ExpressSnapshotPayload.ToJson(next), ct)
+                .ConfigureAwait(false);
 
             _current = next;
 
@@ -245,9 +267,8 @@ public sealed class ExpressOptionsService : IExpressSettingsSource
                 UpdatedBy = actor,
             };
 
-            await _settings.SetAsync(StorageKey, Serialize(restored), ct).ConfigureAwait(false);
             await _settings
-                .SetAsync(PromptKey, restored.CustomRules ?? string.Empty, ct)
+                .SetAsync(StorageKey, ExpressSnapshotPayload.ToJson(restored), ct)
                 .ConfigureAwait(false);
 
             _current = restored;
@@ -263,124 +284,4 @@ public sealed class ExpressOptionsService : IExpressSettingsSource
             _writeLock.Release();
         }
     }
-
-    private static string Serialize(ExpressSettings settings) => JsonSerializer.Serialize(new
-    {
-        level = ExpressLevelText.ToKey(settings.Level),
-        groupCap = ExpressLevelText.ToKey(settings.GroupCap),
-        sessions = settings.SessionOverrides.ToDictionary(
-            kv => kv.Key, kv => ExpressLevelText.ToKey(kv.Value), StringComparer.Ordinal),
-        hygiene = new
-        {
-            enabled = settings.HygieneEnabled,
-            regenerate = settings.HygieneRegenerate,
-        },
-        updatedAtMs = settings.UpdatedAtMs,
-        updatedBy = settings.UpdatedBy,
-    });
-
-    /// <summary>
-    /// 解析单键；坏值逐项按默认处理并**记日志**（不静默、不抛 —— 启动不该因为一个手改坏的键失败）。
-    /// </summary>
-    private ExpressSettings Parse(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return new ExpressSettings();
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(raw);
-            var root = doc.RootElement;
-
-            if (root.ValueKind != JsonValueKind.Object)
-            {
-                _logger.Error("表达档位配置不是对象，已按默认（日常）处理：{Raw}", raw);
-                return new ExpressSettings();
-            }
-
-            var level = ReadLevel(root, "level", ExpressLevel.Daily);
-            var cap = ReadLevel(root, "groupCap", ExpressLevel.Explicit);
-
-            var sessions = new Dictionary<string, ExpressLevel>(StringComparer.Ordinal);
-            if (root.TryGetProperty("sessions", out var sessionsNode) &&
-                sessionsNode.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var entry in sessionsNode.EnumerateObject())
-                {
-                    if (ExpressLevelText.TryParse(entry.Value.GetString(), out var over))
-                    {
-                        sessions[entry.Name] = over;
-                    }
-                    else
-                    {
-                        _logger.Warning(
-                            "会话覆盖的档位认不出，已忽略：{Session}={Raw}", entry.Name, entry.Value);
-                    }
-                }
-            }
-
-            var enabled = true;
-            var regenerate = true;
-            if (root.TryGetProperty("hygiene", out var hygiene) && hygiene.ValueKind == JsonValueKind.Object)
-            {
-                enabled = ReadBool(hygiene, "enabled", true);
-                regenerate = ReadBool(hygiene, "regenerate", true);
-            }
-
-            return new ExpressSettings
-            {
-                Level = level,
-                GroupCap = cap,
-                SessionOverrides = sessions,
-                HygieneEnabled = enabled,
-                HygieneRegenerate = regenerate,
-                UpdatedAtMs = ReadLong(root, "updatedAtMs"),
-                UpdatedBy = root.TryGetProperty("updatedBy", out var by) && by.ValueKind == JsonValueKind.String
-                    ? by.GetString()
-                    : null,
-            };
-        }
-        catch (JsonException ex)
-        {
-            _logger.Error(ex, "表达档位配置无法解析，已按默认（日常）处理：{Raw}", raw);
-            return new ExpressSettings();
-        }
-    }
-
-    private ExpressLevel ReadLevel(JsonElement root, string name, ExpressLevel fallback)
-    {
-        if (!root.TryGetProperty(name, out var node) || node.ValueKind != JsonValueKind.String)
-        {
-            return fallback;
-        }
-
-        if (ExpressLevelText.TryParse(node.GetString(), out var level))
-        {
-            return level;
-        }
-
-        _logger.Warning("档位配置 {Name} 的值认不出，已按 {Fallback} 处理：{Raw}",
-            name, ExpressLevelText.ToKey(fallback), node.GetString());
-        return fallback;
-    }
-
-    private static bool ReadBool(JsonElement root, string name, bool fallback)
-    {
-        if (!root.TryGetProperty(name, out var node))
-        {
-            return fallback;
-        }
-
-        return node.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            _ => fallback,
-        };
-    }
-
-    private static long ReadLong(JsonElement root, string name) =>
-        root.TryGetProperty(name, out var node) && node.TryGetInt64(out var value) ? value : 0;
 }

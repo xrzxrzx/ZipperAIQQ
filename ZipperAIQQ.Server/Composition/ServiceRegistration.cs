@@ -252,6 +252,11 @@ public static partial class ServiceRegistration
         services.AddSingleton<Express.ExpressOptionsService>();
         services.AddSingleton<ZipperAIQQ.Agent.Express.IExpressSettingsSource>(
             sp => sp.GetRequiredService<Express.ExpressOptionsService>());
+        services.AddSingleton<ZipperAIQQ.Storage.Express.IExpressSnapshotStore,
+            ZipperAIQQ.Storage.Express.SqliteExpressSnapshotStore>();
+        services.AddSingleton<IApiAction, GetExpressStatusAction>();
+        services.AddSingleton<IApiAction, SetExpressLevelAction>();
+        services.AddSingleton<IApiAction, RollbackExpressAction>();
 
         // 图片（问题记录 03 #2）：下载字节 + 真实 MIME + GIF/WebP 首帧转 PNG
         services.AddSingleton<IImageFetcher>(sp =>

@@ -19,7 +19,7 @@ namespace ZipperAIQQ.Storage;
 public sealed class DatabaseInitializer
 {
     /// <summary>当前期望的 schema 版本。</summary>
-    public const int CurrentSchemaVersion = 21;
+    public const int CurrentSchemaVersion = 22;
 
     private readonly string _connectionString;
     private readonly ILogger _logger;
@@ -63,6 +63,7 @@ public sealed class DatabaseInitializer
         await ExecuteAsync(conn, ScheduleExecutionTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, TurnLogTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, DouyinWriteTable, ct).ConfigureAwait(false);
+        await ExecuteAsync(conn, ExpressSnapshotTable, ct).ConfigureAwait(false);
         await ExecuteAsync(conn, SchemaVersionTable, ct).ConfigureAwait(false);
 
         // ── 迁移（幂等）：v1 → v2 加 Direction 列（0=收到，1=发出）──
@@ -560,6 +561,33 @@ public sealed class DatabaseInitializer
 
         CREATE INDEX IF NOT EXISTS IX_DouyinWrites_Action_At ON DouyinWrites (Action, AtMs);
         CREATE INDEX IF NOT EXISTS IX_DouyinWrites_Action_Target ON DouyinWrites (Action, TargetKey, AtMs);
+        """;
+
+    /// <summary>
+    /// 表达档位的应用前快照（schema v22 / B6）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 只存配置（档位 / 群上限 / 会话覆盖 / 规则段），**不存对话内容** ——
+    /// 这是「配置回滚点」，不是聊天备份。
+    /// </para>
+    /// <para>
+    /// <c>Checksum</c> = SHA-256(PayloadJson)：回滚前比对，不一致说明库里那份被手改过，
+    /// 此时把来路不明的配置写回去比拒绝更糟。
+    /// </para>
+    /// <para>
+    /// 为什么要这张表：档位与规则段是**手可改的提示词级配置**，改坏的直接表现是
+    /// 「她说话不对劲」，而那时最想要的就是「退回刚才那版」。
+    /// </para>
+    /// </remarks>
+    private const string ExpressSnapshotTable = """
+        CREATE TABLE IF NOT EXISTS ExpressSnapshots (
+            Id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            AtMs        INTEGER NOT NULL,
+            Actor       TEXT    NOT NULL,
+            PayloadJson TEXT    NOT NULL,
+            Checksum    TEXT    NOT NULL
+        );
         """;
 
     /// <summary>

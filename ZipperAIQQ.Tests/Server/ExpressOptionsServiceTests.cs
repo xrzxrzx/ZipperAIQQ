@@ -139,7 +139,7 @@ public sealed class ExpressOptionsServiceTests : IAsyncLifetime
     public async Task BrokenJson_FallsBackToDefaultsWithoutThrowing()
     {
         await _store.SetAsync(ExpressOptionsService.StorageKey, "{ not json");
-        await _store.SetAsync(ExpressOptionsService.PromptKey, "自定义规则");
+        await _store.SetAsync(ExpressOptionsService.LegacyPromptKey, "自定义规则");
 
         var service = NewService();
         await service.InitializeAsync();   // 不抛
@@ -210,3 +210,4 @@ public sealed class ExpressOptionsServiceTests : IAsyncLifetime
         Assert.Equal("快照里的规则段", restarted.Current.CustomRules);
     }
 }
+
