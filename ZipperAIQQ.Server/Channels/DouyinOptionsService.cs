@@ -17,7 +17,7 @@ public sealed record DouyinSnapshot(
     int SendTimeoutMs,
     int MaxTextLength,
     int QueryTimeoutMs,
-    string Driver = DouyinDriver.Im)
+    string Driver = DouyinDriver.Web)
 {
     /// <summary>转成通道用的不可变配置。</summary>
     public DouyinOptions ToOptions() => new()
@@ -157,7 +157,7 @@ public sealed class DouyinOptionsService
 
         _logger.Information("抖音底座驱动：{Driver}（{Meaning}）",
             _current.Driver,
-            _current.Driver == DouyinDriver.Web ? "浏览器 / douyin-web-sidecar" : "douyin-im（旧底座，已移除）");
+            _current.Driver == DouyinDriver.Web ? "浏览器 / douyin-web-sidecar" : "douyin-im（旧底座，仅回退档位；sidecar 已从仓库移除）");
     }
 
     /// <summary>
@@ -309,16 +309,18 @@ public sealed class DouyinOptionsService
     {
         if (string.IsNullOrWhiteSpace(raw))
         {
-            return DouyinDriver.Normalize(fallback) ?? DouyinDriver.Im;
+            return DouyinDriver.Normalize(fallback) ?? DouyinDriver.Web;
         }
 
         var normalized = DouyinDriver.Normalize(raw);
         if (normalized is null)
         {
             _logger.Warning("抖音驱动配置 {Raw} 无法识别，回退到启动配置 {Fallback}", raw, fallback);
-            return DouyinDriver.Normalize(fallback) ?? DouyinDriver.Im;
+            return DouyinDriver.Normalize(fallback) ?? DouyinDriver.Web;
         }
 
         return normalized;
     }
 }
+
+

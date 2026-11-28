@@ -7,11 +7,15 @@ namespace ZipperAIQQ.Server.Channels;
 /// <para>
 /// 两个 sidecar 都往同一个 <c>/ws/channel</c> 反连，服务端靠 <c>hello.driver</c> 区分：
 /// <c>im</c> = <c>douyin-im</c> 底座（旧，其 sidecar 已于 2026-11-21 从仓库移除，仅作回退档位保留），
-/// <c>web</c> = <c>douyin-web-sidecar</c>（Playwright + 网页版，新）。
+/// <c>web</c> = <c>douyin-web-sidecar</c>（Playwright + 网页版）。
 /// </para>
 /// <para>
-/// 这是**回退开关**：平台按版本拒发（<c>check=10509</c>）时切到 <c>web</c>；
-/// 万一浏览器侧不稳，把值改回 <c>im</c> 起旧 sidecar 即可恢复（实施方案 B1 验收 A-5）。
+/// <b>默认值已于 2026-11-28（B7）从 <c>im</c> 翻成 <c>web</c></b>：
+/// B1 期间刻意保持 <c>im</c>（「升级不替用户换底座」），现在底座切换完成，新装即 web。
+/// </para>
+/// <para>
+/// 它仍是**回退开关**：万一浏览器侧不稳，把它改回 <c>im</c> 并起旧 sidecar 即可恢复
+/// （实施方案 B1 验收 A-5；旧 sidecar 已不在仓库，需要时从归档取）。
 /// </para>
 /// <para>
 /// 自报缺 <c>driver</c> 的老 sidecar 一律按 <see cref="Im"/> 处理（向后兼容）。
@@ -77,7 +81,7 @@ public sealed record DouyinOptions
     /// <remarks>
     /// 默认 <see cref="DouyinDriver.Im"/> —— 切换是**显式动作**，不在升级时替用户换底座（实施方案 §6.4）。
     /// </remarks>
-    public string Driver { get; init; } = DouyinDriver.Im;
+    public string Driver { get; init; } = DouyinDriver.Web;
 
     /// <summary>
     /// 视频理解（B4）：抽帧 / 抽音 / 转写的策略参数。

@@ -685,6 +685,11 @@ public sealed class DouyinChannelTests
             version = "1",
             platform = "douyin",
             selfId,
+
+            // B7（2026-11-28）把 douyin.driver 默认翻成 web，这里跟着带 driver：
+            // 不带 driver 会按老 sidecar（im）处理，与默认值不匹配 → 握手被拒
+            // （driver 匹配/不匹配本身由 DouyinWebDriverTests 专门覆盖）
+            driver = DouyinDriver.Web,
             capabilities = new[] { "text", "image", "mention", "reply" },
         });
 
